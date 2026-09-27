@@ -101,6 +101,19 @@ fn print_manual_daemon_hint() {
     println!("            {} daemon", paths::installed_bin().display());
 }
 
+/// `systemctl start/restart` returns before the daemon binds its socket, so
+/// poll `status` for up to 3 s; otherwise an immediate `ccnotify pair` races it.
+fn wait_for_daemon() -> bool {
+    let timeout = std::time::Duration::from_millis(300);
+    for _ in 0..30 {
+        if crate::control::request(&json!({"cmd": "status"}), timeout).is_ok() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
 fn install_service(binary_replaced: bool) -> Result<()> {
     let unit = paths::systemd_unit();
     paths::write_atomic(&unit, UNIT_FILE.as_bytes(), 0o644)
@@ -132,7 +145,12 @@ fn install_service(binary_replaced: bool) -> Result<()> {
                 // Make an already-running daemon pick up the new binary.
                 let _ = systemctl(&["restart", "ccnotify"]);
             }
-            println!("Service:  enabled and started (systemctl --user status ccnotify)");
+            if wait_for_daemon() {
+                println!("Service:  enabled and started (systemctl --user status ccnotify)");
+            } else {
+                println!("Service:  enabled, but the daemon is not answering yet.");
+                println!("          Check: journalctl --user -u ccnotify");
+            }
         }
         _ => {
             println!("Service:  `systemctl --user enable --now ccnotify` failed.");
