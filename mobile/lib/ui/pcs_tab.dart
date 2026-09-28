@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import 'answer_screen.dart';
+import 'history_tab.dart' show relativeTime;
 import 'pair_screen.dart';
 
 class PcsTab extends StatelessWidget {
@@ -74,6 +76,7 @@ class PcsTab extends StatelessWidget {
               : ListView(
                   padding: const EdgeInsets.only(bottom: 96),
                   children: [
+                    if (state.requests.isNotEmpty) _WaitingSection(state: state),
                     _ServiceCard(state: state),
                     if (state.pcs.isEmpty) const _EmptyPcs(),
                     for (final pc in state.pcs)
@@ -100,6 +103,65 @@ class PcsTab extends StatelessWidget {
                 ),
         );
       },
+    );
+  }
+}
+
+/// "Waiting for you": requests Claude Code is blocked on, newest first.
+class _WaitingSection extends StatelessWidget {
+  const _WaitingSection({required this.state});
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Card(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      color: cs.primaryContainer,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                Icon(Icons.pending_actions_outlined, size: 20, color: cs.onPrimaryContainer),
+                const SizedBox(width: 8),
+                Text(
+                  'Waiting for you',
+                  style: t.titleSmall?.copyWith(color: cs.onPrimaryContainer),
+                ),
+              ],
+            ),
+          ),
+          for (final r in state.requests)
+            ListTile(
+              leading: Icon(AnswerScreen.iconFor(r.request.kind), color: cs.onPrimaryContainer),
+              minLeadingWidth: 20,
+              textColor: cs.onPrimaryContainer,
+              title: Text(
+                '${r.request.project} · ${r.request.title}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                '${r.request.summary.isEmpty ? r.request.title : r.request.summary}\n'
+                '${r.answered ? 'Answer sent · ' : ''}${r.pcName} · ${relativeTime(r.request.time)}',
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: Icon(
+                r.answered ? Icons.schedule_send_outlined : Icons.chevron_right,
+                color: cs.onPrimaryContainer,
+              ),
+              onTap: () => Navigator.of(context).push(AnswerScreen.route(r.pcId, r.request.id)),
+            ),
+          const SizedBox(height: 4),
+        ],
+      ),
     );
   }
 }

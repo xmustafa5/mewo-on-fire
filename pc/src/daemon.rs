@@ -8,21 +8,44 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
+use tokio::time::MissedTickBehavior;
 
 use crate::config::{self, now_ms, random_hex, Config, Device};
+use crate::requests::{self, Request, Requests};
 use crate::store::{Event, Store};
 use crate::{control, mdns, net, paths, server};
 
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
 const BROADCAST_CAPACITY: usize = 256;
+const EXPIRE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Everything pushed live to subscribed phones.
+#[derive(Debug, Clone)]
+pub enum Push {
+    Event(Event),
+    Request(Request),
+    Resolved {
+        request_id: String,
+        by: &'static str,
+    },
+}
+
+/// What a new subscriber starts from (see subscribe_since).
+pub struct Subscription {
+    pub rx: broadcast::Receiver<Push>,
+    pub last_id: u64,
+    pub backlog: Vec<Event>,
+    pub pending: Vec<Request>,
+}
 
 pub struct AppState {
     pub config: Config,
     pub fp: String,
     devices: Mutex<Vec<Device>>,
     store: Mutex<Store>,
-    tx: broadcast::Sender<Event>,
+    requests: Mutex<Requests>,
+    tx: broadcast::Sender<Push>,
     pair_codes: Mutex<HashMap<String, Instant>>,
     pub connected: AtomicUsize,
 }
@@ -43,11 +66,19 @@ impl AppState {
     /// Store the event (assigning id/ts) and broadcast it to live clients.
     /// Broadcast happens under the store lock so subscribe_since() snapshots
     /// are consistent with the live stream.
-    pub fn emit(&self, ev: Event) -> Event {
+    /// Returns None when the event was dropped as a duplicate: a permission /
+    /// elicitation notification for a session that has a pending request.
+    pub fn emit(&self, ev: Event) -> Option<Event> {
+        if ev.kind == "needs_input"
+            && matches!(ev.detail.as_str(), "permission_prompt" | "elicitation_dialog")
+            && lock(&self.requests).has_session(&ev.session)
+        {
+            return None;
+        }
         let mut store = lock(&self.store);
         let stored = store.append(ev);
-        let _ = self.tx.send(stored.clone());
-        stored
+        let _ = self.tx.send(Push::Event(stored.clone()));
+        Some(stored)
     }
 
     pub fn last_id(&self) -> u64 {
@@ -58,15 +89,94 @@ impl AppState {
         lock(&self.store).since(since)
     }
 
-    /// Atomically: subscribe to live events, read last_id, and snapshot the
-    /// stored events after `min(since, last_id)`.
-    pub fn subscribe_since(&self, since: u64) -> (broadcast::Receiver<Event>, u64, Vec<Event>) {
+    /// Atomically: subscribe to the live stream, read last_id, snapshot the
+    /// stored events after `min(since, last_id)` and the pending requests.
+    /// Lock order is store → requests; nothing else holds both.
+    pub fn subscribe_since(&self, since: u64) -> Subscription {
         let store = lock(&self.store);
+        let requests = lock(&self.requests);
         let rx = self.tx.subscribe();
         let last_id = store.last_id();
         let effective = since.min(last_id);
-        let backlog = store.since(effective);
-        (rx, last_id, backlog)
+        Subscription {
+            rx,
+            last_id,
+            backlog: store.since(effective),
+            pending: requests.snapshot(),
+        }
+    }
+
+    // --- phone requests (PROTOCOL.md v1.1) ---------------------------------
+    // Broadcasts happen under the requests lock so subscribe_since()
+    // snapshots are consistent with the live stream.
+
+    /// Register a request from `ccnotify ask` (assigning id/ts) and broadcast
+    /// it to phones. Returns its id and the receiver for the answer.
+    pub fn add_request(&self, mut request: Request) -> (String, oneshot::Receiver<Value>) {
+        let mut requests = lock(&self.requests);
+        let mut id = random_hex(4);
+        while requests.contains(&id) {
+            id = random_hex(4);
+        }
+        request.id = id.clone();
+        request.ts = now_ms();
+        let _ = self.tx.send(Push::Request(request.clone()));
+        let answer_rx = requests.insert(request);
+        (id, answer_rx)
+    }
+
+    /// Deliver a phone's answer. The first answer wins; false if the request
+    /// is unknown or already resolved.
+    pub fn answer_request(&self, id: &str, answer: Value) -> bool {
+        let mut requests = lock(&self.requests);
+        let answer_tx = match requests.resolve(id, "phone") {
+            Some(tx) => tx,
+            None => return false,
+        };
+        let _ = answer_tx.send(answer);
+        let _ = self.tx.send(Push::Resolved {
+            request_id: id.to_string(),
+            by: "phone",
+        });
+        true
+    }
+
+    /// Resolve a request without an answer (`by` = "pc" or "timeout"). The
+    /// waiting `ask` handler sees its answer channel close. False if the
+    /// request was already resolved.
+    pub fn cancel_request(&self, id: &str, by: &'static str) -> bool {
+        let mut requests = lock(&self.requests);
+        if requests.resolve(id, by).is_none() {
+            return false;
+        }
+        let _ = self.tx.send(Push::Resolved {
+            request_id: id.to_string(),
+            by,
+        });
+        true
+    }
+
+    /// Drop requests pending for longer than requests::MAX_AGE.
+    pub fn expire_requests(&self) {
+        let expired = lock(&self.requests).expired(requests::MAX_AGE);
+        for id in expired {
+            if self.cancel_request(&id, "timeout") {
+                eprintln!("ccnotify: request {id} timed out");
+            }
+        }
+    }
+
+    /// Who resolved a finished request (for a late answer); "pc" if unknown.
+    pub fn resolved_by(&self, id: &str) -> &'static str {
+        lock(&self.requests).resolved_by(id).unwrap_or("pc")
+    }
+
+    pub fn pending_requests(&self) -> Vec<Request> {
+        lock(&self.requests).snapshot()
+    }
+
+    pub fn pending_count(&self) -> usize {
+        lock(&self.requests).count()
     }
 
     // --- pairing codes -----------------------------------------------------
@@ -168,6 +278,7 @@ impl AppState {
             "devices": device_count,
             "last_id": self.last_id(),
             "connected": self.connected.load(Ordering::SeqCst),
+            "pending": self.pending_count(),
         })
     }
 }
@@ -192,12 +303,13 @@ async fn run_async() -> Result<()> {
         .await
         .with_context(|| format!("binding 0.0.0.0:{}", config.port))?;
 
-    let (tx, _rx) = broadcast::channel::<Event>(BROADCAST_CAPACITY);
+    let (tx, _rx) = broadcast::channel::<Push>(BROADCAST_CAPACITY);
     let state = Arc::new(AppState {
         config: config.clone(),
         fp: identity.fp.clone(),
         devices: Mutex::new(devices),
         store: Mutex::new(store),
+        requests: Mutex::new(Requests::default()),
         tx,
         pair_codes: Mutex::new(HashMap::new()),
         connected: AtomicUsize::new(0),
@@ -219,12 +331,23 @@ async fn run_async() -> Result<()> {
 
     tokio::spawn(control::serve(state.clone(), control_listener));
     tokio::spawn(server::serve(state.clone(), tcp_listener, acceptor));
+    tokio::spawn(expire_loop(state.clone()));
 
     wait_for_shutdown().await;
     eprintln!("ccnotify: shutting down");
     mdns::shutdown(mdns_daemon);
     let _ = std::fs::remove_file(paths::socket_path());
     Ok(())
+}
+
+/// Periodically drop phone requests nobody answered (PROTOCOL.md: 24 h).
+async fn expire_loop(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(EXPIRE_CHECK_INTERVAL);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        state.expire_requests();
+    }
 }
 
 async fn wait_for_shutdown() {

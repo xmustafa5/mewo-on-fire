@@ -18,8 +18,9 @@ use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use crate::config::Identity;
-use crate::daemon::AppState;
+use crate::config::{Device, Identity};
+use crate::daemon::{AppState, Push, Subscription};
+use crate::requests::Request;
 use crate::store::Event;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
@@ -125,6 +126,18 @@ async fn send_event(sink: &mut WsSink, ev: &Event) -> Result<()> {
     send_json(sink, &json!({"type": "event", "event": ev})).await
 }
 
+async fn send_request(sink: &mut WsSink, req: &Request) -> Result<()> {
+    send_json(sink, &json!({"type": "request", "request": req})).await
+}
+
+async fn send_resolved(sink: &mut WsSink, request_id: &str, by: &str) -> Result<()> {
+    send_json(
+        sink,
+        &json!({"type": "resolved", "request_id": request_id, "by": by}),
+    )
+    .await
+}
+
 async fn close(sink: &mut WsSink) {
     let _ = timeout(CLOSE_TIMEOUT, sink.close()).await;
 }
@@ -210,28 +223,29 @@ async fn handle_auth(
     };
     let since = msg.get("since").and_then(Value::as_u64).unwrap_or(0);
 
-    let (mut rx, last_id, backlog) = state.subscribe_since(since);
+    let sub = state.subscribe_since(since);
     send_json(
         &mut sink,
         &json!({
             "type": "hello",
             "pc_id": state.config.pc_id,
             "name": state.config.name,
-            "last_id": last_id,
+            "last_id": sub.last_id,
         }),
     )
     .await?;
 
     let _guard = ConnGuard::new(&state.connected);
     eprintln!(
-        "ccnotify: device {} ({}) connected, since={} replay={}",
+        "ccnotify: device {} ({}) connected, since={} replay={} pending={}",
         device.id,
         device.name,
         since,
-        backlog.len()
+        sub.backlog.len(),
+        sub.pending.len()
     );
 
-    let result = subscriber_loop(state, &device.token, &mut sink, &mut stream, &mut rx, since.min(last_id), backlog).await;
+    let result = subscriber_loop(state, &device, &mut sink, &mut stream, sub, since).await;
     close(&mut sink).await;
     eprintln!("ccnotify: device {} ({}) disconnected", device.id, device.name);
     result
@@ -239,17 +253,25 @@ async fn handle_auth(
 
 async fn subscriber_loop(
     state: &AppState,
-    token: &str,
+    device: &Device,
     sink: &mut WsSink,
     stream: &mut WsStream,
-    rx: &mut tokio::sync::broadcast::Receiver<Event>,
-    start_after: u64,
-    backlog: Vec<Event>,
+    sub: Subscription,
+    since: u64,
 ) -> Result<()> {
-    let mut last_sent = start_after;
+    let Subscription {
+        mut rx,
+        last_id,
+        backlog,
+        pending,
+    } = sub;
+    let mut last_sent = since.min(last_id);
     for ev in backlog {
         send_event(sink, &ev).await?;
         last_sent = ev.id;
+    }
+    for req in &pending {
+        send_request(sink, req).await?;
     }
 
     let mut ping = interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL);
@@ -260,24 +282,33 @@ async fn subscriber_loop(
         tokio::select! {
             received = rx.recv() => {
                 match received {
-                    Ok(ev) => {
+                    Ok(Push::Event(ev)) => {
                         if ev.id > last_sent {
                             send_event(sink, &ev).await?;
                             last_sent = ev.id;
                         }
                     }
+                    Ok(Push::Request(req)) => send_request(sink, &req).await?,
+                    Ok(Push::Resolved { request_id, by }) => {
+                        send_resolved(sink, &request_id, by).await?
+                    }
                     Err(RecvError::Lagged(_)) => {
-                        // Fell behind the live stream: catch up from the store.
+                        // Fell behind the live stream: catch up from the store
+                        // and re-send the pending requests (the phone dedupes
+                        // them by id).
                         for ev in state.events_since(last_sent) {
                             send_event(sink, &ev).await?;
                             last_sent = ev.id;
+                        }
+                        for req in state.pending_requests() {
+                            send_request(sink, &req).await?;
                         }
                     }
                     Err(RecvError::Closed) => return Ok(()),
                 }
             }
             _ = ping.tick() => {
-                if !state.token_valid(token) {
+                if !state.token_valid(&device.token) {
                     let _ = send_json(sink, &json!({"type": "error", "error": "unauthorized"})).await;
                     return Ok(());
                 }
@@ -292,10 +323,51 @@ async fn subscriber_loop(
             incoming = stream.next() => {
                 match incoming {
                     None | Some(Ok(Message::Close(_))) => return Ok(()),
+                    Some(Ok(Message::Text(text))) => {
+                        last_seen = Instant::now();
+                        handle_frame(state, device, sink, &text).await?;
+                    }
                     Some(Ok(_)) => last_seen = Instant::now(),
                     Some(Err(e)) => return Err(anyhow!("read: {e}")),
                 }
             }
         }
     }
+}
+
+/// A text frame from a subscribed phone. Only `answer` is meaningful; other
+/// frames are ignored.
+async fn handle_frame(
+    state: &AppState,
+    device: &Device,
+    sink: &mut WsSink,
+    text: &str,
+) -> Result<()> {
+    let msg: Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    if msg.get("type").and_then(Value::as_str) != Some("answer") {
+        return Ok(());
+    }
+    let request_id = msg.get("request_id").and_then(Value::as_str).unwrap_or("");
+    let answer = match msg.get("answer") {
+        Some(a) if a.is_object() => a.clone(),
+        _ => {
+            eprintln!(
+                "ccnotify: device {} sent a malformed answer for request {request_id}",
+                device.id
+            );
+            return Ok(());
+        }
+    };
+    if state.answer_request(request_id, answer) {
+        eprintln!(
+            "ccnotify: request {request_id} answered by device {} ({})",
+            device.id, device.name
+        );
+        return Ok(());
+    }
+    // Unknown or already resolved: tell this phone only.
+    send_resolved(sink, request_id, state.resolved_by(request_id)).await
 }

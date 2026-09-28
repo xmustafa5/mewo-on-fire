@@ -8,6 +8,7 @@ use qrcode::render::unicode::Dense1x2;
 use qrcode::{EcLevel, QrCode};
 use serde_json::{json, Value};
 
+use crate::ask;
 use crate::control;
 use crate::paths;
 
@@ -214,6 +215,10 @@ pub fn status() -> Result<()> {
         u64_field(&resp, "connected")
     );
     println!("  Last event:   #{}", u64_field(&resp, "last_id"));
+    println!(
+        "  Pending:      {} request(s) waiting for an answer",
+        u64_field(&resp, "pending")
+    );
     println!("  Socket:       {}", paths::socket_path().display());
     Ok(())
 }
@@ -236,6 +241,57 @@ pub fn test() -> Result<()> {
         .unwrap_or(0);
     println!("Sent test notification ({connected} device(s) connected right now).");
     Ok(())
+}
+
+/// Send a fake Bash permission request through the same path as the `ask`
+/// hook, wait for the phone's answer and print it with the hook output it
+/// would produce.
+pub fn test_ask() -> Result<()> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let hook_input = json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": "test",
+        "cwd": cwd,
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": "echo hello from ccnotify",
+            "description": "Test request from `ccnotify test-ask`",
+        },
+        "permission_suggestions": [{
+            "type": "addRules",
+            "rules": [{"toolName": "Bash", "ruleContent": "echo hello from ccnotify"}],
+            "behavior": "allow",
+            "destination": "localSettings",
+        }],
+    });
+    let request = ask::map_request(&hook_input);
+
+    println!("Sending a test permission request (Bash: echo hello from ccnotify)...");
+    println!("Answer it on the phone (Ctrl+C to cancel).");
+    let resp = ask::ask_daemon(&request)
+        .map_err(|e| anyhow!("{}\n({e:#})", not_running_hint()))?;
+
+    if let Some(answer) = ask::reply_answer(&resp) {
+        println!("Answer:      {answer}");
+        match ask::hook_output(&hook_input, answer) {
+            Some(out) => println!("Hook output: {out}"),
+            None => println!("Hook output: (none; the answer does not fit, Claude Code would show its prompt)"),
+        }
+        return Ok(());
+    }
+    match str_field(&resp, "error") {
+        "no_devices" => {
+            println!("No phone connected; the hook would fall back to the normal prompt.");
+            Ok(())
+        }
+        "unknown_cmd" => bail!(
+            "the running daemon is too old for this; restart it: systemctl --user restart ccnotify"
+        ),
+        "" => bail!("daemon error: unknown error"),
+        other => bail!("daemon error: {other}"),
+    }
 }
 
 /// Unix ms → "YYYY-MM-DD HH:MM UTC" (no timezone database needed).

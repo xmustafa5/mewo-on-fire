@@ -16,6 +16,9 @@ use crate::paths;
 const NOTIFICATION_MATCHER: &str =
     "permission_prompt|idle_prompt|agent_needs_input|elicitation_dialog";
 const HOOK_EVENTS: [&str; 3] = ["Stop", "Notification", "SessionEnd"];
+/// PROTOCOL.md v1.1: answer prompts from the phone (`ccnotify ask`, blocking).
+const ASK_EVENT: &str = "PermissionRequest";
+const ASK_TIMEOUT_SECS: u64 = 86_400;
 
 const UNIT_FILE: &str = "[Unit]
 Description=ccnotify - Claude Code notifications to your phone over LAN
@@ -165,31 +168,44 @@ fn install_service(binary_replaced: bool) -> Result<()> {
 // ~/.claude/settings.json
 // ---------------------------------------------------------------------------
 
-fn hook_command(bin: &Path) -> String {
+/// `<bin> <subcommand>`, quoting the binary path if it contains whitespace.
+fn bin_command(bin: &Path, subcommand: &str) -> String {
     let p = bin.to_string_lossy();
     if p.chars().any(char::is_whitespace) {
-        format!("\"{p}\" hook")
+        format!("\"{p}\" {subcommand}")
     } else {
-        format!("{p} hook")
+        format!("{p} {subcommand}")
     }
 }
 
+/// True if `cmd` runs `ccnotify <subcommand>`.
+fn command_runs(cmd: &str, subcommand: &str) -> bool {
+    cmd.contains(&format!("ccnotify {subcommand}"))
+        || cmd.contains(&format!("ccnotify\" {subcommand}"))
+}
+
 fn is_ccnotify_command(cmd: &str) -> bool {
-    cmd.contains("ccnotify hook") || cmd.contains("ccnotify\" hook")
+    command_runs(cmd, "hook") || command_runs(cmd, "ask")
+}
+
+fn hook_command_str(hook: &Value) -> &str {
+    hook.get("command").and_then(Value::as_str).unwrap_or("")
 }
 
 fn hook_is_ccnotify(hook: &Value) -> bool {
-    hook.get("command")
-        .and_then(Value::as_str)
-        .map(is_ccnotify_command)
-        .unwrap_or(false)
+    is_ccnotify_command(hook_command_str(hook))
 }
 
-fn group_has_ccnotify(group: &Value) -> bool {
+/// True if the group has a hook running `ccnotify <subcommand>`.
+fn group_runs(group: &Value, subcommand: &str) -> bool {
     group
         .get("hooks")
         .and_then(Value::as_array)
-        .map(|hooks| hooks.iter().any(hook_is_ccnotify))
+        .map(|hooks| {
+            hooks
+                .iter()
+                .any(|h| command_runs(hook_command_str(h), subcommand))
+        })
         .unwrap_or(false)
 }
 
@@ -230,8 +246,11 @@ fn write_settings(path: &Path, settings: &Value, existed: bool) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-/// Append our hook groups (idempotent). Returns the events that were added.
-fn merge_hooks(settings: &mut Value, command: &str) -> Result<Vec<&'static str>> {
+/// Append our hook groups (idempotent per event: an event that already runs
+/// our subcommand is left alone). Returns the events that were added.
+fn merge_hooks(settings: &mut Value, bin: &Path) -> Result<Vec<&'static str>> {
+    let hook_cmd = bin_command(bin, "hook");
+    let ask_cmd = bin_command(bin, "ask");
     let root = settings
         .as_object_mut()
         .ok_or_else(|| anyhow!("settings.json is not a JSON object"))?;
@@ -250,7 +269,7 @@ fn merge_hooks(settings: &mut Value, command: &str) -> Result<Vec<&'static str>>
         let groups = groups
             .as_array_mut()
             .ok_or_else(|| anyhow!("\"hooks.{event}\" in settings.json is not an array"))?;
-        if groups.iter().any(group_has_ccnotify) {
+        if groups.iter().any(|g| group_runs(g, "hook")) {
             continue;
         }
         let mut group = Map::new();
@@ -259,16 +278,35 @@ fn merge_hooks(settings: &mut Value, command: &str) -> Result<Vec<&'static str>>
         }
         group.insert(
             "hooks".to_string(),
-            json!([{"type": "command", "command": command, "async": true}]),
+            json!([{"type": "command", "command": hook_cmd, "async": true}]),
         );
         groups.push(Value::Object(group));
         added.push(event);
     }
+
+    // Not async: Claude Code waits for the phone's decision.
+    let groups = hooks
+        .entry(ASK_EVENT)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let groups = groups
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("\"hooks.{}\" in settings.json is not an array", ASK_EVENT))?;
+    if !groups.iter().any(|g| group_runs(g, "ask")) {
+        let mut group = Map::new();
+        group.insert("matcher".to_string(), json!("*"));
+        group.insert(
+            "hooks".to_string(),
+            json!([{"type": "command", "command": ask_cmd, "timeout": ASK_TIMEOUT_SECS}]),
+        );
+        groups.push(Value::Object(group));
+        added.push(ASK_EVENT);
+    }
     Ok(added)
 }
 
-/// Remove every hook whose command runs `ccnotify hook`. Groups that become
-/// empty are dropped, then event keys that become empty arrays.
+/// Remove every hook whose command runs `ccnotify hook` or `ccnotify ask`.
+/// Groups that become empty are dropped, then event keys that become empty
+/// arrays.
 fn remove_hooks(settings: &mut Value) -> usize {
     let hooks = match settings.get_mut("hooks").and_then(Value::as_object_mut) {
         Some(h) => h,
@@ -317,17 +355,18 @@ fn settings_path() -> PathBuf {
 fn install_hooks(bin: &Path) -> Result<()> {
     let path = settings_path();
     let (mut settings, existed) = read_settings(&path)?;
-    let command = hook_command(bin);
-    let added = merge_hooks(&mut settings, &command)?;
+    let added = merge_hooks(&mut settings, bin)?;
     if added.is_empty() {
         println!("Hooks:    already present in {}", path.display());
         return Ok(());
     }
     write_settings(&path, &settings, existed)?;
     println!(
-        "Hooks:    added {} to {} (command: {command})",
+        "Hooks:    added {} to {} (commands: {} / {})",
         added.join(", "),
-        path.display()
+        path.display(),
+        bin_command(bin, "hook"),
+        bin_command(bin, "ask")
     );
     Ok(())
 }

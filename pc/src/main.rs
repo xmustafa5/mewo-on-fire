@@ -1,6 +1,7 @@
 //! ccnotify — Claude Code notifications to your phone over the LAN.
 //! See ../PROTOCOL.md for the wire contract.
 
+mod ask;
 mod cli;
 mod config;
 mod control;
@@ -10,6 +11,7 @@ mod install;
 mod mdns;
 mod net;
 mod paths;
+mod requests;
 mod server;
 mod store;
 
@@ -25,9 +27,11 @@ Commands:
   revoke <id>    Unpair a phone
   status         Show daemon status
   test           Send a test notification
+  test-ask       Send a test permission request and print the phone's answer
   uninstall      Remove hooks and the systemd service (keeps config and history)
   daemon         Run the daemon in the foreground (normally started by systemd)
   hook           Claude Code hook entry point (reads hook JSON on stdin)
+  ask            Claude Code PermissionRequest hook (answer prompts from the phone)
   help           Show this help
 ";
 
@@ -37,6 +41,9 @@ fn main() {
 
     if cmd == "hook" {
         hook::run();
+    }
+    if cmd == "ask" {
+        ask::run();
     }
 
     let result = match cmd {
@@ -52,6 +59,7 @@ fn main() {
         },
         "status" => cli::status(),
         "test" => cli::test(),
+        "test-ask" => cli::test_ask(),
         "install" => install::install(),
         "uninstall" => install::uninstall(),
         "help" | "-h" | "--help" => {

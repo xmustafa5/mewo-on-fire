@@ -10,16 +10,27 @@ import 'models.dart';
 ///
 /// Key ownership (one writer per key):
 /// - UI isolate:   `pcs`, `settings`, `first_launch_done`
-/// - Task isolate: `events`, `since_<pcId>`, `hosts_<pcId>`
+/// - Task isolate: `events`, `since_<pcId>`, `hosts_<pcId>`, `pending_requests`
+///
+/// The one exception is `queued_answer_<pcId>_<requestId>`: an answer that
+/// could not be handed to the task isolate directly. It is created by the
+/// notification-action isolate (task port not registered) or by the UI isolate
+/// (service not running) — one key per answer, so creators never overwrite
+/// each other's lists — and only read + removed by the task isolate, which
+/// drains the queue on start and on every repeat event.
 class Store {
   static const kPcs = 'pcs';
   static const kSettings = 'settings';
   static const kEvents = 'events';
+  static const kPendingRequests = 'pending_requests';
   static const kFirstLaunchDone = 'first_launch_done';
+  static const kQueuedAnswerPrefix = 'queued_answer_';
   static const maxEvents = 300;
 
   static String sinceKey(String pcId) => 'since_$pcId';
   static String hostsKey(String pcId) => 'hosts_$pcId';
+  static String queuedAnswerKey(String pcId, String requestId) =>
+      '$kQueuedAnswerPrefix${pcId}_$requestId';
 
   static SharedPreferencesAsync? _instance;
   static SharedPreferencesAsync get _p => _instance ??= SharedPreferencesAsync();
@@ -83,6 +94,47 @@ class Store {
   static Future<void> saveEvents(List<HistoryEntry> events) {
     final list = events.length > maxEvents ? events.sublist(0, maxEvents) : events;
     return _p.setString(kEvents, jsonEncode(list.map((e) => e.toJson()).toList()));
+  }
+
+  // ---- pending requests (task writes) ----
+  static Future<List<PendingRequest>> loadPendingRequests() async {
+    final d = _decode(await _p.getString(kPendingRequests));
+    if (d is! List) return <PendingRequest>[];
+    final out = <PendingRequest>[];
+    for (final e in d) {
+      if (e is Map) {
+        try {
+          final r = PendingRequest.fromJson(Map<String, dynamic>.from(e));
+          if (r.pcId.isNotEmpty && r.request.id.isNotEmpty) out.add(r);
+        } catch (_) {}
+      }
+    }
+    return out;
+  }
+
+  static Future<void> savePendingRequests(List<PendingRequest> requests) => _p.setString(
+      kPendingRequests, jsonEncode(requests.map((e) => e.toJson()).toList()));
+
+  // ---- queued answers (see the ownership note above) ----
+
+  /// Stores `{"pc_id", "request_id", "answer"}` for the task isolate to send.
+  static Future<void> queueAnswer(String pcId, String requestId, Map<String, dynamic> answer) =>
+      _p.setString(
+        queuedAnswerKey(pcId, requestId),
+        jsonEncode({'pc_id': pcId, 'request_id': requestId, 'answer': answer}),
+      );
+
+  /// Task isolate only: returns and removes every queued answer.
+  static Future<List<Map<String, dynamic>>> takeQueuedAnswers() async {
+    final out = <Map<String, dynamic>>[];
+    final keys = await _p.getKeys();
+    for (final k in keys) {
+      if (!k.startsWith(kQueuedAnswerPrefix)) continue;
+      final d = _decode(await _p.getString(k));
+      await _p.remove(k);
+      if (d is Map) out.add(Map<String, dynamic>.from(d));
+    }
+    return out;
   }
 
   // ---- per-PC link state (task writes) ----

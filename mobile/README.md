@@ -2,7 +2,8 @@
 
 Android app that pairs with one or more PCs running the `ccnotify` daemon and
 shows a notification when Claude Code finishes, needs your input, or a session
-closes. LAN only; the phone connects to the PC over `wss://` and accepts the
+closes. You can also answer Claude Code's permission prompts, questions and
+plan approvals from the phone. LAN only; the phone connects to the PC over `wss://` and accepts the
 PC's certificate only if it matches the pinned fingerprint. The wire format is
 defined in `../PROTOCOL.md`.
 
@@ -52,6 +53,30 @@ The app then shows that PC as "Unpaired".
   trigger a notification only if they are less than 30 minutes old.
 - In **Settings**, you can turn each event kind on or off. To mute a project,
   long-press one of its events in History.
+
+## Answering prompts from the phone
+
+This needs a PC daemon with protocol v1.1 (`ccnotify install` adds the
+`PermissionRequest` hook). When Claude Code shows a permission prompt, asks a
+question, or wants a plan approved, the phone shows a notification that stays
+until the prompt is answered:
+
+- **Permission**: **Allow**, **Deny**, and **Always** when Claude Code offers it
+- **Question**: one button per option, if there is a single single-choice
+  question with at most 3 options
+- **Plan**: **Approve** or **Reject**
+
+The buttons answer without opening the app. Tap the notification itself to
+open the answer screen. It shows the full command, diff or plan, all
+questions (multiple choice and "Other…" free text), and an optional message for
+Claude when you deny or reject. Pending prompts are also listed under
+**Waiting for you** at the top of the PCs tab. The badge on the PCs tab counts
+them.
+
+The first answer wins, from the phone or the PC. If you answer on the PC, the
+notification goes away. If the phone is offline when you answer, it sends the
+answer when it reconnects. To get these prompts only in the app list, without
+a notification, turn off **Settings → Answer prompts from phone**.
 
 ## Battery and OEM notes
 

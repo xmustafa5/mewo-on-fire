@@ -48,6 +48,13 @@
             android:stopWithTask="false"
             android:exported="false" />
 
+        <!-- flutter_local_notifications: delivers notification action buttons
+             (Allow / Deny / …, showsUserInterface=false) to the Dart background
+             handler without opening the app. -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
+            android:exported="false" />
+
         <!-- Small icon for the ongoing service notification (see main.dart). -->
         <meta-data
             android:name="com.torchcorp.ccnotify.NOTIFY_ICON"

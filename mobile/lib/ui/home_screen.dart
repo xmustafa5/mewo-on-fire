@@ -30,27 +30,42 @@ class _HomeScreenState extends State<HomeScreen> {
         index: _index,
         children: const [PcsTab(), HistoryTab(), SettingsTab()],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.computer_outlined),
-            selectedIcon: Icon(Icons.computer),
-            label: 'PCs',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history_outlined),
-            selectedIcon: Icon(Icons.history),
-            label: 'History',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
-          ),
-        ],
+      bottomNavigationBar: ListenableBuilder(
+        listenable: AppState.instance,
+        builder: (context, _) => _navigationBar(AppState.instance.waitingCount),
       ),
+    );
+  }
+
+  Widget _navigationBar(int waiting) {
+    return NavigationBar(
+      selectedIndex: _index,
+      onDestinationSelected: (i) => setState(() => _index = i),
+      destinations: [
+        NavigationDestination(
+          icon: Badge.count(
+            count: waiting,
+            isLabelVisible: waiting > 0,
+            child: const Icon(Icons.computer_outlined),
+          ),
+          selectedIcon: Badge.count(
+            count: waiting,
+            isLabelVisible: waiting > 0,
+            child: const Icon(Icons.computer),
+          ),
+          label: 'PCs',
+        ),
+        const NavigationDestination(
+          icon: Icon(Icons.history_outlined),
+          selectedIcon: Icon(Icons.history),
+          label: 'History',
+        ),
+        const NavigationDestination(
+          icon: Icon(Icons.settings_outlined),
+          selectedIcon: Icon(Icons.settings),
+          label: 'Settings',
+        ),
+      ],
     );
   }
 }

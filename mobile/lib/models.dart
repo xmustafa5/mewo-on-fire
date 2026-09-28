@@ -143,24 +143,198 @@ class PairedPc {
       };
 }
 
+/// Request kinds defined by PROTOCOL.md v1.1 "Request".
+class RequestKind {
+  static const permission = 'permission';
+  static const question = 'question';
+  static const plan = 'plan';
+}
+
+/// One option of an `AskUserQuestion` question.
+class RequestOption {
+  const RequestOption({required this.label, this.description = ''});
+
+  final String label;
+  final String description;
+
+  factory RequestOption.fromJson(Object? j) {
+    if (j is Map) {
+      return RequestOption(label: _asString(j['label']), description: _asString(j['description']));
+    }
+    return RequestOption(label: _asString(j));
+  }
+
+  Map<String, dynamic> toJson() => {'label': label, 'description': description};
+}
+
+/// One entry of `tool_input.questions` (kind `question`).
+class RequestQuestion {
+  const RequestQuestion({
+    required this.question,
+    this.header = '',
+    this.options = const <RequestOption>[],
+    this.multiSelect = false,
+  });
+
+  final String question;
+  final String header;
+  final List<RequestOption> options;
+  final bool multiSelect;
+
+  factory RequestQuestion.fromJson(Map<String, dynamic> j) => RequestQuestion(
+        question: _asString(j['question']),
+        header: _asString(j['header']),
+        options: j['options'] is List
+            ? (j['options'] as List)
+                .map(RequestOption.fromJson)
+                .where((o) => o.label.isNotEmpty)
+                .toList()
+            : const <RequestOption>[],
+        multiSelect: j['multiSelect'] == true,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'question': question,
+        'header': header,
+        'options': options.map((o) => o.toJson()).toList(),
+        'multiSelect': multiSelect,
+      };
+}
+
+/// A prompt Claude Code is waiting on (PROTOCOL.md v1.1 "Request").
+class CcRequest {
+  const CcRequest({
+    required this.id,
+    required this.ts,
+    required this.kind,
+    required this.project,
+    this.session = '',
+    this.tool = '',
+    this.title = '',
+    this.summary = '',
+    this.detail = '',
+    this.canAllowAlways = false,
+    this.questions = const <RequestQuestion>[],
+  });
+
+  final String id; // 8 hex
+  final int ts; // unix ms
+  final String kind;
+  final String project;
+  final String session;
+  final String tool;
+  final String title;
+  final String summary;
+  final String detail;
+  final bool canAllowAlways;
+  final List<RequestQuestion> questions;
+
+  factory CcRequest.fromJson(Map<String, dynamic> j) {
+    final qs = <RequestQuestion>[];
+    final raw = j['questions'];
+    if (raw is List) {
+      for (final q in raw) {
+        if (q is Map) {
+          final parsed = RequestQuestion.fromJson(Map<String, dynamic>.from(q));
+          if (parsed.question.isNotEmpty) qs.add(parsed);
+        }
+      }
+    }
+    return CcRequest(
+      id: _asString(j['id']),
+      ts: _asInt(j['ts']),
+      kind: _asString(j['kind']),
+      project: _asString(j['project']),
+      session: _asString(j['session']),
+      tool: _asString(j['tool']),
+      title: _asString(j['title']),
+      summary: _asString(j['summary']),
+      detail: _asString(j['detail']),
+      canAllowAlways: j['can_allow_always'] == true,
+      questions: qs,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'ts': ts,
+        'kind': kind,
+        'project': project,
+        'session': session,
+        'tool': tool,
+        'title': title,
+        'summary': summary,
+        'detail': detail,
+        'can_allow_always': canAllowAlways,
+        'questions': questions.map((q) => q.toJson()).toList(),
+      };
+
+  DateTime get time => DateTime.fromMillisecondsSinceEpoch(ts);
+}
+
+/// Key of a request across PCs (request ids are only unique per PC).
+String requestKey(String pcId, String requestId) => '$pcId:$requestId';
+
+/// One row of `pending_requests` (written only by the task isolate): a request
+/// plus which PC sent it. [answer] is set once this phone answered it and kept
+/// until the PC confirms with `resolved` (re-sent if the PC asks again).
+class PendingRequest {
+  const PendingRequest({
+    required this.pcId,
+    required this.pcName,
+    required this.request,
+    this.answer,
+  });
+
+  final String pcId;
+  final String pcName;
+  final CcRequest request;
+  final Map<String, dynamic>? answer;
+
+  bool get answered => answer != null;
+  String get key => requestKey(pcId, request.id);
+
+  factory PendingRequest.fromJson(Map<String, dynamic> j) => PendingRequest(
+        pcId: _asString(j['pc_id']),
+        pcName: _asString(j['pc_name']),
+        request: CcRequest.fromJson(Map<String, dynamic>.from(j['request'] as Map)),
+        answer: j['answer'] is Map ? Map<String, dynamic>.from(j['answer'] as Map) : null,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'pc_id': pcId,
+        'pc_name': pcName,
+        'request': request.toJson(),
+        if (answer != null) 'answer': answer,
+      };
+
+  PendingRequest withAnswer(Map<String, dynamic> a) =>
+      PendingRequest(pcId: pcId, pcName: pcName, request: request, answer: a);
+}
+
 /// User settings (`settings` pref, written only by the UI isolate).
 class AppSettings {
   const AppSettings({
     this.notifyStop = true,
     this.notifyNeedsInput = true,
     this.notifySessionEnd = true,
+    this.answerFromPhone = true,
     this.mutedProjects = const <String>[],
   });
 
   final bool notifyStop;
   final bool notifyNeedsInput;
   final bool notifySessionEnd;
+
+  /// Show an action notification (Allow / Deny / options…) for requests.
+  final bool answerFromPhone;
   final List<String> mutedProjects;
 
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
         notifyStop: j['notify_stop'] is bool ? j['notify_stop'] as bool : true,
         notifyNeedsInput: j['notify_needs_input'] is bool ? j['notify_needs_input'] as bool : true,
         notifySessionEnd: j['notify_session_end'] is bool ? j['notify_session_end'] as bool : true,
+        answerFromPhone: j['answer_from_phone'] is bool ? j['answer_from_phone'] as bool : true,
         mutedProjects: _asStringList(j['muted_projects']),
       );
 
@@ -168,6 +342,7 @@ class AppSettings {
         'notify_stop': notifyStop,
         'notify_needs_input': notifyNeedsInput,
         'notify_session_end': notifySessionEnd,
+        'answer_from_phone': answerFromPhone,
         'muted_projects': mutedProjects,
       };
 
@@ -175,14 +350,20 @@ class AppSettings {
     bool? notifyStop,
     bool? notifyNeedsInput,
     bool? notifySessionEnd,
+    bool? answerFromPhone,
     List<String>? mutedProjects,
   }) =>
       AppSettings(
         notifyStop: notifyStop ?? this.notifyStop,
         notifyNeedsInput: notifyNeedsInput ?? this.notifyNeedsInput,
         notifySessionEnd: notifySessionEnd ?? this.notifySessionEnd,
+        answerFromPhone: answerFromPhone ?? this.answerFromPhone,
         mutedProjects: mutedProjects ?? this.mutedProjects,
       );
+
+  /// Whether an action notification may be shown for [r] (the request is
+  /// always listed in the app).
+  bool allowsRequest(CcRequest r) => answerFromPhone && !mutedProjects.contains(r.project);
 
   /// Whether a system notification may be shown for [e] (history is always kept).
   bool allows(CcEvent e) {

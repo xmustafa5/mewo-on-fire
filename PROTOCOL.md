@@ -97,3 +97,92 @@ Phone: tries the stored `hosts` in order; if all fail 3 times in a row, it brows
 ## Reconnect
 
 Exponential backoff 1 s → 60 s with ±20 % jitter, reset on successful `hello`. Reconnect immediately on network change / app resume.
+
+---
+
+# v1.1 — answering prompts from the phone
+
+Claude Code runs a `PermissionRequest` hook right before it shows a permission prompt, an
+`AskUserQuestion` question, or an `ExitPlanMode` plan approval (verified: it fires for all three).
+In VS Code / Desktop sessions the on-screen prompt and the hook race — whichever answers first
+wins; if the PC answers first, Claude Code kills the hook process.
+
+## Hook
+
+Added by `ccnotify install` (not async, long timeout):
+
+```json
+"PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command", "command": "<bin> ask", "timeout": 86400}]}]
+```
+
+`ccnotify ask`:
+1. Reads the hook JSON (`tool_name`, `tool_input`, `permission_suggestions`, `session_id`, `cwd`).
+2. Sends `{"cmd":"ask","request":{Request without id/ts}}` on the control socket and **blocks** reading the reply line (no read timeout).
+3. Reply `{"ok":false,"error":"no_devices"}` (sent immediately when no phone is connected) or any error / daemon down → print nothing, exit 0 (normal prompt flow).
+4. Reply `{"ok":true,"answer":{Answer}}` → print the hook output below, exit 0.
+5. If Claude Code kills the hook (PC answered first), the socket closes; the daemon notices EOF and resolves the request as `cancelled`.
+
+## Request (daemon → phone)
+
+```json
+{"id": "<8 hex>", "ts": 1790000000000, "kind": "permission", "project": "business-os",
+ "session": "44155e15", "tool": "Bash", "title": "Run a command",
+ "summary": "npm test", "detail": "npm test\n\nRun test suite", "can_allow_always": true,
+ "questions": []}
+```
+
+- `kind`: `question` if `tool_name == "AskUserQuestion"`, `plan` if `ExitPlanMode`, else `permission`.
+- `title` / `summary` (≤ 200 chars) / `detail` (≤ 4000 chars) by tool:
+  - `Bash`: "Run a command" / `command` / `command` + "\n\n" + `description`
+  - `Edit`, `Write`, `MultiEdit`, `NotebookEdit`: "Edit a file" / `file_path` / `file_path` + (`old_string` → `new_string`, or first 1500 chars of `content`)
+  - `WebFetch`: "Fetch a URL" / `url`; `WebSearch`: "Search the web" / `query`
+  - `ExitPlanMode`: "Approve the plan" / first line of `plan` / `plan`
+  - `AskUserQuestion`: "Claude has a question" / first `question` / all question texts
+  - anything else (incl. `mcp__*`): "Use <tool>" / compact JSON of `tool_input`
+- `can_allow_always`: `permission_suggestions` is a non-empty array (permission kind only).
+- `questions`: `tool_input.questions` as-is (`question`, `header`, `options[{label, description}]`, `multiSelect`) for kind `question`, else `[]`.
+- The original `tool_input` and `permission_suggestions` stay in the hook process (never sent to the daemon's phones); the hook builds its own output from them.
+
+## Answer (phone → daemon → hook)
+
+| kind | Answer | Hook stdout |
+|---|---|---|
+| permission | `{"action":"allow"}` | `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` |
+| permission | `{"action":"allow_always"}` | same + `"updatedPermissions": <permission_suggestions>` |
+| permission | `{"action":"deny","message":"..."}` | `decision: {"behavior":"deny","message": message or "Denied from phone (ccnotify)"}` |
+| question | `{"answers":{"<question text>":"<label>"}}` | `decision: {"behavior":"allow","updatedInput": {...tool_input, "answers": answers}}` |
+| plan | `{"action":"approve"}` | `decision: {"behavior":"allow","updatedInput": tool_input}` |
+| plan | `{"action":"reject","message":"..."}` | `decision: {"behavior":"deny","message": message or "Plan rejected from phone (ccnotify)"}` |
+
+Multi-select answers join labels with ", ". A typed custom answer is sent as the value text.
+
+## Wire frames (after a successful `auth`, in addition to v1)
+
+```
+← {"type":"request","request":{Request}}     — sent live, and on (re)connect for every still-pending request
+← {"type":"resolved","request_id":"<id>","by":"phone|pc|timeout"}   — answered elsewhere / cancelled
+→ {"type":"answer","request_id":"<id>","answer":{Answer}}
+```
+
+- The first valid answer wins; the daemon then sends `resolved` (by `phone`) to all phones. An answer for an unknown/finished request gets a `resolved` reply to that phone only.
+- When the hook connection closes before an answer: `resolved` with `by: "pc"`.
+- Pending requests older than 24 h are dropped (`by: "timeout"`).
+- Duplicate suppression: while a request is pending for session S, an `emit` of kind `needs_input` with the same `session` and `detail` `permission_prompt` or `elicitation_dialog` is dropped (not stored, not sent).
+
+## Control socket additions
+
+| Request | Response |
+|---|---|
+| `{"cmd":"ask","request":{...}}` | blocks → `{"ok":true,"answer":{...}}` / `{"ok":false,"error":"no_devices"}` |
+| `{"cmd":"status"}` | adds `"pending": N` |
+
+## Phone behaviour
+
+- Notification channel `requests` (max importance, heads-up), one notification per request, id derived from pc_id + request id, `ongoing` until resolved.
+- Action buttons (no UI opened, handled in the background):
+  - permission: **Allow**, **Deny**, and **Always** if `can_allow_always`
+  - question with exactly 1 question, `multiSelect` false and ≤ 3 options: one button per option label
+  - plan: **Approve**, **Reject**
+- Tapping the notification body opens the app on the answer screen for that request (full detail, option list with multi-select, "Other…" free text, deny/reject with an optional message).
+- The app shows pending requests at the top of the PCs tab ("Waiting for you").
+- On `resolved`: cancel the notification and drop the request from the pending list.

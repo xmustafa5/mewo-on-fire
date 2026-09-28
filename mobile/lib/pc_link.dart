@@ -42,6 +42,17 @@ typedef LinkStateCallback = void Function(PcLink link);
 /// was not part of the replay (its id is greater than `last_id` from hello).
 typedef LinkEventCallback = Future<void> Function(PcLink link, CcEvent event, bool live);
 
+/// Called for every `request` frame (live, and re-sent on every (re)connect —
+/// the receiver dedupes by request id).
+typedef LinkRequestCallback = Future<void> Function(PcLink link, CcRequest request);
+
+/// Called for every `resolved` frame; [by] is `phone`, `pc` or `timeout`.
+typedef LinkResolvedCallback = Future<void> Function(PcLink link, String requestId, String by);
+
+/// Called once per connection when the (re)connect burst is over, with the
+/// ids of every request received since `hello` (= all still pending).
+typedef LinkRequestsSyncedCallback = Future<void> Function(PcLink link, Set<String> requestIds);
+
 enum _Outcome { failed, helloThenClosed, unauthorized }
 
 /// One long-lived subscription to one PC (PROTOCOL.md "Subscribe").
@@ -49,15 +60,30 @@ enum _Outcome { failed, helloThenClosed, unauthorized }
 /// Owned by the foreground-task isolate. Writes `since_<pcId>` and
 /// `hosts_<pcId>`; never touches `pcs` / `settings`.
 class PcLink {
-  PcLink({required this.pc, required this.onState, required this.onEvent});
+  PcLink({
+    required this.pc,
+    required this.onState,
+    required this.onEvent,
+    required this.onRequest,
+    required this.onResolved,
+    required this.onRequestsSynced,
+  });
 
   final PairedPc pc;
   final LinkStateCallback onState;
   final LinkEventCallback onEvent;
+  final LinkRequestCallback onRequest;
+  final LinkResolvedCallback onResolved;
+  final LinkRequestsSyncedCallback onRequestsSynced;
 
   static const Duration _minBackoff = Duration(seconds: 1);
   static const Duration _maxBackoff = Duration(seconds: 60);
   static const Duration _discoveryTime = Duration(seconds: 5);
+
+  /// After `hello` the PC replays events, then re-sends every pending
+  /// request. The burst counts as over after this long without a frame;
+  /// listed requests not re-sent by then were resolved while disconnected.
+  static const Duration _requestSyncQuiet = Duration(seconds: 5);
 
   String _state = PcStatus.connecting;
   String get state => _state;
@@ -104,6 +130,19 @@ class PcLink {
     final w = _wake;
     _wake = null;
     if (w != null && !w.isCompleted) w.complete();
+  }
+
+  /// Sends an `answer` frame. Returns false if not connected (the PC re-sends
+  /// the request on reconnect; the caller answers again then).
+  bool sendAnswer(String requestId, Map<String, dynamic> answer) {
+    final ws = _ws;
+    if (ws == null || _state != PcStatus.connected) return false;
+    try {
+      ws.add(jsonEncode({'type': 'answer', 'request_id': requestId, 'answer': answer}));
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _setState(String s) {
@@ -216,6 +255,18 @@ class PcLink {
     final helloTimer = Timer(const Duration(seconds: 10), () {
       if (!gotHello) _closeQuietly(ws);
     });
+    // Request ids seen since hello, until the sync timer fires.
+    Set<String>? syncIds;
+    Timer? syncTimer;
+    void armSyncTimer() {
+      syncTimer?.cancel();
+      syncTimer = Timer(_requestSyncQuiet, () {
+        final ids = syncIds;
+        syncIds = null;
+        if (ids == null || _stopped || !identical(_ws, ws)) return;
+        unawaited(onRequestsSynced(this, ids).catchError((Object _) {}));
+      });
+    }
 
     try {
       ws.add(jsonEncode({'type': 'auth', 'token': pc.token, 'since': since}));
@@ -231,6 +282,7 @@ class PcLink {
           continue;
         }
         final type = msg['type'];
+        if (syncIds != null) armSyncTimer(); // still in the reconnect burst
         if (type == 'hello') {
           gotHello = true;
           helloTimer.cancel();
@@ -243,7 +295,25 @@ class PcLink {
           _backoff = _minBackoff;
           _failStreak = 0;
           _host = host;
+          syncIds = <String>{};
+          armSyncTimer();
           _setState(PcStatus.connected);
+        } else if (type == 'request') {
+          final r = msg['request'];
+          if (r is! Map) continue;
+          final req = CcRequest.fromJson(Map<String, dynamic>.from(r));
+          if (req.id.isEmpty) continue;
+          syncIds?.add(req.id);
+          try {
+            await onRequest(this, req);
+          } catch (_) {}
+        } else if (type == 'resolved') {
+          final id = msg['request_id'];
+          if (id is! String || id.isEmpty) continue;
+          final by = msg['by'];
+          try {
+            await onResolved(this, id, by is String ? by : '');
+          } catch (_) {}
         } else if (type == 'event') {
           final e = msg['event'];
           if (e is! Map) continue;
@@ -263,6 +333,7 @@ class PcLink {
       // Socket error: treated as a closed connection.
     } finally {
       helloTimer.cancel();
+      syncTimer?.cancel();
       if (identical(_ws, ws)) _ws = null;
       _host = null;
       _closeQuietly(ws);

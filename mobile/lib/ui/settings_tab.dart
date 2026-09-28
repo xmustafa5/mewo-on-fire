@@ -75,6 +75,18 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
           body: ListView(
             padding: const EdgeInsets.only(bottom: 24),
             children: [
+              _header(context, 'Answer from phone'),
+              SwitchListTile(
+                secondary: const Icon(Icons.touch_app_outlined),
+                title: const Text('Answer prompts from phone'),
+                subtitle: const Text(
+                    'Permission prompts, questions and plan approvals show a notification with '
+                    'Allow / Deny / option buttons. When off, they only appear under '
+                    '"Waiting for you" in the app.'),
+                isThreeLine: true,
+                value: s.answerFromPhone,
+                onChanged: (v) => state.updateSettings(s.copyWith(answerFromPhone: v)),
+              ),
               _header(context, 'Notify me when'),
               SwitchListTile(
                 secondary: const Icon(Icons.hourglass_top),
