@@ -286,7 +286,7 @@ pub fn test_ask() -> Result<()> {
 
     println!("Sending a test permission request (Bash: echo hello from ccnotify)...");
     println!("Answer it on the phone (Ctrl+C to cancel).");
-    let resp = ask::ask_daemon(&request)
+    let resp = ask::ask_daemon(&request, "")
         .map_err(|e| anyhow!("{}\n({e:#})", not_running_hint()))?;
 
     if let Some(answer) = ask::reply_answer(&resp) {

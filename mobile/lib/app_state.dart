@@ -273,11 +273,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       requests = _parseRequests(msg['requests']);
       notifyListeners();
     } else if (type == 'resolved') {
-      final key = requestKey('${msg['pc_id']}', '${msg['request_id']}');
+      final pcId = '${msg['pc_id']}';
+      final requestId = '${msg['request_id']}';
+      final key = requestKey(pcId, requestId);
       resolvedBy[key] = msg['by'] is String ? msg['by'] as String : '';
       if (resolvedBy.length > 50) resolvedBy.remove(resolvedBy.keys.first);
       requests = requests.where((r) => r.key != key).toList();
       notifyListeners();
+      // The task cancels it too; harmless if it is already gone.
+      unawaited(_cancelRequestNotification(pcId, requestId));
     } else if (type == 'sessions') {
       _onSessionsSnapshot(_parseSessions(msg['sessions']));
     } else if (type == 'session') {
@@ -536,11 +540,18 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     try {
       await Store.queueAnswer(pcId, requestId, answer);
-      await _notifs.cancel(id: requestNotificationId(pcId, requestId));
+      await _cancelRequestNotification(pcId, requestId);
     } catch (e) {
       debugPrint('ccnotify: queueing answer failed: $e');
     }
     if (pcs.isNotEmpty) await startService();
+  }
+
+  /// Same id the task shows the request notification with.
+  Future<void> _cancelRequestNotification(String pcId, String requestId) async {
+    try {
+      await _notifs.cancel(id: requestNotificationId(pcId, requestId));
+    } catch (_) {}
   }
 
   String pcNameFor(String pcId) {

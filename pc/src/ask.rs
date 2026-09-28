@@ -4,8 +4,15 @@
 //! unless a phone answered. The original `tool_input` and
 //! `permission_suggestions` never leave this process: the decision is built
 //! here from the hook input + the phone's answer.
+//!
+//! Claude Code does not kill the hook when the prompt is answered on the PC,
+//! so a transcript watcher thread exits the process (silently) once the
+//! transcript shows the prompt was answered there.
 
-use std::io::{Read, Write};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -13,6 +20,7 @@ use serde_json::{json, Map, Value};
 
 use crate::control;
 use crate::hook;
+use crate::transcript;
 
 pub const MAX_DETAIL_CHARS: usize = 4000;
 /// Cap for file contents / edit strings inside `detail`.
@@ -21,11 +29,27 @@ const MAX_SNIPPET_CHARS: usize = 1500;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_DENY_MESSAGE: &str = "Denied from phone (ccnotify)";
 const DEFAULT_REJECT_MESSAGE: &str = "Plan rejected from phone (ccnotify)";
+/// Transcript watcher: how much of the transcript tail is searched for the
+/// prompt's tool_use, and how often the file is re-checked.
+const WATCH_TAIL_BYTES: u64 = 2 * 1024 * 1024;
+const WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Set by whoever ends the process first: the main thread (right before it
+/// prints a phone answer, or exits silently) or the transcript watcher
+/// (prompt answered on the PC). The other one must not exit / print.
+static FINISHED: AtomicBool = AtomicBool::new(false);
 
 pub fn run() -> ! {
     // Nothing but the final decision may reach stdout, even on panic.
     std::panic::set_hook(Box::new(|_| {}));
-    if let Ok(Some(out)) = std::panic::catch_unwind(try_run) {
+    let out = std::panic::catch_unwind(try_run);
+    if FINISHED.swap(true, Ordering::SeqCst) {
+        // The watcher is exiting the process (no output): wait for it.
+        loop {
+            std::thread::park();
+        }
+    }
+    if let Ok(Some(out)) = out {
         let mut stdout = std::io::stdout().lock();
         let _ = stdout.write_all(out.as_bytes());
         let _ = stdout.write_all(b"\n");
@@ -39,15 +63,21 @@ fn try_run() -> Option<String> {
     std::io::stdin().read_to_string(&mut input).ok()?;
     let hook_input: Value = serde_json::from_str(&input).ok()?;
     let request = map_request(&hook_input);
-    let resp = ask_daemon(&request).ok()?;
+    spawn_watcher(&hook_input);
+    let resp = ask_daemon(&request, str_of(&hook_input, "agent_id")).ok()?;
     let answer = reply_answer(&resp)?;
     let output = hook_output(&hook_input, answer)?;
     serde_json::to_string(&output).ok()
 }
 
 /// Send `{"cmd":"ask"}` and block (no read timeout) until the daemon replies.
-pub fn ask_daemon(request: &Value) -> Result<Value> {
-    control::request_blocking(&json!({"cmd": "ask", "request": request}), WRITE_TIMEOUT)
+/// `agent_id` (private, never forwarded to phones) is set for prompts from a
+/// subagent.
+pub fn ask_daemon(request: &Value, agent_id: &str) -> Result<Value> {
+    control::request_blocking(
+        &json!({"cmd": "ask", "request": request, "agent_id": agent_id}),
+        WRITE_TIMEOUT,
+    )
 }
 
 /// The phone's answer in an `ask` reply, if there is one.
@@ -320,4 +350,256 @@ fn deny(answer: &Value, default_message: &str) -> Value {
         message
     };
     json!({"behavior": "deny", "message": message})
+}
+
+// ---------------------------------------------------------------------------
+// Transcript watcher (PROTOCOL.md v1.1)
+// ---------------------------------------------------------------------------
+
+/// What the watcher waits for in the lines appended to the transcript.
+enum Target {
+    /// The tool_result of the prompt's tool_use (this id).
+    ToolUse(String),
+    /// The tool_use was not found: any new assistant line.
+    AnyAssistant,
+}
+
+struct Watcher {
+    path: String,
+    tool: String,
+    input: Value,
+    /// Watching a subagent transcript: its lines are all sidechain lines.
+    sidechain: bool,
+}
+
+/// Start the transcript watcher thread. Skipped for subagent prompts unless
+/// the input names the subagent's own transcript.
+fn spawn_watcher(hook_input: &Value) {
+    let mut path = str_of(hook_input, "transcript_path");
+    let mut sidechain = false;
+    if !str_of(hook_input, "agent_id").is_empty() {
+        let agent_path = str_of(hook_input, "agent_transcript_path");
+        if agent_path.is_empty() || agent_path == path {
+            return;
+        }
+        path = agent_path;
+        sidechain = true;
+    }
+    if path.is_empty() {
+        return;
+    }
+    let watcher = Watcher {
+        path: path.to_string(),
+        tool: str_of(hook_input, "tool_name").to_string(),
+        input: hook_input.get("tool_input").cloned().unwrap_or(Value::Null),
+        sidechain,
+    };
+    let _ = std::thread::Builder::new()
+        .name("transcript-watcher".to_string())
+        .spawn(move || watcher.run());
+}
+
+impl Watcher {
+    /// Find the prompt's tool_use, then poll the appended lines until the
+    /// prompt is gone; then exit the process with code 0 and no output
+    /// (unless the main thread got there first).
+    fn run(self) {
+        let (tail, mut offset) = match read_tail(&self.path, WATCH_TAIL_BYTES) {
+            Ok(x) => x,
+            Err(_) => return,
+        };
+        let cut = complete_len(&tail);
+        let target = self.find_target(&tail[..cut]);
+        // A partial last line, completed by the next read.
+        let mut carry: Vec<u8> = tail[cut..].to_vec();
+
+        loop {
+            std::thread::sleep(WATCH_INTERVAL);
+            if FINISHED.load(Ordering::SeqCst) {
+                return;
+            }
+            let mut file = match File::open(&self.path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let len = match file.metadata() {
+                Ok(m) => m.len(),
+                Err(_) => continue,
+            };
+            if len < offset {
+                // Rewritten: start over.
+                offset = 0;
+                carry.clear();
+            }
+            if len == offset {
+                continue;
+            }
+            let mut appended = Vec::new();
+            if file.seek(SeekFrom::Start(offset)).is_err()
+                || file.read_to_end(&mut appended).is_err()
+            {
+                continue;
+            }
+            offset += appended.len() as u64;
+            carry.extend_from_slice(&appended);
+            let cut = complete_len(&carry);
+            if cut == 0 {
+                continue;
+            }
+            let gone = self.prompt_gone(&carry[..cut], &target);
+            carry.drain(..cut);
+            if gone {
+                if !FINISHED.swap(true, Ordering::SeqCst) {
+                    std::process::exit(0);
+                }
+                return;
+            }
+        }
+    }
+
+    /// Main-chain line (or any line of a subagent transcript).
+    fn in_chain(&self, v: &Value) -> bool {
+        self.sidechain || !flag(v, "isSidechain")
+    }
+
+    /// The prompt's tool_use in the transcript tail: the most recent
+    /// `tool_name` call without a tool_result, preferring one whose input
+    /// equals the hook's `tool_input`.
+    fn find_target(&self, bytes: &[u8]) -> Target {
+        // (tool_use id, input equals tool_input), oldest first.
+        let mut calls: Vec<(String, bool)> = Vec::new();
+        let mut answered: HashSet<String> = HashSet::new();
+        for v in json_lines(bytes) {
+            if !self.in_chain(&v) {
+                continue;
+            }
+            match str_of(&v, "type") {
+                "assistant" => {
+                    for b in content_blocks(&v) {
+                        let id = str_of(b, "id");
+                        if str_of(b, "type") == "tool_use"
+                            && str_of(b, "name") == self.tool
+                            && !id.is_empty()
+                        {
+                            calls.push((id.to_string(), b.get("input") == Some(&self.input)));
+                        }
+                    }
+                }
+                "user" => answered.extend(tool_result_ids(&v).map(str::to_string)),
+                _ => {}
+            }
+        }
+        calls.retain(|(id, _)| !answered.contains(id));
+        let best = calls
+            .iter()
+            .rev()
+            .find(|(_, same_input)| *same_input)
+            .or_else(|| calls.last());
+        match best {
+            Some((id, _)) => Target::ToolUse(id.clone()),
+            None => Target::AnyAssistant,
+        }
+    }
+
+    /// True if the appended lines show the prompt is gone: its tool_result
+    /// (answered on the PC), a new user prompt (the session moved on), or —
+    /// without a known tool_use — any new assistant line.
+    fn prompt_gone(&self, bytes: &[u8], target: &Target) -> bool {
+        json_lines(bytes).any(|v| {
+            if !self.in_chain(&v) {
+                return false;
+            }
+            match str_of(&v, "type") {
+                "user" => {
+                    let answered = match target {
+                        Target::ToolUse(id) => tool_result_ids(&v).any(|r| r == id.as_str()),
+                        Target::AnyAssistant => false,
+                    };
+                    answered || (!flag(&v, "isMeta") && is_prompt(&v))
+                }
+                "assistant" => matches!(target, Target::AnyAssistant),
+                _ => false,
+            }
+        })
+    }
+}
+
+/// The last `max` bytes of the file (without the first, partial line when
+/// the file is longer) and the offset they end at.
+fn read_tail(path: &str, max: u64) -> std::io::Result<(Vec<u8>, u64)> {
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(max);
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+    let end = start + buf.len() as u64;
+    if start > 0 {
+        match buf.iter().position(|&b| b == b'\n') {
+            Some(nl) => {
+                buf.drain(..=nl);
+            }
+            None => buf.clear(),
+        }
+    }
+    Ok((buf, end))
+}
+
+/// Length of the complete lines at the start of `bytes` (up to and
+/// including the last newline).
+fn complete_len(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|p| p + 1)
+        .unwrap_or(0)
+}
+
+/// The JSON lines of a JSONL chunk (bad lines are skipped).
+fn json_lines(bytes: &[u8]) -> impl Iterator<Item = Value> + '_ {
+    bytes
+        .split(|&b| b == b'\n')
+        .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+        .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+}
+
+fn flag(v: &Value, key: &str) -> bool {
+    v.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// `message.content` blocks of a transcript line.
+fn content_blocks(v: &Value) -> &[Value] {
+    v.get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+/// `tool_use_id`s of the tool_result blocks of a transcript line.
+fn tool_result_ids(v: &Value) -> impl Iterator<Item = &str> + '_ {
+    content_blocks(v)
+        .iter()
+        .filter(|b| str_of(b, "type") == "tool_result")
+        .map(|b| str_of(b, "tool_use_id"))
+}
+
+/// A user line with typed text (after stripping the usual wrappers); tool
+/// results and task notifications (background tasks, rewakes) do not count.
+fn is_prompt(v: &Value) -> bool {
+    let content = v.get("message").and_then(|m| m.get("content"));
+    let texts: Vec<&str> = match content {
+        Some(Value::String(s)) => vec![s.as_str()],
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter(|b| str_of(b, "type") == "text")
+            .map(|b| str_of(b, "text"))
+            .collect(),
+        _ => Vec::new(),
+    };
+    texts.iter().any(|text| {
+        let text = transcript::strip_wrappers(text);
+        let text = text.trim();
+        !text.is_empty() && !text.starts_with("<task-notification>")
+    })
 }

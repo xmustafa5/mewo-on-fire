@@ -12,7 +12,7 @@ use tokio::sync::{broadcast, oneshot};
 use tokio::time::MissedTickBehavior;
 
 use crate::config::{self, now_ms, random_hex, Config, Device};
-use crate::requests::{self, Request, Requests};
+use crate::requests::{self, AskReply, Request, Requests};
 use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session, Sessions};
 use crate::store::{Event, Store};
 use crate::transcript::{self, ChatItem};
@@ -133,8 +133,13 @@ impl AppState {
     // snapshots are consistent with the live stream.
 
     /// Register a request from `ccnotify ask` (assigning id/ts) and broadcast
-    /// it to phones. Returns its id and the receiver for the answer.
-    pub fn add_request(&self, mut request: Request) -> (String, oneshot::Receiver<Value>) {
+    /// it to phones. `agent_id` (private) is set for a prompt from a
+    /// subagent. Returns its id and the receiver for the reply.
+    pub fn add_request(
+        &self,
+        mut request: Request,
+        agent_id: String,
+    ) -> (String, oneshot::Receiver<AskReply>) {
         let mut requests = lock(&self.requests);
         let mut id = random_hex(4);
         while requests.contains(&id) {
@@ -144,20 +149,20 @@ impl AppState {
         request.ts = now_ms();
         let _ = self.tx.send(Push::Request(request.clone()));
         let session = request.session.clone();
-        let answer_rx = requests.insert(request);
+        let reply_rx = requests.insert(request, agent_id);
         self.push_session(lock(&self.sessions).request_pending(&session));
-        (id, answer_rx)
+        (id, reply_rx)
     }
 
     /// Deliver a phone's answer. The first answer wins; false if the request
     /// is unknown or already resolved.
     pub fn answer_request(&self, id: &str, answer: Value) -> bool {
         let mut requests = lock(&self.requests);
-        let (answer_tx, request) = match requests.resolve(id, "phone") {
+        let (reply_tx, request) = match requests.resolve(id, "phone") {
             Some(x) => x,
             None => return false,
         };
-        let _ = answer_tx.send(answer);
+        let _ = reply_tx.send(AskReply::Answer(answer));
         let _ = self.tx.send(Push::Resolved {
             request_id: id.to_string(),
             by: "phone",
@@ -167,20 +172,35 @@ impl AppState {
     }
 
     /// Resolve a request without an answer (`by` = "pc" or "timeout"). The
-    /// waiting `ask` handler sees its answer channel close. False if the
-    /// request was already resolved.
+    /// waiting `ask` (if still there) gets `{"ok":false,"error":"cancelled"}`
+    /// / `"timeout"`. False if the request was already resolved.
     pub fn cancel_request(&self, id: &str, by: &'static str) -> bool {
         let mut requests = lock(&self.requests);
-        let (_answer_tx, request) = match requests.resolve(id, by) {
+        let (reply_tx, request) = match requests.resolve(id, by) {
             Some(x) => x,
             None => return false,
         };
+        let error = if by == "timeout" { "timeout" } else { "cancelled" };
+        let _ = reply_tx.send(AskReply::Error(error));
         let _ = self.tx.send(Push::Resolved {
             request_id: id.to_string(),
             by,
         });
         self.request_finished(&requests, &request.session);
         true
+    }
+
+    /// Safety net (PROTOCOL.md v1.1): session `short` moved on (Stop,
+    /// SessionEnd, a new prompt), so its prompts were answered on the PC —
+    /// resolve (by "pc") every request pending for it that did not come from
+    /// a subagent. `reason` is for the log.
+    pub fn cancel_session_requests(&self, short: &str, reason: &str) {
+        let ids = lock(&self.requests).main_chain(short);
+        for id in ids {
+            if self.cancel_request(&id, "pc") {
+                eprintln!("ccnotify: request {id} resolved by pc ({reason})");
+            }
+        }
     }
 
     /// A request of session `short` was resolved: once none is left, the

@@ -31,9 +31,19 @@ pub struct Request {
     pub questions: Vec<Value>,
 }
 
+/// What a waiting `ask` gets: the phone's answer, or an error reply
+/// (`cancelled` / `timeout`) when the request is resolved without one.
+#[derive(Debug)]
+pub enum AskReply {
+    Answer(Value),
+    Error(&'static str),
+}
+
 struct Pending {
     request: Request,
-    answer_tx: oneshot::Sender<Value>,
+    /// Private (never sent to phones): set for a prompt from a subagent.
+    agent_id: String,
+    reply_tx: oneshot::Sender<AskReply>,
     created: Instant,
 }
 
@@ -53,35 +63,35 @@ impl Requests {
     }
 
     /// Register a request (id/ts already assigned). Returns the receiver its
-    /// answer will arrive on; it errors if the request is resolved without
-    /// an answer (the sender is dropped).
-    pub fn insert(&mut self, request: Request) -> oneshot::Receiver<Value> {
-        let (answer_tx, answer_rx) = oneshot::channel();
+    /// reply will arrive on.
+    pub fn insert(&mut self, request: Request, agent_id: String) -> oneshot::Receiver<AskReply> {
+        let (reply_tx, reply_rx) = oneshot::channel();
         self.pending.insert(
             request.id.clone(),
             Pending {
                 request,
-                answer_tx,
+                agent_id,
+                reply_tx,
                 created: Instant::now(),
             },
         );
-        answer_rx
+        reply_rx
     }
 
     /// Remove a pending request and remember who resolved it. Returns the
-    /// answer sender and the request, or None if the request is unknown /
+    /// reply sender and the request, or None if the request is unknown /
     /// already resolved.
     pub fn resolve(
         &mut self,
         id: &str,
         by: &'static str,
-    ) -> Option<(oneshot::Sender<Value>, Request)> {
+    ) -> Option<(oneshot::Sender<AskReply>, Request)> {
         let pending = self.pending.remove(id)?;
         self.recent.push_back((id.to_string(), by));
         while self.recent.len() > RECENT_RESOLVED {
             self.recent.pop_front();
         }
-        Some((pending.answer_tx, pending.request))
+        Some((pending.reply_tx, pending.request))
     }
 
     /// Who resolved a recently finished request.
@@ -98,6 +108,19 @@ impl Requests {
         self.pending
             .iter()
             .filter(|(_, p)| p.created.elapsed() > max_age)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Ids of the requests pending for this session that did not come from
+    /// a subagent.
+    pub fn main_chain(&self, session: &str) -> Vec<String> {
+        if session.is_empty() {
+            return Vec::new();
+        }
+        self.pending
+            .iter()
+            .filter(|(_, p)| p.request.session == session && p.agent_id.is_empty())
             .map(|(id, _)| id.clone())
             .collect()
     }

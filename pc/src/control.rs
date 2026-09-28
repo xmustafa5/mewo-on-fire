@@ -17,7 +17,7 @@ use crate::ask;
 use crate::daemon::AppState;
 use crate::hook;
 use crate::paths;
-use crate::requests::Request;
+use crate::requests::{AskReply, Request};
 use crate::sessions::{ListenReply, ListenStart, Meta};
 use crate::store::Event;
 
@@ -139,7 +139,7 @@ async fn handle_conn(state: Arc<AppState>, stream: tokio::net::UnixStream) -> Re
                     };
                     match resp {
                         Some(resp) => resp,
-                        // The hook went away (answered on the PC / killed):
+                        // The hook went away (answered on the PC / exited):
                         // nobody to reply to.
                         None => return Ok(()),
                     }
@@ -185,6 +185,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
                 meta.cwd = ev.cwd.clone();
             }
             let session = ev.session.clone();
+            let kind = ev.kind.clone();
             match state.emit(ev, &meta) {
                 Some(stored) => eprintln!(
                     "ccnotify: event #{} {} [{}] {}",
@@ -193,6 +194,9 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
                 None => eprintln!(
                     "ccnotify: dropped needs_input for session {session} (request pending)"
                 ),
+            }
+            if matches!(kind.as_str(), "stop" | "session_end") {
+                state.cancel_session_requests(&session, &kind);
             }
             json!({"ok": true})
         }
@@ -205,6 +209,9 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
                 return json!({"ok": false, "error": "bad_request"});
             }
             state.set_session_state(&meta, new_state, None);
+            if new_state == "working" {
+                state.cancel_session_requests(&short_id(&meta.session_id), "new prompt");
+            }
             json!({"ok": true})
         }
         "pair" => {
@@ -227,8 +234,9 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
 }
 
 /// `ask`: forward a prompt to the connected phones and block until one
-/// answers. Returns None when the client (the hook) hung up first — Claude
-/// Code kills the hook when the prompt is answered on the PC.
+/// answers (or the request is cancelled / expires). Returns None when the
+/// client (the hook) hung up first — its transcript watcher exits it when the
+/// prompt is answered on the PC.
 async fn handle_ask<R>(state: &AppState, req: &Value, reader: &mut R) -> Option<Value>
 where
     R: AsyncRead + Unpin,
@@ -246,21 +254,29 @@ where
     request.summary = hook::clean_message(&request.summary);
     request.detail = ask::truncate_chars(&request.detail, ask::MAX_DETAIL_CHARS);
     let log_line = format!("{} [{}] {}", request.kind, request.project, request.summary);
+    // Private: the session safety net leaves subagent prompts alone.
+    let agent_id = req
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
-    let (id, answer_rx) = state.add_request(request);
+    let (id, reply_rx) = state.add_request(request, agent_id);
     eprintln!("ccnotify: request {id} {log_line}");
 
     tokio::select! {
-        answer = answer_rx => {
-            match answer {
-                Ok(answer) => Some(json!({"ok": true, "answer": answer})),
-                // Resolved without an answer (expired).
-                Err(_) => Some(json!({"ok": false, "error": "timeout"})),
+        reply = reply_rx => {
+            match reply {
+                Ok(AskReply::Answer(answer)) => Some(json!({"ok": true, "answer": answer})),
+                // Cancelled (session moved on) or expired.
+                Ok(AskReply::Error(error)) => Some(json!({"ok": false, "error": error})),
+                Err(_) => Some(json!({"ok": false, "error": "cancelled"})),
             }
         }
         _ = wait_for_eof(reader) => {
             if state.cancel_request(&id, "pc") {
-                eprintln!("ccnotify: request {id} answered on the PC");
+                eprintln!("ccnotify: request {id} resolved by pc (hook exited)");
             }
             None
         }

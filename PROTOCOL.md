@@ -105,7 +105,8 @@ Exponential backoff 1 s → 60 s with ±20 % jitter, reset on successful `hello`
 Claude Code runs a `PermissionRequest` hook right before it shows a permission prompt, an
 `AskUserQuestion` question, or an `ExitPlanMode` plan approval (verified: it fires for all three).
 In VS Code / Desktop sessions the on-screen prompt and the hook race — whichever answers first
-wins; if the PC answers first, Claude Code kills the hook process.
+wins. If the PC answers first, Claude Code does **not** kill the hook: it keeps running (stdout open)
+until its timeout. So `ccnotify ask` watches the transcript itself, and the daemon has a safety net.
 
 ## Hook
 
@@ -116,11 +117,26 @@ Added by `ccnotify install` (not async, long timeout):
 ```
 
 `ccnotify ask`:
-1. Reads the hook JSON (`tool_name`, `tool_input`, `permission_suggestions`, `session_id`, `cwd`).
-2. Sends `{"cmd":"ask","request":{Request without id/ts}}` on the control socket and **blocks** reading the reply line (no read timeout).
-3. Reply `{"ok":false,"error":"no_devices"}` (sent immediately when no phone is connected) or any error / daemon down → print nothing, exit 0 (normal prompt flow).
+1. Reads the hook JSON (`tool_name`, `tool_input`, `permission_suggestions`, `session_id`, `cwd`, `transcript_path`, `agent_id` — set when the prompt comes from a subagent).
+2. Starts the transcript watcher (below), sends `{"cmd":"ask","request":{Request without id/ts},"agent_id":"<agent_id or empty>"}` on the control socket and **blocks** reading the reply line (no read timeout). `agent_id` is private (never forwarded to phones).
+3. Reply `{"ok":false,"error":"no_devices"}` (sent immediately when no phone is connected), `cancelled`, `timeout`, or any error / daemon down → print nothing, exit 0 (normal prompt flow).
 4. Reply `{"ok":true,"answer":{Answer}}` → print the hook output below, exit 0.
-5. If Claude Code kills the hook (PC answered first), the socket closes; the daemon notices EOF and resolves the request as `cancelled`.
+5. Answered on the PC → the watcher exits the process (code 0, no output); the socket closes, the daemon notices EOF and resolves the request (`by: "pc"`).
+
+### Transcript watcher (thread in `ccnotify ask`)
+
+- Subagent prompt (`agent_id` set): watch `agent_transcript_path` if the input has one different from `transcript_path` (all its lines count, sidechain or not), else no watcher.
+- Start: read the last 2 MB of `transcript_path` (drop the first partial line). Target = the most recent main-chain (`isSidechain` not true) `assistant` `tool_use` block with `name == tool_name` and no `tool_result` in the tail, preferring one whose `input` equals `tool_input`. Remember the file length as the offset.
+- Every 1 s read only the appended bytes (a partial last line is carried over; file shrank → offset 0). Exit 0 silently when a main-chain line shows:
+  - a `user` `tool_result` with the target's `tool_use_id` (answered on the PC);
+  - a new non-meta `user` text prompt (session moved on; `<task-notification>` texts don't count);
+  - no target found → any new `assistant` line.
+- The `tool_use` line is written ~5 s before the hook starts; the `tool_result` right when the PC answers — for an approved long-running command only when it finishes (accepted; the safety net covers the end of the turn).
+- Race: an atomic flag is set once by whoever ends the process — the main thread right before it prints a phone answer (or exits), or the watcher; the other one then neither exits nor prints.
+
+### Safety net (daemon)
+
+`emit` of kind `stop` or `session_end`, or `session_state` `working` (UserPromptSubmit) for session S → every pending request with `session` == S and no `agent_id` is resolved: its `ask` gets `{"ok":false,"error":"cancelled"}` (exits 0 silently) and phones get `resolved` with `by: "pc"`.
 
 ## Request (daemon → phone)
 
@@ -165,7 +181,7 @@ Multi-select answers join labels with ", ". A typed custom answer is sent as the
 ```
 
 - The first valid answer wins; the daemon then sends `resolved` (by `phone`) to all phones. An answer for an unknown/finished request gets a `resolved` reply to that phone only.
-- When the hook connection closes before an answer: `resolved` with `by: "pc"`.
+- When the hook connection closes before an answer, or the safety net fires: `resolved` with `by: "pc"`.
 - Pending requests older than 24 h are dropped (`by: "timeout"`).
 - Duplicate suppression: while a request is pending for session S, an `emit` of kind `needs_input` with the same `session` and `detail` `permission_prompt` or `elicitation_dialog` is dropped (not stored, not sent).
 
@@ -173,7 +189,7 @@ Multi-select answers join labels with ", ". A typed custom answer is sent as the
 
 | Request | Response |
 |---|---|
-| `{"cmd":"ask","request":{...}}` | blocks → `{"ok":true,"answer":{...}}` / `{"ok":false,"error":"no_devices"}` |
+| `{"cmd":"ask","request":{...},"agent_id":"..."}` | blocks → `{"ok":true,"answer":{...}}` / `{"ok":false,"error":"no_devices\|cancelled\|timeout"}` |
 | `{"cmd":"status"}` | adds `"pending": N` |
 
 ## Phone behaviour

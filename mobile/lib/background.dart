@@ -788,7 +788,14 @@ class CcTaskHandler extends TaskHandler {
 
   Future<void> _onResolved(PcLink link, String requestId, String by) async {
     final pcId = link.pc.id;
-    await _dropRequests((r) => r.pcId == pcId && r.request.id == requestId, by: by);
+    final key = requestKey(pcId, requestId);
+    if (_requests.any((r) => r.key == key)) {
+      await _dropRequests((r) => r.key == key, by: by);
+    } else {
+      // Not listed here (e.g. from a previous run): the UI may still show it.
+      _notified.remove(key);
+      _sendResolved(pcId, requestId, by);
+    }
     // Also when it wasn't listed (e.g. notification from a previous run).
     await _cancelRequestNotification(pcId, requestId);
   }
@@ -816,17 +823,23 @@ class CcTaskHandler extends TaskHandler {
     _saveRequests();
     for (final r in gone) {
       _notified.remove(r.key);
-      FlutterForegroundTask.sendDataToMain(jsonEncode({
-        'type': 'resolved',
-        'pc_id': r.pcId,
-        'request_id': r.request.id,
-        'by': by,
-      }));
+      _sendResolved(r.pcId, r.request.id, by);
     }
     _sendRequests();
     for (final r in gone) {
       await _cancelRequestNotification(r.pcId, r.request.id);
+      await _cancelPromptNotifications(r.pcId, r.request.session);
     }
+  }
+
+  /// Tells the UI a request is gone (it drops it and closes its answer screen).
+  void _sendResolved(String pcId, String requestId, String by) {
+    FlutterForegroundTask.sendDataToMain(jsonEncode({
+      'type': 'resolved',
+      'pc_id': pcId,
+      'request_id': requestId,
+      'by': by,
+    }));
   }
 
   void _sendRequests() {
@@ -867,11 +880,33 @@ class CcTaskHandler extends TaskHandler {
     _notifsReady = true;
   }
 
+  /// Same id as [_notifyRequest] shows it with. Tried even when this run's
+  /// init failed: the notification may be from a previous run.
   Future<void> _cancelRequestNotification(String pcId, String requestId) async {
-    if (!_notifsReady) return;
     try {
       await _notifs.cancel(id: requestNotificationId(pcId, requestId));
     } catch (_) {}
+  }
+
+  /// A `needs_input` notification (permission prompt / elicitation) of
+  /// [session] is stale once its request is resolved: Claude no longer waits.
+  Future<void> _cancelPromptNotifications(String pcId, String session) async {
+    if (session.isEmpty) return;
+    final cutoff = DateTime.now().millisecondsSinceEpoch - _requestMaxAge.inMilliseconds;
+    final ids = <int>[
+      for (final h in _events)
+        if (h.pcId == pcId &&
+            h.event.kind == EventKind.needsInput &&
+            h.event.session == session &&
+            h.event.ts >= cutoff &&
+            (h.event.detail == 'permission_prompt' || h.event.detail == 'elicitation_dialog'))
+          notificationIdFor(pcId, h.event.id),
+    ];
+    for (final id in ids) {
+      try {
+        await _notifs.cancel(id: id);
+      } catch (_) {}
+    }
   }
 
   Future<void> _notifyRequest(PairedPc pc, CcRequest r) async {

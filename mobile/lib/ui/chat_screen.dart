@@ -4,11 +4,15 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import '../requests.dart' show Answers;
+import 'answer_screen.dart';
 import 'sessions_tab.dart' show SessionStateChip;
 
 /// One session's chat (PROTOCOL.md v1.2): bubbles, tool one-liners, and an
 /// input bar to continue the session from the phone. Opened from the Sessions
-/// tab, a History item or by tapping an event notification.
+/// tab, a History item or by tapping an event notification. Pending v1.1
+/// requests of the session (permission / question / plan) are pinned as cards
+/// above the input bar, with quick answers.
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.pcId, required this.sessionId});
 
@@ -31,10 +35,18 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final AppState _state = AppState.instance;
   final TextEditingController _input = TextEditingController();
+  final ScrollController _scroll = ScrollController(); // chat list (reversed)
+  final ScrollController _cardsScroll = ScrollController(); // request cards
 
   /// Expanded tool groups / tool lines, by row id.
   final Set<String> _expanded = <String>{};
   bool _canSend = false;
+
+  /// Request cards shown at the last update: key → answered from this phone.
+  Map<String, bool> _cards = <String, bool>{};
+
+  /// Requests answered from a card here, shown as "Sending…" until resolved.
+  final Set<String> _sent = <String>{};
 
   MarkdownStyleSheet? _md;
   ThemeData? _mdTheme;
@@ -42,6 +54,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _cards = <String, bool>{for (final r in _pendingRequests()) r.key: r.answered};
+    if (_cards.isNotEmpty) _scrollToBottomSoon();
     _state.addListener(_onStateChanged);
     _input.addListener(_onInputChanged);
     _state.watchChat(widget.pcId, widget.sessionId);
@@ -52,11 +66,95 @@ class _ChatScreenState extends State<ChatScreen> {
     _state.removeListener(_onStateChanged);
     _state.unwatchChat(widget.pcId, widget.sessionId);
     _input.dispose();
+    _scroll.dispose();
+    _cardsScroll.dispose();
     super.dispose();
   }
 
   void _onStateChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    _syncCards();
+    setState(() {});
+  }
+
+  /// Pending requests of this session (`request.session` = first 8 chars of
+  /// the session id), oldest first so the newest card sits next to the input.
+  List<PendingRequest> _pendingRequests() {
+    final short = _short(widget.sessionId);
+    if (short.isEmpty) return const <PendingRequest>[];
+    final out = <PendingRequest>[
+      for (final r in _state.requests)
+        if (r.pcId == widget.pcId && r.request.session == short) r,
+    ];
+    out.sort((a, b) => a.request.ts.compareTo(b.request.ts));
+    return out;
+  }
+
+  /// Scrolls to a new card, and tells why a card went away when it was not
+  /// answered here ("Answered on the PC").
+  void _syncCards() {
+    final now = <String, bool>{
+      for (final r in _pendingRequests()) r.key: r.answered || _sent.contains(r.key),
+    };
+    final added = now.keys.any((k) => !_cards.containsKey(k));
+    String? note;
+    for (final e in _cards.entries) {
+      if (now.containsKey(e.key)) continue;
+      _sent.remove(e.key);
+      note = _resolvedNote(_state.resolvedBy[e.key] ?? '', e.value) ?? note;
+    }
+    _cards = now;
+    if (added) _scrollToBottomSoon();
+    // An open answer screen on top reports it itself.
+    if (note != null && (ModalRoute.isCurrentOf(context) ?? true)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note)));
+    }
+  }
+
+  /// SnackBar text for a request that went away; null when answered here.
+  static String? _resolvedNote(String by, bool answeredHere) {
+    switch (by) {
+      case 'pc':
+        return 'Answered on the PC';
+      case 'timeout':
+        return 'The request expired';
+      case 'phone':
+        return answeredHere ? null : 'Answered from a phone';
+      default:
+        return answeredHere ? null : 'Answered on the PC';
+    }
+  }
+
+  /// After the next frame: chat to its newest message, cards to the newest.
+  void _scrollToBottomSoon() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_scroll.hasClients) {
+        _scroll.animateTo(
+          _scroll.position.minScrollExtent, // reversed list: bottom
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+      if (_cardsScroll.hasClients) {
+        _cardsScroll.animateTo(
+          _cardsScroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _openRequest(PendingRequest r) {
+    Navigator.of(context).push(AnswerScreen.route(r.pcId, r.request.id));
+  }
+
+  /// Same path as the answer screen ([AppState.answer]).
+  Future<void> _answer(PendingRequest r, Map<String, dynamic> answer) async {
+    if (r.answered || _sent.contains(r.key)) return;
+    setState(() => _sent.add(r.key));
+    await _state.answer(r.pcId, r.request.id, answer);
   }
 
   void _onInputChanged() {
@@ -109,6 +207,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final session = entry?.session;
     final chat = _state.chatOf(widget.pcId, widget.sessionId);
     final outgoing = _state.outgoingOf(widget.pcId, widget.sessionId);
+    final pending = _pendingRequests();
+    final waiting = pending.any((r) => !r.answered && !_sent.contains(r.key));
     final cs = Theme.of(context).colorScheme;
 
     final title = session?.displayTitle ??
@@ -145,18 +245,53 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          if (chat?.loading ?? false) const LinearProgressIndicator(minHeight: 2),
-          if (chat != null && chat.error.isNotEmpty) _ErrorBanner(text: chat.error, onRetry: _refresh),
-          Expanded(child: _list(context, chat, outgoing, session)),
-          _inputBar(context, session, entry?.pcName ?? _state.pcNameFor(widget.pcId)),
-        ],
+      body: LayoutBuilder(
+        builder: (context, box) => Column(
+          children: [
+            if (chat?.loading ?? false) const LinearProgressIndicator(minHeight: 2),
+            if (chat != null && chat.error.isNotEmpty)
+              _ErrorBanner(text: chat.error, onRetry: _refresh),
+            Expanded(child: _list(context, chat, outgoing, session)),
+            if (pending.isNotEmpty) _requestCards(pending, box.maxHeight * 0.45),
+            _inputBar(
+              context,
+              session,
+              entry?.pcName ?? _state.pcNameFor(widget.pcId),
+              waiting: waiting,
+            ),
+          ],
+        ),
       ),
     );
   }
 
   static String _short(String id) => id.length > 8 ? id.substring(0, 8) : id;
+
+  /// Pending requests of the session, pinned above the input bar (newest
+  /// last); scrollable when they need more than [maxHeight].
+  Widget _requestCards(List<PendingRequest> pending, double maxHeight) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: SingleChildScrollView(
+        controller: _cardsScroll,
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final r in pending)
+              _RequestCard(
+                key: ValueKey<String>(r.key),
+                entry: r,
+                sending: r.answered || _sent.contains(r.key),
+                onOpen: () => _openRequest(r),
+                onAnswer: (Map<String, dynamic> a) => _answer(r, a),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _list(
     BuildContext context,
@@ -192,6 +327,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return RefreshIndicator(
       onRefresh: _refresh,
       child: ListView.builder(
+        controller: _scroll,
         reverse: true,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -302,7 +438,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Widget _inputBar(BuildContext context, CcSession? s, String pcName) {
+  /// [waiting]: a request card of this session is not answered yet.
+  Widget _inputBar(BuildContext context, CcSession? s, String pcName, {bool waiting = false}) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     String? blocked;
@@ -313,7 +450,9 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     String? hint;
     if (blocked == null) {
-      if (_state.statusOf(widget.pcId) != PcStatus.connected) {
+      if (waiting) {
+        hint = 'Claude is waiting for your answer above';
+      } else if (_state.statusOf(widget.pcId) != PcStatus.connected) {
         hint = '$pcName is not connected — a message waits up to a minute for it.';
       } else if (s != null && s.state == SessionState.idle && !s.listening) {
         hint = 'This session is not listening — run `ccnotify install` on the PC and '
@@ -592,6 +731,196 @@ class _ToolGroup extends StatelessWidget {
           ),
       ],
     );
+  }
+}
+
+/// A pending request of the session (permission / question / plan) with quick
+/// answers; tapping the card body opens the full answer screen.
+class _RequestCard extends StatelessWidget {
+  const _RequestCard({
+    super.key,
+    required this.entry,
+    required this.sending,
+    required this.onOpen,
+    required this.onAnswer,
+  });
+
+  final PendingRequest entry;
+  final bool sending; // answered, waiting for `resolved`
+  final VoidCallback onOpen;
+  final void Function(Map<String, dynamic> answer) onAnswer;
+
+  /// Exactly one single-select question: one button per option.
+  static RequestQuestion? _singleQuestion(CcRequest r) {
+    if (r.kind != RequestKind.question || r.questions.length != 1) return null;
+    final q = r.questions.first;
+    if (q.multiSelect || q.options.isEmpty) return null;
+    return q;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = entry.request;
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final title = r.title.isEmpty ? AnswerScreen.kindLabel(r.kind) : r.title;
+    final summary = r.summary.isNotEmpty ? r.summary : r.detail;
+    final summaryStyle = t.bodySmall?.copyWith(
+      color: cs.onSurfaceVariant,
+      fontFamily: r.kind == RequestKind.permission ? 'monospace' : null,
+    );
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+      color: cs.surfaceContainerHigh,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: cs.primary, width: 1.5),
+      ),
+      child: InkWell(
+        onTap: onOpen,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(AnswerScreen.iconFor(r.kind), size: 20, color: cs.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: t.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        if (summary.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              summary,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: summaryStyle,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, size: 20, color: cs.outline),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (sending) _sendingRow(context) else _actions(context, r),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sendingRow(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            'Sending…',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.outline),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _actions(BuildContext context, CcRequest r) {
+    final cs = Theme.of(context).colorScheme;
+    final filled = FilledButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final outlined = OutlinedButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final danger = OutlinedButton.styleFrom(
+      foregroundColor: cs.error,
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final plain = TextButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final List<Widget> buttons;
+    switch (r.kind) {
+      case RequestKind.plan:
+        buttons = <Widget>[
+          FilledButton(
+            style: filled,
+            onPressed: () => onAnswer(Answers.approve()),
+            child: const Text('Approve'),
+          ),
+          OutlinedButton(
+            style: danger,
+            onPressed: () => onAnswer(Answers.reject()),
+            child: const Text('Reject'),
+          ),
+          TextButton(style: plain, onPressed: onOpen, child: const Text('Read plan')),
+        ];
+        break;
+      case RequestKind.question:
+        final q = _singleQuestion(r);
+        if (q == null) {
+          buttons = <Widget>[
+            FilledButton(style: filled, onPressed: onOpen, child: const Text('Answer')),
+          ];
+        } else {
+          buttons = <Widget>[
+            for (final o in q.options)
+              FilledButton.tonal(
+                style: filled,
+                onPressed: () => onAnswer(Answers.questions(<String, String>{q.question: o.label})),
+                child: Text(o.label),
+              ),
+            OutlinedButton(style: outlined, onPressed: onOpen, child: const Text('Other…')),
+          ];
+        }
+        break;
+      default: // permission
+        buttons = <Widget>[
+          FilledButton(
+            style: filled,
+            onPressed: () => onAnswer(Answers.allow()),
+            child: const Text('Allow'),
+          ),
+          if (r.canAllowAlways)
+            FilledButton.tonal(
+              style: filled,
+              onPressed: () => onAnswer(Answers.allowAlways()),
+              child: const Text('Always'),
+            ),
+          OutlinedButton(
+            style: danger,
+            onPressed: () => onAnswer(Answers.deny()),
+            child: const Text('Deny'),
+          ),
+        ];
+    }
+    return Wrap(spacing: 8, runSpacing: 6, children: buttons);
   }
 }
 
