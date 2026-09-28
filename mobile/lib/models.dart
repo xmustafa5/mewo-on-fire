@@ -38,6 +38,7 @@ class CcEvent {
     this.session = '',
     this.message = '',
     this.detail = '',
+    this.sessionId = '',
   });
 
   final int id;
@@ -49,6 +50,9 @@ class CcEvent {
   final String message;
   final String detail;
 
+  /// Full Claude Code session id (v1.2; empty for events of older daemons).
+  final String sessionId;
+
   factory CcEvent.fromJson(Map<String, dynamic> j) => CcEvent(
         id: _asInt(j['id']),
         ts: _asInt(j['ts']),
@@ -58,6 +62,7 @@ class CcEvent {
         session: _asString(j['session']),
         message: _asString(j['message']),
         detail: _asString(j['detail']),
+        sessionId: _asString(j['session_id']),
       );
 
   Map<String, dynamic> toJson() => {
@@ -69,6 +74,7 @@ class CcEvent {
         'session': session,
         'message': message,
         'detail': detail,
+        if (sessionId.isNotEmpty) 'session_id': sessionId,
       };
 
   /// Text shown as notification body / history line.
@@ -310,6 +316,157 @@ class PendingRequest {
 
   PendingRequest withAnswer(Map<String, dynamic> a) =>
       PendingRequest(pcId: pcId, pcName: pcName, request: request, answer: a);
+}
+
+/// Session states (PROTOCOL.md v1.2 "Session registry").
+class SessionState {
+  static const working = 'working';
+  static const idle = 'idle';
+  static const waiting = 'waiting';
+  static const ended = 'ended';
+}
+
+/// A Claude Code session known to a PC daemon (PROTOCOL.md v1.2).
+class CcSession {
+  const CcSession({
+    required this.id,
+    this.short = '',
+    this.project = '',
+    this.cwd = '',
+    this.title = '',
+    this.state = SessionState.idle,
+    this.listening = false,
+    this.readOnly = false,
+    this.effort = '',
+    this.lastTs = 0,
+    this.lastText = '',
+    this.queued = 0,
+  });
+
+  final String id; // full session id
+  final String short;
+  final String project;
+  final String cwd;
+  final String title;
+  final String state;
+  final bool listening;
+  final bool readOnly;
+  final String effort;
+  final int lastTs; // unix ms
+  final String lastText;
+  final int queued;
+
+  factory CcSession.fromJson(Map<String, dynamic> j) => CcSession(
+        id: _asString(j['id']),
+        short: _asString(j['short']),
+        project: _asString(j['project']),
+        cwd: _asString(j['cwd']),
+        title: _asString(j['title']),
+        state: _asString(j['state']),
+        listening: j['listening'] == true,
+        readOnly: j['read_only'] == true,
+        effort: _asString(j['effort']),
+        lastTs: _asInt(j['last_ts']),
+        lastText: _asString(j['last_text']),
+        queued: _asInt(j['queued']),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'short': short,
+        'project': project,
+        'cwd': cwd,
+        'title': title,
+        'state': state,
+        'listening': listening,
+        'read_only': readOnly,
+        'effort': effort,
+        'last_ts': lastTs,
+        'last_text': lastText,
+        'queued': queued,
+      };
+
+  bool get ended => state == SessionState.ended;
+
+  String get displayTitle {
+    if (title.isNotEmpty) return title;
+    if (project.isNotEmpty) return project;
+    if (short.isNotEmpty) return short;
+    return id.length > 8 ? id.substring(0, 8) : id;
+  }
+
+  DateTime get time => DateTime.fromMillisecondsSinceEpoch(lastTs);
+}
+
+/// Key of a session across PCs (session identity = pc id + session id).
+String sessionKey(String pcId, String sessionId) => '$pcId:$sessionId';
+
+/// One row of `sessions_cache` (written only by the task isolate): a session
+/// plus which PC reported it.
+class SessionEntry {
+  const SessionEntry({required this.pcId, required this.pcName, required this.session});
+
+  final String pcId;
+  final String pcName;
+  final CcSession session;
+
+  String get key => sessionKey(pcId, session.id);
+
+  factory SessionEntry.fromJson(Map<String, dynamic> j) => SessionEntry(
+        pcId: _asString(j['pc_id']),
+        pcName: _asString(j['pc_name']),
+        session: CcSession.fromJson(Map<String, dynamic>.from(j['session'] as Map)),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'pc_id': pcId,
+        'pc_name': pcName,
+        'session': session.toJson(),
+      };
+}
+
+/// Chat item roles (PROTOCOL.md v1.2 "Transcript → chat items").
+class ChatRole {
+  static const user = 'user';
+  static const assistant = 'assistant';
+  static const tool = 'tool';
+  static const phone = 'phone';
+}
+
+/// One chat item of a session (fetched on demand, never persisted).
+class ChatItem {
+  const ChatItem({
+    required this.id,
+    required this.ts,
+    required this.role,
+    required this.text,
+    this.tool = '',
+  });
+
+  final String id;
+  final int ts; // unix ms
+  final String role;
+  final String text;
+  final String tool; // role tool only
+
+  factory ChatItem.fromJson(Map<String, dynamic> j) => ChatItem(
+        id: _asString(j['id']),
+        ts: _asInt(j['ts']),
+        role: _asString(j['role']),
+        text: _asString(j['text']),
+        tool: _asString(j['tool']),
+      );
+
+  DateTime get time => DateTime.fromMillisecondsSinceEpoch(ts);
+}
+
+/// Status of a message sent from the phone (`send_result`, plus the local
+/// `sending` state until the PC answers).
+class SendStatus {
+  static const sending = 'sending';
+  static const delivered = 'delivered';
+  static const queued = 'queued';
+  static const rejected = 'rejected';
 }
 
 /// User settings (`settings` pref, written only by the UI isolate).

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import 'chat_screen.dart';
 
 String relativeTime(DateTime t) {
   final d = DateTime.now().difference(t);
@@ -199,6 +200,11 @@ class _HistoryTabState extends State<HistoryTab> {
                               relativeTime(h.event.time),
                               style: TextStyle(color: cs.outline, fontSize: 12),
                             ),
+                            // v1.2: events with a session open its chat.
+                            onTap: h.event.sessionId.isEmpty
+                                ? null
+                                : () => Navigator.of(context)
+                                    .push(ChatScreen.route(h.pcId, h.event.sessionId)),
                             onLongPress: () => _showActions(h),
                           );
                         },

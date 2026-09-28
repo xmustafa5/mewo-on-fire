@@ -3,7 +3,8 @@
 Android app that pairs with one or more PCs running the `ccnotify` daemon and
 shows a notification when Claude Code finishes, needs your input, or a session
 closes. You can also answer Claude Code's permission prompts, questions and
-plan approvals from the phone. LAN only; the phone connects to the PC over `wss://` and accepts the
+plan approvals from the phone, read each session's chat, and continue a
+session by sending it a message. LAN only; the phone connects to the PC over `wss://` and accepts the
 PC's certificate only if it matches the pinned fingerprint. The wire format is
 defined in `../PROTOCOL.md`.
 
@@ -77,6 +78,37 @@ The first answer wins, from the phone or the PC. If you answer on the PC, the
 notification goes away. If the phone is offline when you answer, it sends the
 answer when it reconnects. To get these prompts only in the app list, without
 a notification, turn off **Settings → Answer prompts from phone**.
+
+## Session chat and continuing from the phone
+
+This needs a PC daemon with protocol v1.2. After updating ccnotify on the PC,
+run `ccnotify install` again. It adds the `listen` Stop hook and the
+`UserPromptSubmit` hook.
+
+- The **Sessions** tab lists the Claude Code sessions of all paired PCs,
+  newest first. Each row shows the title, project, PC, state (**Working**,
+  **Finished**, **Needs you** or **Closed**), Claude's last reply, and a badge
+  that counts messages still queued. Pull down to refresh.
+- Tap a session to open its chat. Your prompts appear on the right, and
+  messages sent from the phone are marked "📱 from phone". Claude's replies
+  appear on the left as Markdown, and you can select the text. Tool calls show
+  as grey one-line entries. Consecutive tool calls are collapsed into one line;
+  tap it to expand them. The chat refreshes on its own when the session changes
+  or Claude finishes a reply. You can also pull down to refresh it.
+- Type in the box at the bottom to continue the session. Each message shows its
+  status: **Sending…**, **Delivered**, **Queued** (Claude gets it when it
+  finishes the current reply), or **Rejected** with the reason. The box is
+  disabled for closed sessions. It is also disabled while Claude runs agents
+  at high effort (read-only until it finishes).
+- Tapping a "finished", "needs input" or "session closed" notification opens
+  that session's chat. So does tapping a History item that belongs to a
+  session.
+- "Finished" notifications have a **Reply** button. Type a message into the
+  notification without opening the app. The notification then changes to
+  "Sent: …", "Queued: …" or "Couldn't send: <reason>".
+
+The app fetches chats when you open them and does not store them on the phone.
+If the PC is offline, a message waits up to a minute for it to reconnect.
 
 ## Battery and OEM notes
 

@@ -39,6 +39,10 @@ pub fn events_file() -> PathBuf {
     state_dir().join("events.json")
 }
 
+pub fn sessions_file() -> PathBuf {
+    state_dir().join("sessions.json")
+}
+
 /// `$XDG_RUNTIME_DIR/ccnotify.sock`, fallback `/tmp/ccnotify-$USER.sock`.
 pub fn socket_path() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {

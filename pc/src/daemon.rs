@@ -13,12 +13,17 @@ use tokio::time::MissedTickBehavior;
 
 use crate::config::{self, now_ms, random_hex, Config, Device};
 use crate::requests::{self, Request, Requests};
+use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session, Sessions};
 use crate::store::{Event, Store};
+use crate::transcript::{self, ChatItem};
 use crate::{control, mdns, net, paths, server};
 
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
 const BROADCAST_CAPACITY: usize = 256;
 const EXPIRE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+/// While phones are connected, re-check changed transcripts this often
+/// (title, agents running → read_only).
+const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Everything pushed live to subscribed phones.
 #[derive(Debug, Clone)]
@@ -29,6 +34,7 @@ pub enum Push {
         request_id: String,
         by: &'static str,
     },
+    Session(Session),
 }
 
 /// What a new subscriber starts from (see subscribe_since).
@@ -45,6 +51,7 @@ pub struct AppState {
     devices: Mutex<Vec<Device>>,
     store: Mutex<Store>,
     requests: Mutex<Requests>,
+    sessions: Mutex<Sessions>,
     tx: broadcast::Sender<Push>,
     pair_codes: Mutex<HashMap<String, Instant>>,
     pub connected: AtomicUsize,
@@ -63,22 +70,37 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 impl AppState {
-    /// Store the event (assigning id/ts) and broadcast it to live clients.
+    /// Store the event (assigning id/ts) and broadcast it to live clients,
+    /// then update the session (`meta`: the hook's private fields).
     /// Broadcast happens under the store lock so subscribe_since() snapshots
     /// are consistent with the live stream.
     /// Returns None when the event was dropped as a duplicate: a permission /
     /// elicitation notification for a session that has a pending request.
-    pub fn emit(&self, ev: Event) -> Option<Event> {
-        if ev.kind == "needs_input"
+    pub fn emit(&self, ev: Event, meta: &Meta) -> Option<Event> {
+        let duplicate = ev.kind == "needs_input"
             && matches!(ev.detail.as_str(), "permission_prompt" | "elicitation_dialog")
-            && lock(&self.requests).has_session(&ev.session)
-        {
-            return None;
-        }
-        let mut store = lock(&self.store);
-        let stored = store.append(ev);
-        let _ = self.tx.send(Push::Event(stored.clone()));
-        Some(stored)
+            && lock(&self.requests).has_session(&ev.session);
+        let session_state = match ev.kind.as_str() {
+            "stop" => "idle",
+            "needs_input" => "waiting",
+            "session_end" => "ended",
+            _ => "",
+        };
+        let last_text = if ev.kind == "stop" {
+            Some(ev.message.clone())
+        } else {
+            None
+        };
+        let stored = if duplicate {
+            None
+        } else {
+            let mut store = lock(&self.store);
+            let stored = store.append(ev);
+            let _ = self.tx.send(Push::Event(stored.clone()));
+            Some(stored)
+        };
+        self.set_session_state(meta, session_state, last_text.as_deref());
+        stored
     }
 
     pub fn last_id(&self) -> u64 {
@@ -121,7 +143,9 @@ impl AppState {
         request.id = id.clone();
         request.ts = now_ms();
         let _ = self.tx.send(Push::Request(request.clone()));
+        let session = request.session.clone();
         let answer_rx = requests.insert(request);
+        self.push_session(lock(&self.sessions).request_pending(&session));
         (id, answer_rx)
     }
 
@@ -129,8 +153,8 @@ impl AppState {
     /// is unknown or already resolved.
     pub fn answer_request(&self, id: &str, answer: Value) -> bool {
         let mut requests = lock(&self.requests);
-        let answer_tx = match requests.resolve(id, "phone") {
-            Some(tx) => tx,
+        let (answer_tx, request) = match requests.resolve(id, "phone") {
+            Some(x) => x,
             None => return false,
         };
         let _ = answer_tx.send(answer);
@@ -138,6 +162,7 @@ impl AppState {
             request_id: id.to_string(),
             by: "phone",
         });
+        self.request_finished(&requests, &request.session);
         true
     }
 
@@ -146,14 +171,25 @@ impl AppState {
     /// request was already resolved.
     pub fn cancel_request(&self, id: &str, by: &'static str) -> bool {
         let mut requests = lock(&self.requests);
-        if requests.resolve(id, by).is_none() {
-            return false;
-        }
+        let (_answer_tx, request) = match requests.resolve(id, by) {
+            Some(x) => x,
+            None => return false,
+        };
         let _ = self.tx.send(Push::Resolved {
             request_id: id.to_string(),
             by,
         });
+        self.request_finished(&requests, &request.session);
         true
+    }
+
+    /// A request of session `short` was resolved: once none is left, the
+    /// session is no longer waiting on the user. Called with the requests
+    /// lock held (lock order requests → sessions).
+    fn request_finished(&self, requests: &Requests, short: &str) {
+        if !requests.has_session(short) {
+            self.push_session(lock(&self.sessions).requests_done(short));
+        }
     }
 
     /// Drop requests pending for longer than requests::MAX_AGE.
@@ -177,6 +213,122 @@ impl AppState {
 
     pub fn pending_count(&self) -> usize {
         lock(&self.requests).count()
+    }
+
+    // --- sessions (PROTOCOL.md v1.2) ---------------------------------------
+    // Session pushes happen under the sessions lock, like the other pushes.
+    // Lock order: store → requests → sessions.
+
+    fn push_session(&self, update: Option<Session>) {
+        if let Some(session) = update {
+            let _ = self.tx.send(Push::Session(session));
+        }
+    }
+
+    /// A hook reported a session state (`working` / `idle` / `waiting` /
+    /// `ended`); `last_text` is Claude's last reply (Stop).
+    pub fn set_session_state(&self, meta: &Meta, state: &str, last_text: Option<&str>) {
+        if state.is_empty() {
+            return;
+        }
+        let mut sessions = lock(&self.sessions);
+        self.push_session(sessions.hook_state(meta, state, last_text));
+    }
+
+    /// Register a `listen` hook. None if the request has no session id.
+    pub fn listen(&self, meta: &Meta) -> Option<ListenStart> {
+        let mut sessions = lock(&self.sessions);
+        let (start, update) = sessions.listen(meta)?;
+        self.push_session(update);
+        Some(start)
+    }
+
+    pub fn unlisten(&self, session_id: &str, listener_id: u64) {
+        let mut sessions = lock(&self.sessions);
+        self.push_session(sessions.unlisten(session_id, listener_id));
+    }
+
+    pub fn requeue(&self, session_id: &str, text: String) {
+        let mut sessions = lock(&self.sessions);
+        self.push_session(sessions.requeue(session_id, text));
+    }
+
+    /// All sessions, most recently active first.
+    pub fn session_list(&self) -> Vec<Session> {
+        lock(&self.sessions).snapshot()
+    }
+
+    pub fn find_session(&self, prefix: &str) -> Result<Session, &'static str> {
+        lock(&self.sessions).find(prefix)
+    }
+
+    pub fn prune_sessions(&self) {
+        lock(&self.sessions).prune_and_persist();
+    }
+
+    /// Re-read the transcripts that changed since their last scan (`only`
+    /// that session, else every session not ended) and push the sessions
+    /// whose title / read_only changed.
+    pub async fn refresh_sessions(&self, only: Option<&str>) {
+        let targets = lock(&self.sessions).scan_targets(only);
+        if targets.is_empty() {
+            return;
+        }
+        let results = tokio::task::spawn_blocking(move || sessions::scan(targets))
+            .await
+            .unwrap_or_default();
+        let mut sessions = lock(&self.sessions);
+        for result in results {
+            let update = sessions.apply_scan(result);
+            self.push_session(update);
+        }
+    }
+
+    /// The session and its last `limit` chat items: the transcript merged by
+    /// `ts` with the messages sent from phones. None for an unknown session.
+    pub async fn chat(&self, session_id: &str, limit: usize) -> Option<(Session, Vec<ChatItem>)> {
+        let source = lock(&self.sessions).chat_source(session_id);
+        let (path, phone) = source?;
+        let mut items: Vec<ChatItem> = Vec::new();
+        if !path.is_empty() {
+            let scanned = tokio::task::spawn_blocking(move || {
+                let key = transcript::file_key(&path);
+                (key, transcript::read(&path, limit))
+            })
+            .await
+            .ok();
+            if let Some((key, tr)) = scanned {
+                if let Some(key) = key {
+                    let result = ScanResult {
+                        id: session_id.to_string(),
+                        key,
+                        title: tr.title,
+                        agents_running: tr.agents_running,
+                    };
+                    self.push_session(lock(&self.sessions).apply_scan(result));
+                }
+                items = tr.items;
+            }
+        }
+        items.extend(phone);
+        // Stable: transcript order is kept for equal timestamps.
+        items.sort_by_key(|item| item.ts);
+        let excess = items.len().saturating_sub(limit);
+        if excess > 0 {
+            items.drain(..excess);
+        }
+        let session = lock(&self.sessions).get(session_id)?;
+        Some((session, items))
+    }
+
+    /// A message from a phone for a session (PROTOCOL.md v1.2 "send rules").
+    pub async fn send_message(&self, session_id: &str, text: &str, client_id: &str) -> SendOutcome {
+        // Current agents-running state for read_only.
+        self.refresh_sessions(Some(session_id)).await;
+        let mut sessions = lock(&self.sessions);
+        let (outcome, update) = sessions.send(session_id, text, client_id);
+        self.push_session(update);
+        outcome
     }
 
     // --- pairing codes -----------------------------------------------------
@@ -268,6 +420,10 @@ impl AppState {
 
     pub fn status_json(&self) -> Value {
         let device_count = lock(&self.devices).len();
+        let (session_count, listening) = {
+            let sessions = lock(&self.sessions);
+            (sessions.count(), sessions.listening_count())
+        };
         json!({
             "ok": true,
             "pc_id": self.config.pc_id,
@@ -279,6 +435,8 @@ impl AppState {
             "last_id": self.last_id(),
             "connected": self.connected.load(Ordering::SeqCst),
             "pending": self.pending_count(),
+            "sessions": session_count,
+            "listening": listening,
         })
     }
 }
@@ -296,6 +454,7 @@ async fn run_async() -> Result<()> {
     let identity = config::load_or_create_identity()?;
     let devices = config::load_devices();
     let store = Store::load(paths::events_file());
+    let sessions = Sessions::load(paths::sessions_file());
     let acceptor = server::tls_acceptor(&identity)?;
 
     let control_listener = control::bind()?;
@@ -310,6 +469,7 @@ async fn run_async() -> Result<()> {
         devices: Mutex::new(devices),
         store: Mutex::new(store),
         requests: Mutex::new(Requests::default()),
+        sessions: Mutex::new(sessions),
         tx,
         pair_codes: Mutex::new(HashMap::new()),
         connected: AtomicUsize::new(0),
@@ -332,6 +492,7 @@ async fn run_async() -> Result<()> {
     tokio::spawn(control::serve(state.clone(), control_listener));
     tokio::spawn(server::serve(state.clone(), tcp_listener, acceptor));
     tokio::spawn(expire_loop(state.clone()));
+    tokio::spawn(sessions_loop(state.clone()));
 
     wait_for_shutdown().await;
     eprintln!("ccnotify: shutting down");
@@ -347,6 +508,20 @@ async fn expire_loop(state: Arc<AppState>) {
     loop {
         tick.tick().await;
         state.expire_requests();
+    }
+}
+
+/// Drop old sessions, and keep titles / read_only fresh while phones are
+/// connected.
+async fn sessions_loop(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(SESSION_REFRESH_INTERVAL);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        state.prune_sessions();
+        if state.connected.load(Ordering::SeqCst) > 0 {
+            state.refresh_sessions(None).await;
+        }
     }
 }
 

@@ -10,7 +10,8 @@ use crate::paths;
 
 pub const MAX_EVENTS: usize = 500;
 
-/// PROTOCOL.md "Event". Field order matches the protocol.
+/// PROTOCOL.md "Event". Field order matches the protocol; `session_id` (the
+/// full id, v1.2) is empty for events stored before v1.2.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Event {
@@ -22,6 +23,7 @@ pub struct Event {
     pub session: String,
     pub message: String,
     pub detail: String,
+    pub session_id: String,
 }
 
 #[derive(Deserialize)]

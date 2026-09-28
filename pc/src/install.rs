@@ -15,10 +15,15 @@ use crate::paths;
 
 const NOTIFICATION_MATCHER: &str =
     "permission_prompt|idle_prompt|agent_needs_input|elicitation_dialog";
-const HOOK_EVENTS: [&str; 3] = ["Stop", "Notification", "SessionEnd"];
+/// `ccnotify hook` (async). UserPromptSubmit: PROTOCOL.md v1.2 session state.
+const HOOK_EVENTS: [&str; 4] = ["Stop", "Notification", "SessionEnd", "UserPromptSubmit"];
 /// PROTOCOL.md v1.1: answer prompts from the phone (`ccnotify ask`, blocking).
 const ASK_EVENT: &str = "PermissionRequest";
 const ASK_TIMEOUT_SECS: u64 = 86_400;
+/// PROTOCOL.md v1.2: continue the session from the phone (`ccnotify listen`,
+/// async + asyncRewake Stop hook).
+const LISTEN_EVENT: &str = "Stop";
+const LISTEN_TIMEOUT_SECS: u64 = 86_400;
 
 const UNIT_FILE: &str = "[Unit]
 Description=ccnotify - Claude Code notifications to your phone over LAN
@@ -185,7 +190,7 @@ fn command_runs(cmd: &str, subcommand: &str) -> bool {
 }
 
 fn is_ccnotify_command(cmd: &str) -> bool {
-    command_runs(cmd, "hook") || command_runs(cmd, "ask")
+    command_runs(cmd, "hook") || command_runs(cmd, "ask") || command_runs(cmd, "listen")
 }
 
 fn hook_command_str(hook: &Value) -> &str {
@@ -246,11 +251,12 @@ fn write_settings(path: &Path, settings: &Value, existed: bool) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-/// Append our hook groups (idempotent per event: an event that already runs
-/// our subcommand is left alone). Returns the events that were added.
+/// Append our hook groups (idempotent per event and subcommand: an event that
+/// already runs that subcommand is left alone). Returns what was added.
 fn merge_hooks(settings: &mut Value, bin: &Path) -> Result<Vec<&'static str>> {
     let hook_cmd = bin_command(bin, "hook");
     let ask_cmd = bin_command(bin, "ask");
+    let listen_cmd = bin_command(bin, "listen");
     let root = settings
         .as_object_mut()
         .ok_or_else(|| anyhow!("settings.json is not a JSON object"))?;
@@ -301,10 +307,31 @@ fn merge_hooks(settings: &mut Value, bin: &Path) -> Result<Vec<&'static str>> {
         groups.push(Value::Object(group));
         added.push(ASK_EVENT);
     }
+
+    // Runs in the background; exit code 2 wakes Claude with the phone's message.
+    let groups = hooks
+        .entry(LISTEN_EVENT)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let groups = groups.as_array_mut().ok_or_else(|| {
+        anyhow!("\"hooks.{}\" in settings.json is not an array", LISTEN_EVENT)
+    })?;
+    if !groups.iter().any(|g| group_runs(g, "listen")) {
+        groups.push(json!({
+            "hooks": [{
+                "type": "command",
+                "command": listen_cmd,
+                "async": true,
+                "asyncRewake": true,
+                "timeout": LISTEN_TIMEOUT_SECS,
+            }]
+        }));
+        added.push("Stop (listen)");
+    }
     Ok(added)
 }
 
-/// Remove every hook whose command runs `ccnotify hook` or `ccnotify ask`.
+/// Remove every hook whose command runs `ccnotify hook`, `ccnotify ask` or
+/// `ccnotify listen`.
 /// Groups that become empty are dropped, then event keys that become empty
 /// arrays.
 fn remove_hooks(settings: &mut Value) -> usize {
@@ -362,11 +389,12 @@ fn install_hooks(bin: &Path) -> Result<()> {
     }
     write_settings(&path, &settings, existed)?;
     println!(
-        "Hooks:    added {} to {} (commands: {} / {})",
+        "Hooks:    added {} to {} (commands: {} / {} / {})",
         added.join(", "),
         path.display(),
         bin_command(bin, "hook"),
-        bin_command(bin, "ask")
+        bin_command(bin, "ask"),
+        bin_command(bin, "listen")
     );
     Ok(())
 }

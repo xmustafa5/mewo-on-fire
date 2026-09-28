@@ -21,7 +21,9 @@ use tokio_tungstenite::WebSocketStream;
 use crate::config::{Device, Identity};
 use crate::daemon::{AppState, Push, Subscription};
 use crate::requests::Request;
+use crate::sessions::Session;
 use crate::store::Event;
+use crate::transcript;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
 type WsSink = SplitSink<Ws, Message>;
@@ -136,6 +138,10 @@ async fn send_resolved(sink: &mut WsSink, request_id: &str, by: &str) -> Result<
         &json!({"type": "resolved", "request_id": request_id, "by": by}),
     )
     .await
+}
+
+async fn send_session(sink: &mut WsSink, session: &Session) -> Result<()> {
+    send_json(sink, &json!({"type": "session", "session": session})).await
 }
 
 async fn close(sink: &mut WsSink) {
@@ -292,16 +298,20 @@ async fn subscriber_loop(
                     Ok(Push::Resolved { request_id, by }) => {
                         send_resolved(sink, &request_id, by).await?
                     }
+                    Ok(Push::Session(session)) => send_session(sink, &session).await?,
                     Err(RecvError::Lagged(_)) => {
                         // Fell behind the live stream: catch up from the store
-                        // and re-send the pending requests (the phone dedupes
-                        // them by id).
+                        // and re-send the pending requests and the sessions
+                        // (the phone dedupes them by id).
                         for ev in state.events_since(last_sent) {
                             send_event(sink, &ev).await?;
                             last_sent = ev.id;
                         }
                         for req in state.pending_requests() {
                             send_request(sink, &req).await?;
+                        }
+                        for session in state.session_list() {
+                            send_session(sink, &session).await?;
                         }
                     }
                     Err(RecvError::Closed) => return Ok(()),
@@ -335,8 +345,8 @@ async fn subscriber_loop(
     }
 }
 
-/// A text frame from a subscribed phone. Only `answer` is meaningful; other
-/// frames are ignored.
+/// A text frame from a subscribed phone: `answer` (v1.1), `sessions`,
+/// `get_chat`, `send` (v1.2). Other frames are ignored.
 async fn handle_frame(
     state: &AppState,
     device: &Device,
@@ -347,9 +357,82 @@ async fn handle_frame(
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
-    if msg.get("type").and_then(Value::as_str) != Some("answer") {
-        return Ok(());
+    match msg.get("type").and_then(Value::as_str).unwrap_or("") {
+        "answer" => handle_answer(state, device, sink, &msg).await,
+        "sessions" => {
+            state.refresh_sessions(None).await;
+            let sessions = state.session_list();
+            send_json(sink, &json!({"type": "sessions", "sessions": sessions})).await
+        }
+        "get_chat" => handle_get_chat(state, sink, &msg).await,
+        "send" => handle_send(state, device, sink, &msg).await,
+        _ => Ok(()),
     }
+}
+
+fn str_field<'a>(msg: &'a Value, key: &str) -> &'a str {
+    msg.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+/// `get_chat` → `chat` (empty for an unknown session).
+async fn handle_get_chat(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    let session_id = str_field(msg, "session_id");
+    let limit = msg
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|l| l as usize)
+        .unwrap_or(transcript::DEFAULT_LIMIT)
+        .clamp(1, transcript::MAX_LIMIT);
+    let (title, items) = match state.chat(session_id, limit).await {
+        Some((session, items)) => (session.title, items),
+        None => (String::new(), Vec::new()),
+    };
+    send_json(
+        sink,
+        &json!({"type": "chat", "session_id": session_id, "title": title, "items": items}),
+    )
+    .await
+}
+
+/// `send` → deliver / queue / reject (PROTOCOL.md v1.2), then `send_result`.
+async fn handle_send(
+    state: &AppState,
+    device: &Device,
+    sink: &mut WsSink,
+    msg: &Value,
+) -> Result<()> {
+    let session_id = str_field(msg, "session_id");
+    let client_id = str_field(msg, "client_id");
+    let outcome = state
+        .send_message(session_id, str_field(msg, "text"), client_id)
+        .await;
+    let short: String = session_id.chars().take(8).collect();
+    eprintln!(
+        "ccnotify: phone message for session {short} from device {} ({}): {} {}",
+        device.id,
+        device.name,
+        outcome.status(),
+        outcome.reason()
+    );
+    send_json(
+        sink,
+        &json!({
+            "type": "send_result",
+            "client_id": client_id,
+            "status": outcome.status(),
+            "reason": outcome.reason(),
+        }),
+    )
+    .await
+}
+
+/// `answer` for a pending v1.1 request.
+async fn handle_answer(
+    state: &AppState,
+    device: &Device,
+    sink: &mut WsSink,
+    msg: &Value,
+) -> Result<()> {
     let request_id = msg.get("request_id").and_then(Value::as_str).unwrap_or("");
     let answer = match msg.get("answer") {
         Some(a) if a.is_object() => a.clone(),

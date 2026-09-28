@@ -24,8 +24,7 @@ fn try_run() -> Option<()> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).ok()?;
     let v: Value = serde_json::from_str(&input).ok()?;
-    let event = map_event(&v)?;
-    let req = json!({"cmd": "emit", "event": event});
+    let req = map_request(&v)?;
     control::request(&req, Duration::from_secs(1)).ok()?;
     Some(())
 }
@@ -35,6 +34,55 @@ fn field(v: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+/// The control request for a hook payload: `session_state` (working) for
+/// UserPromptSubmit, else `emit` with the private session fields
+/// (PROTOCOL.md v1.2; never forwarded to phones). None for hook events we do
+/// not forward.
+pub fn map_request(v: &Value) -> Option<Value> {
+    let name = v.get("hook_event_name")?.as_str()?;
+    let session_id = field(v, "session_id");
+    let transcript_path = field(v, "transcript_path");
+    let effort = effort_level(v);
+    if name == "UserPromptSubmit" {
+        return Some(json!({
+            "cmd": "session_state",
+            "session_id": session_id,
+            "cwd": hook_cwd(v),
+            "transcript_path": transcript_path,
+            "effort": effort,
+            "state": "working",
+        }));
+    }
+    let event = map_event(v)?;
+    Some(json!({
+        "cmd": "emit",
+        "event": event,
+        "session_id": session_id,
+        "transcript_path": transcript_path,
+        "effort": effort,
+    }))
+}
+
+/// `effort.level` from the hook input ("" if absent).
+fn effort_level(v: &Value) -> String {
+    match v.get("effort") {
+        Some(Value::String(level)) => level.trim().to_string(),
+        Some(effort) => field(effort, "level").trim().to_string(),
+        None => String::new(),
+    }
+}
+
+/// `cwd` from the hook input, else the current directory.
+fn hook_cwd(v: &Value) -> String {
+    let cwd = field(v, "cwd");
+    if !cwd.is_empty() {
+        return cwd;
+    }
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Map a Claude Code hook payload to a protocol event (without id/ts).
@@ -52,14 +100,10 @@ pub fn map_event(v: &Value) -> Option<Value> {
         _ => return None,
     };
 
-    let mut cwd = field(v, "cwd");
-    if cwd.is_empty() {
-        cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-    }
+    let cwd = hook_cwd(v);
     let project = project_name(&cwd);
-    let session: String = field(v, "session_id").chars().take(8).collect();
+    let session_id = field(v, "session_id");
+    let session: String = session_id.chars().take(8).collect();
 
     Some(json!({
         "kind": kind,
@@ -68,6 +112,7 @@ pub fn map_event(v: &Value) -> Option<Value> {
         "session": session,
         "message": clean_message(&message),
         "detail": detail,
+        "session_id": session_id,
     }))
 }
 

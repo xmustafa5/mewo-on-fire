@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import 'history_tab.dart';
 import 'pcs_tab.dart';
+import 'sessions_tab.dart';
 import 'settings_tab.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -28,7 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [PcsTab(), HistoryTab(), SettingsTab()],
+        children: const [PcsTab(), SessionsTab(), HistoryTab(), SettingsTab()],
       ),
       bottomNavigationBar: ListenableBuilder(
         listenable: AppState.instance,
@@ -54,6 +55,11 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Icon(Icons.computer),
           ),
           label: 'PCs',
+        ),
+        const NavigationDestination(
+          icon: Icon(Icons.forum_outlined),
+          selectedIcon: Icon(Icons.forum),
+          label: 'Sessions',
         ),
         const NavigationDestination(
           icon: Icon(Icons.history_outlined),

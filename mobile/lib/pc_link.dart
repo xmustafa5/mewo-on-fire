@@ -53,6 +53,19 @@ typedef LinkResolvedCallback = Future<void> Function(PcLink link, String request
 /// ids of every request received since `hello` (= all still pending).
 typedef LinkRequestsSyncedCallback = Future<void> Function(PcLink link, Set<String> requestIds);
 
+/// Called for the `sessions` reply (all sessions of the PC, newest first).
+typedef LinkSessionsCallback = Future<void> Function(PcLink link, List<CcSession> sessions);
+
+/// Called for every live `session` update.
+typedef LinkSessionCallback = Future<void> Function(PcLink link, CcSession session);
+
+/// Called for every `chat` reply (the raw frame: `session_id`, `title`, `items`).
+typedef LinkChatCallback = Future<void> Function(PcLink link, Map<String, dynamic> chat);
+
+/// Called for every `send_result`; [status] is `delivered`, `queued` or `rejected`.
+typedef LinkSendResultCallback = Future<void> Function(
+    PcLink link, String clientId, String status, String reason);
+
 enum _Outcome { failed, helloThenClosed, unauthorized }
 
 /// One long-lived subscription to one PC (PROTOCOL.md "Subscribe").
@@ -67,6 +80,10 @@ class PcLink {
     required this.onRequest,
     required this.onResolved,
     required this.onRequestsSynced,
+    required this.onSessions,
+    required this.onSession,
+    required this.onChat,
+    required this.onSendResult,
   });
 
   final PairedPc pc;
@@ -75,6 +92,10 @@ class PcLink {
   final LinkRequestCallback onRequest;
   final LinkResolvedCallback onResolved;
   final LinkRequestsSyncedCallback onRequestsSynced;
+  final LinkSessionsCallback onSessions;
+  final LinkSessionCallback onSession;
+  final LinkChatCallback onChat;
+  final LinkSendResultCallback onSendResult;
 
   static const Duration _minBackoff = Duration(seconds: 1);
   static const Duration _maxBackoff = Duration(seconds: 60);
@@ -134,11 +155,25 @@ class PcLink {
 
   /// Sends an `answer` frame. Returns false if not connected (the PC re-sends
   /// the request on reconnect; the caller answers again then).
-  bool sendAnswer(String requestId, Map<String, dynamic> answer) {
+  bool sendAnswer(String requestId, Map<String, dynamic> answer) =>
+      _sendFrame({'type': 'answer', 'request_id': requestId, 'answer': answer});
+
+  /// Asks for all sessions (reply → [onSessions]). False if not connected.
+  bool requestSessions() => _sendFrame({'type': 'sessions'});
+
+  /// Asks for a session's chat (reply → [onChat]). False if not connected.
+  bool getChat(String sessionId, {int limit = 100}) =>
+      _sendFrame({'type': 'get_chat', 'session_id': sessionId, 'limit': limit});
+
+  /// Sends a message to a session (reply → [onSendResult]). False if not connected.
+  bool sendMessage(String sessionId, String text, String clientId) => _sendFrame(
+      {'type': 'send', 'session_id': sessionId, 'text': text, 'client_id': clientId});
+
+  bool _sendFrame(Map<String, dynamic> frame) {
     final ws = _ws;
     if (ws == null || _state != PcStatus.connected) return false;
     try {
-      ws.add(jsonEncode({'type': 'answer', 'request_id': requestId, 'answer': answer}));
+      ws.add(jsonEncode(frame));
       return true;
     } catch (_) {
       return false;
@@ -298,6 +333,7 @@ class PcLink {
           syncIds = <String>{};
           armSyncTimer();
           _setState(PcStatus.connected);
+          requestSessions(); // v1.2; older daemons ignore it
         } else if (type == 'request') {
           final r = msg['request'];
           if (r is! Map) continue;
@@ -325,6 +361,41 @@ class PcLink {
           } catch (_) {}
           since = ev.id;
           await _saveSince(since);
+        } else if (type == 'sessions') {
+          final list = msg['sessions'];
+          if (list is! List) continue;
+          final sessions = <CcSession>[];
+          for (final e in list) {
+            if (e is! Map) continue;
+            final s = CcSession.fromJson(Map<String, dynamic>.from(e));
+            if (s.id.isNotEmpty) sessions.add(s);
+          }
+          try {
+            await onSessions(this, sessions);
+          } catch (_) {}
+        } else if (type == 'session') {
+          final e = msg['session'];
+          if (e is! Map) continue;
+          final s = CcSession.fromJson(Map<String, dynamic>.from(e));
+          if (s.id.isEmpty) continue;
+          try {
+            await onSession(this, s);
+          } catch (_) {}
+        } else if (type == 'chat') {
+          final id = msg['session_id'];
+          if (id is! String || id.isEmpty) continue;
+          try {
+            await onChat(this, msg);
+          } catch (_) {}
+        } else if (type == 'send_result') {
+          final id = msg['client_id'];
+          if (id is! String || id.isEmpty) continue;
+          final status = msg['status'];
+          final reason = msg['reason'];
+          try {
+            await onSendResult(
+                this, id, status is String ? status : '', reason is String ? reason : '');
+          } catch (_) {}
         } else if (type == 'error') {
           if (msg['error'] == 'unauthorized') unauthorized = true;
         }

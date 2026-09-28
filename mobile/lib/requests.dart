@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' as fln;
 
 import 'models.dart';
+import 'sessions.dart' show routeActionReply;
 import 'storage.dart';
 
 /// Answering prompts from the phone (PROTOCOL.md v1.1): answer bodies, the
@@ -20,6 +21,7 @@ import 'storage.dart';
 ///   task is not running.
 
 /// Name of the task isolate's ReceivePort for answers (IsolateNameServer).
+/// Also carries v1.2 `send` messages (Reply action, see `sessions.dart`).
 const String kAnswerPortName = 'ccnotify_answers';
 
 /// flutter_local_notifications settings, shared by the UI and task isolates.
@@ -189,7 +191,12 @@ class RequestPayload {
 /// separate background engine/isolate — also while the app is open.
 @pragma('vm:entry-point')
 void onNotificationResponseBackground(fln.NotificationResponse response) {
-  unawaited(routeActionAnswer(response));
+  unawaited(_routeAction(response));
+}
+
+Future<void> _routeAction(fln.NotificationResponse response) async {
+  if (await routeActionReply(response)) return; // v1.2 Reply on a stop notification
+  await routeActionAnswer(response);
 }
 
 /// Turns an action tap into an answer and hands it to the task isolate:

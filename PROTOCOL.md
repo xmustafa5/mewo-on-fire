@@ -186,3 +186,97 @@ Multi-select answers join labels with ", ". A typed custom answer is sent as the
 - Tapping the notification body opens the app on the answer screen for that request (full detail, option list with multi-select, "Other…" free text, deny/reject with an optional message).
 - The app shows pending requests at the top of the PCs tab ("Waiting for you").
 - On `resolved`: cancel the notification and drop the request from the pending list.
+
+---
+
+# v1.2 — session chat on the phone, continue from the phone
+
+## New hooks (added by `ccnotify install`)
+
+```json
+"Stop":             [..., {"hooks": [{"type": "command", "command": "<bin> listen", "async": true, "asyncRewake": true, "timeout": 86400}]}],
+"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "<bin> hook", "async": true}]}]
+```
+
+`asyncRewake`: the hook runs in the background; when it exits with code 2, Claude Code wakes the
+session immediately (even if idle) and shows the hook's stderr to Claude as a system reminder.
+
+## `ccnotify hook` changes
+
+`emit` now also sends private fields (never forwarded to phones): `session_id` (full), `transcript_path`,
+`effort` (`effort.level` from the hook input, may be empty). `UserPromptSubmit` → `{"cmd":"session_state","session_id","cwd","transcript_path","effort","state":"working"}` (no event, no notification).
+
+Events sent to phones gain one field: `"session_id": "<full session id>"` (used to open the chat).
+
+## `ccnotify listen` (Stop hook, asyncRewake)
+
+1. Read stdin (`session_id`, `cwd`, `transcript_path`).
+2. Send `{"cmd":"listen","session_id","cwd","transcript_path"}` on the control socket; block with no read timeout.
+3. Reply `{"ok":true,"text":"..."}` → write to **stderr**:
+   `The user sent this message from their phone (via ccnotify). Treat it exactly as if they had typed it in this session:\n\n<text>`
+   and exit **2** (wakes Claude).
+4. Any other reply (`superseded`, `cancelled`, error, daemon down) → exit 0 silently.
+
+Daemon side:
+- If messages are queued for the session → reply immediately with them joined by `"\n\n"` and clear the queue.
+- Else register as the session's listener, replacing any previous listener (which gets `{"ok":false,"error":"superseded"}`).
+- `UserPromptSubmit` or `SessionEnd` for the session → current listener gets `{"ok":false,"error":"cancelled"}`.
+- EOF on the listener socket → unregister.
+
+## Session registry (daemon)
+
+Kept in memory and persisted to `~/.local/state/ccnotify/sessions.json` (last 50 by activity; ended sessions older than 7 days dropped).
+
+```json
+{"id": "<full session_id>", "short": "44155e15", "project": "business-os", "cwd": "...",
+ "title": "Fix payroll rounding", "state": "working", "listening": false, "read_only": false,
+ "effort": "xhigh", "last_ts": 1790000000000, "last_text": "first 200 chars of Claude's last reply", "queued": 0}
+```
+
+- `state`: `working` (UserPromptSubmit, or a phone message was delivered) · `idle` (Stop) · `waiting` (needs_input event or a pending v1.1 request for the session) · `ended` (SessionEnd).
+- `title`: last `ai-title` entry's `aiTitle` in the transcript, else the project name.
+- `listening`: a `listen` hook is currently registered.
+- `read_only`: `state == "working"` AND `effort` is `xhigh` or `max` AND agents are running (see below).
+- Any change → push `{"type":"session","session":{Session}}` to phones.
+
+## Transcript → chat items
+
+The daemon reads the last 4 MB of `transcript_path` (JSONL; drop the first partial line) on demand.
+
+- Skip lines with `isSidechain: true` or `isMeta: true`, and every `type` other than `user` / `assistant` / `ai-title`.
+- `user`, content string or `text` blocks → strip `<system-reminder>…</system-reminder>`, `<ide_selection>…</ide_selection>`, `<ide_opened_file>…</ide_opened_file>` and `<command-…>…</command-…>` wrappers; non-empty remainder → item role `user`. `image` blocks → "[image]". `tool_result` blocks → skipped.
+- `assistant`: `text` blocks → role `assistant`; `thinking` → skipped; `tool_use` → role `tool` with a one-liner:
+  Bash → first line of `command` · Edit/Write/MultiEdit/NotebookEdit/Read → file path · Grep/Glob → `pattern` ·
+  WebFetch → `url` · WebSearch → `query` · Agent/Task → `description` · Workflow → `description` or `name` ·
+  AskUserQuestion → first question · TodoWrite → "update todos" · anything else → tool name.
+- Text per item ≤ 6000 chars. Return the last `limit` (default 100) items.
+- Messages sent from the phone are also recorded by the daemon (per session, last 100) and merged by `ts` as role `phone`
+  (the rewake text does not appear as a normal user message in the transcript).
+- **Agents running**: after the last role-`user` item, some `tool_use` named `Agent`, `Task` or `Workflow` has no matching `tool_result` (`tool_use_id`).
+
+ChatItem: `{"id": "<line uuid or generated>", "ts": <ms>, "role": "user|assistant|tool|phone", "text": "...", "tool": "Bash"}` (`tool` only for role `tool`).
+
+## Wire frames (after `auth`)
+
+```
+→ {"type":"sessions"}                                              ← {"type":"sessions","sessions":[Session...]}   (newest first)
+← {"type":"session","session":{Session}}                            (live update)
+→ {"type":"get_chat","session_id":"...","limit":100}               ← {"type":"chat","session_id":"...","title":"...","items":[ChatItem...]}
+→ {"type":"send","session_id":"...","text":"...","client_id":"<id>"}
+← {"type":"send_result","client_id":"...","status":"delivered|queued|rejected","reason":"..."}
+```
+
+`send` rules:
+- unknown or `ended` session → `rejected` ("Session is closed").
+- `read_only` → `rejected` ("Claude is running agents at high effort — read-only until it finishes").
+- a listener is registered → deliver now → `delivered`; state becomes `working`.
+- no listener and state `working` or `waiting` → queue → `queued` (delivered by the next `listen`).
+- no listener and state `idle` → `rejected` ("This session is not listening — run `ccnotify install` on the PC and send a message from the PC once").
+- After `delivered`, the phone refreshes the chat when the next `stop` event for the session arrives.
+
+## Phone
+
+- New **Sessions** tab (between PCs and History): all sessions from all PCs, newest first — title, project · PC, state chip (Working / Finished / Needs you / Closed), `last_text`, relative time; queued count badge.
+- **Chat screen**: items as bubbles — `user` and `phone` right-aligned (phone ones marked "📱 from phone"), `assistant` left with Markdown, `tool` as compact grey one-liners (grouped consecutive ones collapsible). Pull to refresh; auto-refresh on `session` updates and `stop` events for this session. Bottom input: disabled with the reason when `read_only` or `ended`; otherwise send → show the `send_result` status on the bubble (Delivered / Queued / Rejected + reason).
+- Tapping a `stop` / `needs_input` / `session_end` notification (or a history item with `session_id`) opens that session's chat.
+- `stop` notifications get a **Reply** action with inline text input (RemoteInput) → handled in the background like v1.1 answers → `send`; the notification is updated to "Sent: <text>" / "Queued" / the rejection reason.

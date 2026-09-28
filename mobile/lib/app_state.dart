@@ -9,6 +9,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart' as
 import 'background.dart';
 import 'models.dart';
 import 'requests.dart';
+import 'sessions.dart';
 import 'storage.dart';
 
 /// A request to show on the answer screen.
@@ -18,9 +19,38 @@ class RequestRef {
   final String requestId;
 }
 
+/// A session whose chat to show.
+class SessionRef {
+  const SessionRef(this.pcId, this.sessionId);
+  final String pcId;
+  final String sessionId;
+}
+
+/// A session's chat as last fetched (in memory only, never persisted).
+class ChatState {
+  String title = '';
+  List<ChatItem> items = const <ChatItem>[];
+  bool loaded = false;
+  bool loading = false;
+  String error = '';
+}
+
+/// A message sent from this phone, until the chat shows it (or forever when
+/// rejected — rejected messages never reach the transcript).
+class OutgoingMessage {
+  OutgoingMessage({required this.clientId, required this.text, required this.ts});
+
+  final String clientId;
+  final String text;
+  final int ts; // unix ms
+  String status = SendStatus.sending;
+  String reason = '';
+}
+
 /// UI-isolate state. Only writer of `pcs` and `settings`; talks to the task
-/// isolate via `{"cmd": ...}` messages and receives status / event / requests
-/// messages. `pending_requests` is owned by the task: [requests] is a copy.
+/// isolate via `{"cmd": ...}` messages and receives status / event / requests /
+/// sessions / chat / send_result messages. `pending_requests` and
+/// `sessions_cache` are owned by the task: [requests] and [sessions] are copies.
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   AppState._();
   static final AppState instance = AppState._();
@@ -40,6 +70,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// Set when a request notification is tapped; the app shell opens the
   /// answer screen and resets it to null.
   final ValueNotifier<RequestRef?> openRequest = ValueNotifier<RequestRef?>(null);
+
+  /// Sessions of all PCs, newest first.
+  List<SessionEntry> sessions = <SessionEntry>[];
+
+  /// Set when an event notification with a session is tapped; the app shell
+  /// opens the chat screen and resets it to null.
+  final ValueNotifier<SessionRef?> openSession = ValueNotifier<SessionRef?>(null);
+
+  final Map<String, ChatState> _chats = <String, ChatState>{};
+  final Map<String, List<OutgoingMessage>> _outgoing = <String, List<OutgoingMessage>>{};
+  final Map<String, int> _watched = <String, int>{}; // open chat screens by session key
+  final Map<String, Timer> _chatRefreshTimers = <String, Timer>{};
+  final Map<String, Timer> _chatTimeouts = <String, Timer>{};
+  final Map<String, List<Completer<void>>> _chatWaiters = <String, List<Completer<void>>>{};
+  final List<Completer<void>> _sessionsWaiters = <Completer<void>>[];
 
   bool serviceRunning = false;
   bool loaded = false;
@@ -67,6 +112,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       settings = await Store.loadSettings();
       events = await Store.loadEvents();
       requests = await Store.loadPendingRequests();
+      sessions = await Store.loadSessions();
     } catch (e) {
       debugPrint('ccnotify: loading state failed: $e');
     }
@@ -94,6 +140,19 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// Action buttons normally go to [onNotificationResponseBackground]; they
   /// are handled here too in case a platform delivers them to the UI.
   void _onNotificationResponse(fln.NotificationResponse response) {
+    final ep = EventPayload.tryParse(response.payload);
+    if (ep != null) {
+      final actionId = response.actionId;
+      if (actionId != null && actionId.isNotEmpty) {
+        unawaited(_routeReply(response));
+        return;
+      }
+      if (ep.sessionId.isNotEmpty &&
+          response.notificationResponseType == fln.NotificationResponseType.selectedNotification) {
+        openSession.value = SessionRef(ep.pcId, ep.sessionId);
+      }
+      return;
+    }
     final p = RequestPayload.tryParse(response.payload);
     if (p == null) return;
     final actionId = response.actionId;
@@ -105,6 +164,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (response.notificationResponseType == fln.NotificationResponseType.selectedNotification) {
       openRequest.value = RequestRef(p.pcId, p.requestId);
     }
+  }
+
+  /// A Reply delivered to the UI isolate (normally it goes to the background
+  /// handler): same route; start the service if the message had to be queued.
+  Future<void> _routeReply(fln.NotificationResponse response) async {
+    await routeActionReply(response);
+    if (pcs.isNotEmpty && !await _isRunning()) await startService();
   }
 
   /// First launch: notification permission + battery-optimization exemption.
@@ -198,6 +264,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       if (events.length > Store.maxEvents) {
         events.removeRange(Store.maxEvents, events.length);
       }
+      // After a reply was delivered, Claude's answer shows up with its stop.
+      if (ev.kind == EventKind.stop && ev.sessionId.isNotEmpty) {
+        _scheduleChatRefresh(pcId, ev.sessionId);
+      }
       notifyListeners();
     } else if (type == 'requests') {
       requests = _parseRequests(msg['requests']);
@@ -208,7 +278,232 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       if (resolvedBy.length > 50) resolvedBy.remove(resolvedBy.keys.first);
       requests = requests.where((r) => r.key != key).toList();
       notifyListeners();
+    } else if (type == 'sessions') {
+      _onSessionsSnapshot(_parseSessions(msg['sessions']));
+    } else if (type == 'session') {
+      _onSessionUpdate(msg);
+    } else if (type == 'chat') {
+      _onChat(msg);
+    } else if (type == 'chat_error') {
+      final key = sessionKey('${msg['pc_id']}', '${msg['session_id']}');
+      _finishChat(key, error: msg['error'] is String ? msg['error'] as String : 'Failed');
+    } else if (type == 'send_result') {
+      _onSendResult(msg);
     }
+  }
+
+  // ---- sessions + chat (task owns `sessions_cache`; chats live in memory) ----
+
+  static List<SessionEntry> _parseSessions(Object? list) {
+    final out = <SessionEntry>[];
+    if (list is! List) return out;
+    for (final e in list) {
+      if (e is! Map) continue;
+      try {
+        final s = SessionEntry.fromJson(Map<String, dynamic>.from(e));
+        if (s.pcId.isNotEmpty && s.session.id.isNotEmpty) out.add(s);
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  void _onSessionsSnapshot(List<SessionEntry> list) {
+    final before = <String, CcSession>{for (final e in sessions) e.key: e.session};
+    sessions = list;
+    // Open chats refresh when their session changed or the last fetch failed
+    // (e.g. the PC just reconnected).
+    for (final e in list) {
+      if (!_watched.containsKey(e.key)) continue;
+      final old = before[e.key];
+      final chat = _chats[e.key];
+      if (old == null ||
+          old.lastTs != e.session.lastTs ||
+          old.state != e.session.state ||
+          (chat != null && chat.error.isNotEmpty)) {
+        _scheduleChatRefresh(e.pcId, e.session.id);
+      }
+    }
+    for (final c in _sessionsWaiters) {
+      if (!c.isCompleted) c.complete();
+    }
+    _sessionsWaiters.clear();
+    notifyListeners();
+  }
+
+  void _onSessionUpdate(Map<String, dynamic> msg) {
+    final raw = msg['session'];
+    if (raw is! Map) return;
+    final s = CcSession.fromJson(Map<String, dynamic>.from(raw));
+    final pcId = '${msg['pc_id']}';
+    if (s.id.isEmpty || pcId.isEmpty) return;
+    final pcName = msg['pc_name'] is String ? msg['pc_name'] as String : pcNameFor(pcId);
+    final entry = SessionEntry(pcId: pcId, pcName: pcName, session: s);
+    final list = sessions.where((e) => e.key != entry.key).toList()
+      ..add(entry)
+      ..sort((a, b) => b.session.lastTs.compareTo(a.session.lastTs));
+    sessions = list;
+    _scheduleChatRefresh(pcId, s.id);
+    notifyListeners();
+  }
+
+  void _onChat(Map<String, dynamic> msg) {
+    final key = sessionKey('${msg['pc_id']}', '${msg['session_id']}');
+    final chat = _chats.putIfAbsent(key, ChatState.new);
+    final items = <ChatItem>[];
+    final raw = msg['items'];
+    if (raw is List) {
+      for (final e in raw) {
+        if (e is! Map) continue;
+        final item = ChatItem.fromJson(Map<String, dynamic>.from(e));
+        if (item.text.isNotEmpty || item.role == ChatRole.tool) items.add(item);
+      }
+    }
+    chat.items = items;
+    if (msg['title'] is String && (msg['title'] as String).isNotEmpty) {
+      chat.title = msg['title'] as String;
+    }
+    chat.loaded = true;
+    _finishChat(key);
+  }
+
+  /// Ends a pending chat fetch: stops the spinner, completes the waiters.
+  void _finishChat(String key, {String error = ''}) {
+    _chatTimeouts.remove(key)?.cancel();
+    final chat = _chats.putIfAbsent(key, ChatState.new);
+    chat.loading = false;
+    chat.error = error;
+    for (final c in _chatWaiters.remove(key) ?? const <Completer<void>>[]) {
+      if (!c.isCompleted) c.complete();
+    }
+    notifyListeners();
+  }
+
+  void _onSendResult(Map<String, dynamic> msg) {
+    final clientId = '${msg['client_id']}';
+    final status = msg['status'] is String ? msg['status'] as String : '';
+    final reason = msg['reason'] is String ? msg['reason'] as String : '';
+    for (final list in _outgoing.values) {
+      for (final m in list) {
+        if (m.clientId != clientId) continue;
+        m.status = status.isEmpty ? SendStatus.rejected : status;
+        m.reason = reason;
+        notifyListeners();
+        return;
+      }
+    }
+  }
+
+  SessionEntry? findSession(String pcId, String sessionId) {
+    final key = sessionKey(pcId, sessionId);
+    for (final e in sessions) {
+      if (e.key == key) return e;
+    }
+    return null;
+  }
+
+  ChatState? chatOf(String pcId, String sessionId) => _chats[sessionKey(pcId, sessionId)];
+
+  List<OutgoingMessage> outgoingOf(String pcId, String sessionId) =>
+      _outgoing[sessionKey(pcId, sessionId)] ?? const <OutgoingMessage>[];
+
+  /// A chat screen for the session opened: fetch now, and auto-refresh on
+  /// `session` updates and `stop` events until [unwatchChat].
+  void watchChat(String pcId, String sessionId) {
+    final key = sessionKey(pcId, sessionId);
+    _watched[key] = (_watched[key] ?? 0) + 1;
+    // Not synchronously: called from initState (during a build), and
+    // refreshChat notifies listeners.
+    unawaited(Future<void>.microtask(() => refreshChat(pcId, sessionId)));
+  }
+
+  void unwatchChat(String pcId, String sessionId) {
+    final key = sessionKey(pcId, sessionId);
+    final n = (_watched[key] ?? 0) - 1;
+    if (n > 0) {
+      _watched[key] = n;
+      return;
+    }
+    _watched.remove(key);
+    _chatRefreshTimers.remove(key)?.cancel();
+  }
+
+  void _scheduleChatRefresh(String pcId, String sessionId) {
+    final key = sessionKey(pcId, sessionId);
+    if (!_watched.containsKey(key)) return;
+    _chatRefreshTimers[key]?.cancel();
+    _chatRefreshTimers[key] = Timer(const Duration(milliseconds: 700), () {
+      _chatRefreshTimers.remove(key);
+      if (_watched.containsKey(key)) unawaited(refreshChat(pcId, sessionId));
+    });
+  }
+
+  /// Fetches the session's chat; completes when it arrived or failed.
+  Future<void> refreshChat(String pcId, String sessionId) async {
+    final key = sessionKey(pcId, sessionId);
+    final chat = _chats.putIfAbsent(key, ChatState.new);
+    chat.loading = true;
+    notifyListeners();
+    final c = Completer<void>();
+    (_chatWaiters[key] ??= <Completer<void>>[]).add(c);
+    _chatTimeouts[key]?.cancel();
+    _chatTimeouts[key] = Timer(const Duration(seconds: 20), () {
+      _finishChat(key, error: 'No answer from ${pcNameFor(pcId)} — is ccnotify up to date on the PC?');
+    });
+    if (!await _isRunning()) {
+      _finishChat(key, error: 'The background service is stopped. Start it on the PCs tab.');
+      return c.future;
+    }
+    try {
+      FlutterForegroundTask.sendDataToTask(
+          jsonEncode({'cmd': 'get_chat', 'pc_id': pcId, 'session_id': sessionId}));
+    } catch (_) {
+      _finishChat(key, error: 'Could not reach the background service');
+    }
+    return c.future;
+  }
+
+  /// Asks the connected PCs for their sessions; completes when the list
+  /// arrived (or after a few seconds).
+  Future<void> refreshSessions() async {
+    if (!await _isRunning()) return;
+    final c = Completer<void>();
+    _sessionsWaiters.add(c);
+    _send('refresh_sessions');
+    await c.future.timeout(const Duration(seconds: 8), onTimeout: () {});
+    _sessionsWaiters.remove(c);
+  }
+
+  /// Sends [text] to a session through the task isolate. When the service is
+  /// not running, the message is queued and the service started.
+  Future<void> sendMessage(String pcId, String sessionId, String text) async {
+    final t = text.trim();
+    if (t.isEmpty) return;
+    final key = sessionKey(pcId, sessionId);
+    final m = OutgoingMessage(
+      clientId: newClientId(),
+      text: t,
+      ts: DateTime.now().millisecondsSinceEpoch,
+    );
+    (_outgoing[key] ??= <OutgoingMessage>[]).add(m);
+    notifyListeners();
+    final msg = sendCmd(pcId, sessionId, t, m.clientId);
+    if (await _isRunning()) {
+      try {
+        FlutterForegroundTask.sendDataToTask(jsonEncode(msg));
+        return;
+      } catch (e) {
+        debugPrint('ccnotify: sending message failed: $e');
+      }
+    }
+    try {
+      await Store.queueSend(msg);
+    } catch (_) {
+      m.status = SendStatus.rejected;
+      m.reason = 'Could not queue the message';
+      notifyListeners();
+      return;
+    }
+    if (pcs.isNotEmpty) await startService();
   }
 
   // ---- requests (task owns `pending_requests`) ----

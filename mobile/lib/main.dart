@@ -4,6 +4,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'app_state.dart';
 import 'background.dart';
 import 'ui/answer_screen.dart';
+import 'ui/chat_screen.dart';
 import 'ui/home_screen.dart';
 
 void main() {
@@ -33,13 +34,30 @@ class _CcNotifyAppState extends State<CcNotifyApp> {
   void initState() {
     super.initState();
     AppState.instance.openRequest.addListener(_onOpenRequest);
+    AppState.instance.openSession.addListener(_onOpenSession);
     AppState.instance.init();
   }
 
   @override
   void dispose() {
     AppState.instance.openRequest.removeListener(_onOpenRequest);
+    AppState.instance.openSession.removeListener(_onOpenSession);
     super.dispose();
+  }
+
+  /// An event notification was tapped: show that session's chat.
+  void _onOpenSession() {
+    final ref = AppState.instance.openSession.value;
+    if (ref == null) return;
+    final nav = _navigatorKey.currentState;
+    if (nav == null) {
+      // Navigator not built yet (cold start): retry after the first frame.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onOpenSession());
+      return;
+    }
+    AppState.instance.openSession.value = null;
+    nav.popUntil((r) => !ChatScreen.isChatRoute(r));
+    nav.push(ChatScreen.route(ref.pcId, ref.sessionId));
   }
 
   /// A request notification was tapped: show its answer screen.

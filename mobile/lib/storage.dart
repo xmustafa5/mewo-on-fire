@@ -10,27 +10,33 @@ import 'models.dart';
 ///
 /// Key ownership (one writer per key):
 /// - UI isolate:   `pcs`, `settings`, `first_launch_done`
-/// - Task isolate: `events`, `since_<pcId>`, `hosts_<pcId>`, `pending_requests`
+/// - Task isolate: `events`, `since_<pcId>`, `hosts_<pcId>`, `pending_requests`,
+///                 `sessions_cache`
 ///
-/// The one exception is `queued_answer_<pcId>_<requestId>`: an answer that
-/// could not be handed to the task isolate directly. It is created by the
+/// The exceptions are `queued_answer_<pcId>_<requestId>` and
+/// `queued_send_<clientId>`: an answer / a message for a session that could
+/// not be handed to the task isolate directly. They are created by the
 /// notification-action isolate (task port not registered) or by the UI isolate
-/// (service not running) — one key per answer, so creators never overwrite
-/// each other's lists — and only read + removed by the task isolate, which
-/// drains the queue on start and on every repeat event.
+/// (service not running) — one key per answer / message, so creators never
+/// overwrite each other's lists — and only read + removed by the task isolate,
+/// which drains the queues on start and on every repeat event.
 class Store {
   static const kPcs = 'pcs';
   static const kSettings = 'settings';
   static const kEvents = 'events';
   static const kPendingRequests = 'pending_requests';
+  static const kSessionsCache = 'sessions_cache';
   static const kFirstLaunchDone = 'first_launch_done';
   static const kQueuedAnswerPrefix = 'queued_answer_';
+  static const kQueuedSendPrefix = 'queued_send_';
   static const maxEvents = 300;
+  static const maxSessions = 200;
 
   static String sinceKey(String pcId) => 'since_$pcId';
   static String hostsKey(String pcId) => 'hosts_$pcId';
   static String queuedAnswerKey(String pcId, String requestId) =>
       '$kQueuedAnswerPrefix${pcId}_$requestId';
+  static String queuedSendKey(String clientId) => '$kQueuedSendPrefix$clientId';
 
   static SharedPreferencesAsync? _instance;
   static SharedPreferencesAsync get _p => _instance ??= SharedPreferencesAsync();
@@ -115,6 +121,27 @@ class Store {
   static Future<void> savePendingRequests(List<PendingRequest> requests) => _p.setString(
       kPendingRequests, jsonEncode(requests.map((e) => e.toJson()).toList()));
 
+  // ---- sessions cache (task writes) ----
+  static Future<List<SessionEntry>> loadSessions() async {
+    final d = _decode(await _p.getString(kSessionsCache));
+    if (d is! List) return <SessionEntry>[];
+    final out = <SessionEntry>[];
+    for (final e in d) {
+      if (e is Map) {
+        try {
+          final s = SessionEntry.fromJson(Map<String, dynamic>.from(e));
+          if (s.pcId.isNotEmpty && s.session.id.isNotEmpty) out.add(s);
+        } catch (_) {}
+      }
+    }
+    return out;
+  }
+
+  static Future<void> saveSessions(List<SessionEntry> sessions) {
+    final list = sessions.length > maxSessions ? sessions.sublist(0, maxSessions) : sessions;
+    return _p.setString(kSessionsCache, jsonEncode(list.map((e) => e.toJson()).toList()));
+  }
+
   // ---- queued answers (see the ownership note above) ----
 
   /// Stores `{"pc_id", "request_id", "answer"}` for the task isolate to send.
@@ -130,6 +157,26 @@ class Store {
     final keys = await _p.getKeys();
     for (final k in keys) {
       if (!k.startsWith(kQueuedAnswerPrefix)) continue;
+      final d = _decode(await _p.getString(k));
+      await _p.remove(k);
+      if (d is Map) out.add(Map<String, dynamic>.from(d));
+    }
+    return out;
+  }
+
+  // ---- queued messages (see the ownership note above) ----
+
+  /// Stores a `{"cmd":"send",...}` message (see `sendCmd`) for the task
+  /// isolate to send.
+  static Future<void> queueSend(Map<String, dynamic> msg) =>
+      _p.setString(queuedSendKey('${msg['client_id']}'), jsonEncode(msg));
+
+  /// Task isolate only: returns and removes every queued message.
+  static Future<List<Map<String, dynamic>>> takeQueuedSends() async {
+    final out = <Map<String, dynamic>>[];
+    final keys = await _p.getKeys();
+    for (final k in keys) {
+      if (!k.startsWith(kQueuedSendPrefix)) continue;
       final d = _decode(await _p.getString(k));
       await _p.remove(k);
       if (d is Map) out.add(Map<String, dynamic>.from(d));

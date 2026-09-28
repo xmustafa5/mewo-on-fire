@@ -9,11 +9,15 @@ use qrcode::{EcLevel, QrCode};
 use serde_json::{json, Value};
 
 use crate::ask;
+use crate::config::now_ms;
 use crate::control;
 use crate::paths;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(3);
+/// `sessions` / `chat` may read transcripts (up to 4 MB each).
+const TRANSCRIPT_TIMEOUT: Duration = Duration::from_secs(15);
 const PAIR_WAIT: Duration = Duration::from_secs(300);
+const CHAT_ITEMS: u64 = 20;
 
 fn not_running_hint() -> String {
     format!(
@@ -28,13 +32,20 @@ fn not_running_hint() -> String {
 /// Send a request to the daemon; turn transport errors into a friendly hint and
 /// `{"ok":false}` into an error.
 fn call(req: &Value) -> Result<Value> {
-    let resp = control::request(req, CLI_TIMEOUT)
+    call_with(req, CLI_TIMEOUT)
+}
+
+fn call_with(req: &Value, timeout: Duration) -> Result<Value> {
+    let resp = control::request(req, timeout)
         .map_err(|e| anyhow!("{}\n({e:#})", not_running_hint()))?;
     if resp.get("ok").and_then(Value::as_bool) != Some(true) {
         let err = resp
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("unknown error");
+        if err == "unknown_cmd" {
+            bail!("the running daemon is too old for this; restart it: systemctl --user restart ccnotify");
+        }
         bail!("daemon error: {err}");
     }
     Ok(resp)
@@ -219,6 +230,11 @@ pub fn status() -> Result<()> {
         "  Pending:      {} request(s) waiting for an answer",
         u64_field(&resp, "pending")
     );
+    println!(
+        "  Sessions:     {} known, {} listening for phone messages",
+        u64_field(&resp, "sessions"),
+        u64_field(&resp, "listening")
+    );
     println!("  Socket:       {}", paths::socket_path().display());
     Ok(())
 }
@@ -292,6 +308,157 @@ pub fn test_ask() -> Result<()> {
         "" => bail!("daemon error: unknown error"),
         other => bail!("daemon error: {other}"),
     }
+}
+
+/// List the Claude Code sessions the daemon knows (PROTOCOL.md v1.2).
+pub fn sessions() -> Result<()> {
+    let resp = call_with(&json!({"cmd": "sessions"}), TRANSCRIPT_TIMEOUT)?;
+    let list = resp
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if list.is_empty() {
+        println!("No sessions yet. They appear after the next prompt or reply in Claude Code");
+        println!("(run `ccnotify install` once so the v1.2 hooks are in place).");
+        return Ok(());
+    }
+    let now = now_ms();
+    let mut any_read_only = false;
+    println!(
+        "{:<10}{:<10}{:<8}{:<8}{:<10}PROJECT / TITLE",
+        "SESSION", "STATE", "LISTEN", "QUEUED", "ACTIVE"
+    );
+    for s in &list {
+        let mut state = str_field(s, "state").to_string();
+        if s.get("read_only").and_then(Value::as_bool) == Some(true) {
+            state.push('*');
+            any_read_only = true;
+        }
+        let listening = s.get("listening").and_then(Value::as_bool) == Some(true);
+        println!(
+            "{:<10}{:<10}{:<8}{:<8}{:<10}{} / {}",
+            str_field(s, "short"),
+            state,
+            if listening { "yes" } else { "-" },
+            u64_field(s, "queued"),
+            ago(now, u64_field(s, "last_ts")),
+            str_field(s, "project"),
+            str_field(s, "title")
+        );
+    }
+    println!();
+    if any_read_only {
+        println!("* read-only: Claude is running agents at high effort");
+    }
+    println!("Show a session's chat with: ccnotify chat <SESSION>");
+    Ok(())
+}
+
+/// Print the last chat items of the session whose id starts with `prefix`.
+pub fn chat(prefix: &str) -> Result<()> {
+    let resp = control::request(
+        &json!({"cmd": "chat", "session": prefix, "limit": CHAT_ITEMS}),
+        TRANSCRIPT_TIMEOUT,
+    )
+    .map_err(|e| anyhow!("{}\n({e:#})", not_running_hint()))?;
+    if resp.get("ok").and_then(Value::as_bool) != Some(true) {
+        match str_field(&resp, "error") {
+            "not_found" => bail!("no session id starts with {prefix} (see `ccnotify sessions`)"),
+            "ambiguous" => bail!("{prefix} matches several sessions; use more characters"),
+            "unknown_cmd" => bail!(
+                "the running daemon is too old for this; restart it: systemctl --user restart ccnotify"
+            ),
+            "" => bail!("daemon error: unknown error"),
+            other => bail!("daemon error: {other}"),
+        }
+    }
+    let empty = json!({});
+    let session = resp.get("session").unwrap_or(&empty);
+    let mut flags: Vec<String> = Vec::new();
+    if session.get("listening").and_then(Value::as_bool) == Some(true) {
+        flags.push("listening".to_string());
+    }
+    if session.get("read_only").and_then(Value::as_bool) == Some(true) {
+        flags.push("read-only".to_string());
+    }
+    let queued = u64_field(session, "queued");
+    if queued > 0 {
+        flags.push(format!("{queued} queued"));
+    }
+    println!(
+        "{} ({} · {})",
+        str_field(session, "title"),
+        str_field(session, "project"),
+        str_field(session, "id")
+    );
+    println!(
+        "State: {}{}",
+        str_field(session, "state"),
+        if flags.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", flags.join(", "))
+        }
+    );
+    println!();
+
+    let items = resp
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if items.is_empty() {
+        println!("(no messages)");
+        return Ok(());
+    }
+    for item in &items {
+        let time = format_hm(u64_field(item, "ts"));
+        let text = str_field(item, "text");
+        let who = match str_field(item, "role") {
+            "user" => "you",
+            "assistant" => "claude",
+            "phone" => "you (phone)",
+            "tool" => {
+                println!("{time}  [{}] {}", str_field(item, "tool"), text);
+                continue;
+            }
+            other => other,
+        };
+        println!("{time}  {who}:");
+        for line in text.lines() {
+            println!("    {line}");
+        }
+    }
+    println!();
+    println!("(times in UTC)");
+    Ok(())
+}
+
+/// "12s ago", "5m ago", "3h ago", "2d ago".
+fn ago(now: u64, ms: u64) -> String {
+    if ms == 0 {
+        return "-".to_string();
+    }
+    let secs = now.saturating_sub(ms) / 1000;
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
+}
+
+/// Unix ms → "HH:MM" (UTC).
+fn format_hm(ms: u64) -> String {
+    if ms == 0 {
+        return "--:--".to_string();
+    }
+    let rem = (ms / 1000) % 86_400;
+    format!("{:02}:{:02}", rem / 3600, (rem % 3600) / 60)
 }
 
 /// Unix ms → "YYYY-MM-DD HH:MM UTC" (no timezone database needed).

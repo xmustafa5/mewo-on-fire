@@ -18,9 +18,13 @@ use crate::daemon::AppState;
 use crate::hook;
 use crate::paths;
 use crate::requests::Request;
+use crate::sessions::{ListenReply, ListenStart, Meta};
 use crate::store::Event;
 
 const MAX_REQUEST_BYTES: u64 = 1 << 20;
+/// `ccnotify chat`: default and maximum number of items.
+const CHAT_DEFAULT_LIMIT: usize = 20;
+const CHAT_MAX_LIMIT: usize = 1000;
 
 // ---------------------------------------------------------------------------
 // Client (blocking)
@@ -33,7 +37,8 @@ pub fn request(req: &Value, timeout: Duration) -> Result<Value> {
 }
 
 /// Like `request`, but waits for the reply with no read timeout (`ccnotify
-/// ask` blocks until a phone answers). `write_timeout` bounds the send.
+/// ask` / `ccnotify listen` block until a phone answers). `write_timeout`
+/// bounds the send.
 pub fn request_blocking(req: &Value, write_timeout: Duration) -> Result<Value> {
     request_with(req, None, write_timeout)
 }
@@ -119,18 +124,34 @@ async fn handle_conn(state: Arc<AppState>, stream: tokio::net::UnixStream) -> Re
         .map_err(|_| anyhow!("request read timeout"))??;
 
     let resp = match serde_json::from_str::<Value>(line.trim()) {
-        Ok(req) if req.get("cmd").and_then(Value::as_str) == Some("ask") => {
-            // Lift the size cap now that the request line is in, so the EOF
-            // watch in handle_ask cannot mistake an exhausted limit for a
-            // closed socket.
-            reader.get_mut().set_limit(u64::MAX);
-            match handle_ask(&state, &req, &mut reader).await {
-                Some(resp) => resp,
-                // The hook went away (answered on the PC): nobody to reply to.
-                None => return Ok(()),
+        Ok(req) => {
+            let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("");
+            match cmd {
+                "ask" | "listen" => {
+                    // Lift the size cap now that the request line is in, so
+                    // the EOF watch cannot mistake an exhausted limit for a
+                    // closed socket.
+                    reader.get_mut().set_limit(u64::MAX);
+                    let resp = if cmd == "ask" {
+                        handle_ask(&state, &req, &mut reader).await
+                    } else {
+                        handle_listen(&state, &req, &mut reader).await
+                    };
+                    match resp {
+                        Some(resp) => resp,
+                        // The hook went away (answered on the PC / killed):
+                        // nobody to reply to.
+                        None => return Ok(()),
+                    }
+                }
+                "sessions" => {
+                    state.refresh_sessions(None).await;
+                    json!({"ok": true, "sessions": state.session_list()})
+                }
+                "chat" => handle_chat(&state, &req).await,
+                _ => handle_request(&state, &req),
             }
         }
-        Ok(req) => handle_request(&state, &req),
         Err(_) => json!({"ok": false, "error": "bad_json"}),
     };
 
@@ -153,8 +174,18 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             }
             let mut ev = ev;
             ev.message = hook::clean_message(&ev.message);
+            // v1.2 private fields (top level of the request).
+            let mut meta = Meta::from_request(req);
+            if ev.session_id.is_empty() {
+                ev.session_id = meta.session_id.clone();
+            } else {
+                meta.session_id = ev.session_id.clone();
+            }
+            if meta.cwd.is_empty() {
+                meta.cwd = ev.cwd.clone();
+            }
             let session = ev.session.clone();
-            match state.emit(ev) {
+            match state.emit(ev, &meta) {
                 Some(stored) => eprintln!(
                     "ccnotify: event #{} {} [{}] {}",
                     stored.id, stored.kind, stored.project, stored.detail
@@ -163,6 +194,17 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
                     "ccnotify: dropped needs_input for session {session} (request pending)"
                 ),
             }
+            json!({"ok": true})
+        }
+        "session_state" => {
+            let meta = Meta::from_request(req);
+            let new_state = req.get("state").and_then(Value::as_str).unwrap_or("");
+            if meta.session_id.is_empty()
+                || !matches!(new_state, "working" | "idle" | "waiting" | "ended")
+            {
+                return json!({"ok": false, "error": "bad_request"});
+            }
+            state.set_session_state(&meta, new_state, None);
             json!({"ok": true})
         }
         "pair" => {
@@ -223,6 +265,71 @@ where
             None
         }
     }
+}
+
+/// `listen` (PROTOCOL.md v1.2): hand over queued phone messages right away,
+/// else wait as the session's listener until a phone message arrives, the
+/// listener is superseded / cancelled, or the hook goes away (None).
+async fn handle_listen<R>(state: &AppState, req: &Value, reader: &mut R) -> Option<Value>
+where
+    R: AsyncRead + Unpin,
+{
+    let meta = Meta::from_request(req);
+    let (listener_id, mut reply_rx) = match state.listen(&meta) {
+        None => return Some(json!({"ok": false, "error": "bad_request"})),
+        Some(ListenStart::Now(text)) => {
+            eprintln!(
+                "ccnotify: session {}: delivered queued phone message(s)",
+                short_id(&meta.session_id)
+            );
+            return Some(json!({"ok": true, "text": text}));
+        }
+        Some(ListenStart::Wait(id, rx)) => (id, rx),
+    };
+
+    tokio::select! {
+        reply = &mut reply_rx => {
+            match reply {
+                Ok(ListenReply::Text(text)) => Some(json!({"ok": true, "text": text})),
+                Ok(ListenReply::Error(error)) => Some(json!({"ok": false, "error": error})),
+                // Listener dropped with its session (pruned).
+                Err(_) => Some(json!({"ok": false, "error": "cancelled"})),
+            }
+        }
+        _ = wait_for_eof(reader) => {
+            state.unlisten(&meta.session_id, listener_id);
+            // A message handed over just as the hook went away: keep it for
+            // the next listen.
+            if let Ok(ListenReply::Text(text)) = reply_rx.try_recv() {
+                state.requeue(&meta.session_id, text);
+            }
+            None
+        }
+    }
+}
+
+/// `chat` (for `ccnotify chat`): the last items of the session whose id
+/// starts with `session`.
+async fn handle_chat(state: &AppState, req: &Value) -> Value {
+    let prefix = req.get("session").and_then(Value::as_str).unwrap_or("");
+    let limit = req
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|l| l as usize)
+        .unwrap_or(CHAT_DEFAULT_LIMIT)
+        .clamp(1, CHAT_MAX_LIMIT);
+    let session = match state.find_session(prefix) {
+        Ok(s) => s,
+        Err(error) => return json!({"ok": false, "error": error}),
+    };
+    match state.chat(&session.id, limit).await {
+        Some((session, items)) => json!({"ok": true, "session": session, "items": items}),
+        None => json!({"ok": false, "error": "not_found"}),
+    }
+}
+
+fn short_id(session_id: &str) -> String {
+    session_id.chars().take(8).collect()
 }
 
 /// Resolves when the peer closes its end (or the read fails). The client

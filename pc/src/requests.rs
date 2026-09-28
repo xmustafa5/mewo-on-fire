@@ -69,14 +69,19 @@ impl Requests {
     }
 
     /// Remove a pending request and remember who resolved it. Returns the
-    /// answer sender, or None if the request is unknown / already resolved.
-    pub fn resolve(&mut self, id: &str, by: &'static str) -> Option<oneshot::Sender<Value>> {
+    /// answer sender and the request, or None if the request is unknown /
+    /// already resolved.
+    pub fn resolve(
+        &mut self,
+        id: &str,
+        by: &'static str,
+    ) -> Option<(oneshot::Sender<Value>, Request)> {
         let pending = self.pending.remove(id)?;
         self.recent.push_back((id.to_string(), by));
         while self.recent.len() > RECENT_RESOLVED {
             self.recent.pop_front();
         }
-        Some(pending.answer_tx)
+        Some((pending.answer_tx, pending.request))
     }
 
     /// Who resolved a recently finished request.
