@@ -130,8 +130,8 @@ Added by `ccnotify install` (not async, long timeout):
 - Every 1 s read only the appended bytes (a partial last line is carried over; file shrank → offset 0). Exit 0 silently when a main-chain line shows:
   - a `user` `tool_result` with the target's `tool_use_id` (answered on the PC);
   - a new non-meta `user` text prompt (session moved on; `<task-notification>` texts don't count);
-  - no target found → any new `assistant` line.
-- The `tool_use` line is written ~5 s before the hook starts; the `tool_result` right when the PC answers — for an approved long-running command only when it finishes (accepted; the safety net covers the end of the turn).
+- No target at start → the target is adopted from the appended `assistant` lines (same rule): Claude Code can start the hook before it flushes the `tool_use` line (seen: same millisecond). New `assistant` lines never end the watch by themselves.
+- The `tool_result` is written right when the PC answers — for an approved long-running command only when it finishes (accepted; the safety net covers the end of the turn).
 - Race: an atomic flag is set once by whoever ends the process — the main thread right before it prints a phone answer (or exits), or the watcher; the other one then neither exits nor prints.
 
 ### Safety net (daemon)

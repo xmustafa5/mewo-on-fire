@@ -360,8 +360,10 @@ fn deny(answer: &Value, default_message: &str) -> Value {
 enum Target {
     /// The tool_result of the prompt's tool_use (this id).
     ToolUse(String),
-    /// The tool_use was not found: any new assistant line.
-    AnyAssistant,
+    /// The prompt's tool_use is not in the transcript yet: Claude Code can
+    /// start the hook before it flushes that line, so it is adopted from the
+    /// appended lines.
+    Pending,
 }
 
 struct Watcher {
@@ -409,7 +411,7 @@ impl Watcher {
             Err(_) => return,
         };
         let cut = complete_len(&tail);
-        let target = self.find_target(&tail[..cut]);
+        let mut target = self.find_target(&tail[..cut]);
         // A partial last line, completed by the next read.
         let mut carry: Vec<u8> = tail[cut..].to_vec();
 
@@ -446,7 +448,7 @@ impl Watcher {
             if cut == 0 {
                 continue;
             }
-            let gone = self.prompt_gone(&carry[..cut], &target);
+            let gone = self.prompt_gone(&carry[..cut], &mut target);
             carry.drain(..cut);
             if gone {
                 if !FINISHED.swap(true, Ordering::SeqCst) {
@@ -497,30 +499,57 @@ impl Watcher {
             .or_else(|| calls.last());
         match best {
             Some((id, _)) => Target::ToolUse(id.clone()),
-            None => Target::AnyAssistant,
+            None => Target::Pending,
         }
     }
 
+    /// The id of this assistant line's `tool_name` call, preferring one whose
+    /// input equals the hook's `tool_input`.
+    fn matching_call(&self, v: &Value) -> Option<String> {
+        let mut fallback = None;
+        for b in content_blocks(v) {
+            let id = str_of(b, "id");
+            if str_of(b, "type") != "tool_use" || str_of(b, "name") != self.tool || id.is_empty() {
+                continue;
+            }
+            if b.get("input") == Some(&self.input) {
+                return Some(id.to_string());
+            }
+            fallback = Some(id.to_string());
+        }
+        fallback
+    }
+
     /// True if the appended lines show the prompt is gone: its tool_result
-    /// (answered on the PC), a new user prompt (the session moved on), or —
-    /// without a known tool_use — any new assistant line.
-    fn prompt_gone(&self, bytes: &[u8], target: &Target) -> bool {
-        json_lines(bytes).any(|v| {
+    /// (answered on the PC) or a new user prompt (the session moved on).
+    /// While the tool_use is still `Pending`, it is adopted from these lines.
+    fn prompt_gone(&self, bytes: &[u8], target: &mut Target) -> bool {
+        for v in json_lines(bytes) {
             if !self.in_chain(&v) {
-                return false;
+                continue;
             }
             match str_of(&v, "type") {
-                "user" => {
-                    let answered = match target {
-                        Target::ToolUse(id) => tool_result_ids(&v).any(|r| r == id.as_str()),
-                        Target::AnyAssistant => false,
-                    };
-                    answered || (!flag(&v, "isMeta") && is_prompt(&v))
+                "assistant" => {
+                    if matches!(target, Target::Pending) {
+                        if let Some(id) = self.matching_call(&v) {
+                            *target = Target::ToolUse(id);
+                        }
+                    }
                 }
-                "assistant" => matches!(target, Target::AnyAssistant),
-                _ => false,
+                "user" => {
+                    if let Target::ToolUse(id) = &*target {
+                        if tool_result_ids(&v).any(|r| r == id.as_str()) {
+                            return true;
+                        }
+                    }
+                    if !flag(&v, "isMeta") && is_prompt(&v) {
+                        return true;
+                    }
+                }
+                _ => {}
             }
-        })
+        }
+        false
     }
 }
 
