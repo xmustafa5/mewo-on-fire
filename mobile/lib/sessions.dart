@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:ui' show IsolateNameServer;
 
@@ -6,7 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' as fln;
 
 import 'models.dart';
-import 'requests.dart' show kAnswerPortName;
+import 'requests.dart' show DarwinCategory, kAnswerPortName;
 import 'storage.dart';
 
 /// Session chat + continuing a session from the phone (PROTOCOL.md v1.2):
@@ -177,6 +178,8 @@ String replyStatusText(String status, String text, String reason) {
 
 /// Replaces the replied-to notification [notif] with [body] (silently). With
 /// [allowReply], the Reply button stays so the user can send another message.
+/// iOS removed the notification when the reply was sent: the result is posted
+/// quietly to Notification Center, and only alerts when [failed].
 Future<void> showReplyStatus(
   fln.FlutterLocalNotificationsPlugin plugin, {
   required String pcId,
@@ -184,6 +187,7 @@ Future<void> showReplyStatus(
   required ReplyNotif notif,
   required String body,
   bool allowReply = false,
+  bool failed = false,
 }) async {
   final details = fln.NotificationDetails(
     android: fln.AndroidNotificationDetails(
@@ -198,6 +202,13 @@ Future<void> showReplyStatus(
       showWhen: true,
       styleInformation: fln.BigTextStyleInformation(body),
       actions: allowReply ? <fln.AndroidNotificationAction>[replyAction()] : null,
+    ),
+    iOS: fln.DarwinNotificationDetails(
+      subtitle: notif.pcName.isEmpty ? null : notif.pcName,
+      threadIdentifier: sessionId,
+      categoryIdentifier: allowReply ? DarwinCategory.reply : null,
+      presentSound: failed,
+      interruptionLevel: failed ? fln.InterruptionLevel.active : fln.InterruptionLevel.passive,
     ),
   );
   await plugin.show(
@@ -231,7 +242,7 @@ Future<bool> routeActionReply(fln.NotificationResponse response) async {
 
   if (text.isEmpty) {
     // Clear Android's reply spinner.
-    if (notif != null) {
+    if (notif != null && !Platform.isIOS) {
       await _tryShowReplyStatus(p, notif, 'Nothing sent — the message was empty.', true);
     }
     return true;
@@ -249,8 +260,8 @@ Future<bool> routeActionReply(fln.NotificationResponse response) async {
     debugPrint('ccnotify: queueing message failed: $e');
   }
   if (notif != null) {
-    await _tryShowReplyStatus(
-        p, notif, 'Waiting to send: $text\n(sent when ccnotify reconnects)', false);
+    final when = Platform.isIOS ? 'you open ccnotify' : 'ccnotify reconnects';
+    await _tryShowReplyStatus(p, notif, 'Waiting to send: $text\n(sent when $when)', false);
   }
   return true;
 }

@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' as fln;
 
 import 'models.dart';
-import 'sessions.dart' show routeActionReply;
+import 'sessions.dart' show kReplyActionId, routeActionReply;
 import 'storage.dart';
 
 /// Answering prompts from the phone (PROTOCOL.md v1.1): answer bodies, the
@@ -25,14 +25,74 @@ import 'storage.dart';
 const String kAnswerPortName = 'ccnotify_answers';
 
 /// flutter_local_notifications settings, shared by the UI and task isolates.
-const fln.InitializationSettings kNotificationInitSettings = fln.InitializationSettings(
-  android: fln.AndroidInitializationSettings('ic_stat_notify'),
+final fln.InitializationSettings kNotificationInitSettings = fln.InitializationSettings(
+  android: const fln.AndroidInitializationSettings('ic_stat_notify'),
   iOS: fln.DarwinInitializationSettings(
     requestAlertPermission: false,
     requestBadgePermission: false,
     requestSoundPermission: false,
+    notificationCategories: _darwinCategories(),
   ),
 );
+
+/// iOS notification categories. Unlike Android actions, the buttons of an
+/// iOS notification are a fixed set registered up front, selected per
+/// notification by its category.
+class DarwinCategory {
+  static const permission = 'ccn_permission';
+  static const permissionAlways = 'ccn_permission_always';
+  static const plan = 'ccn_plan';
+
+  /// `stop` notifications: Reply with inline text input.
+  static const reply = 'ccn_reply';
+}
+
+/// The iOS category with [r]'s buttons. Null for a question: its option
+/// labels differ per request, so it is answered in the app (tap the
+/// notification).
+String? darwinRequestCategory(CcRequest r) {
+  switch (r.kind) {
+    case RequestKind.plan:
+      return DarwinCategory.plan;
+    case RequestKind.question:
+      return null;
+    default:
+      return r.canAllowAlways ? DarwinCategory.permissionAlways : DarwinCategory.permission;
+  }
+}
+
+/// Same action ids as the Android buttons (see [requestActions]), handled by
+/// [onNotificationResponseBackground] without opening the app. Everything
+/// that lets Claude Code go on needs the phone unlocked.
+List<fln.DarwinNotificationCategory> _darwinCategories() {
+  const unlock = <fln.DarwinNotificationActionOption>{
+    fln.DarwinNotificationActionOption.authenticationRequired,
+  };
+  const destructive = <fln.DarwinNotificationActionOption>{
+    fln.DarwinNotificationActionOption.destructive,
+  };
+  final allow = fln.DarwinNotificationAction.plain(RequestAction.allow, 'Allow', options: unlock);
+  final always =
+      fln.DarwinNotificationAction.plain(RequestAction.allowAlways, 'Always allow', options: unlock);
+  final deny = fln.DarwinNotificationAction.plain(RequestAction.deny, 'Deny', options: destructive);
+  return <fln.DarwinNotificationCategory>[
+    fln.DarwinNotificationCategory(DarwinCategory.permission, actions: [allow, deny]),
+    fln.DarwinNotificationCategory(DarwinCategory.permissionAlways, actions: [allow, always, deny]),
+    fln.DarwinNotificationCategory(DarwinCategory.plan, actions: [
+      fln.DarwinNotificationAction.plain(RequestAction.approve, 'Approve', options: unlock),
+      fln.DarwinNotificationAction.plain(RequestAction.reject, 'Reject', options: destructive),
+    ]),
+    fln.DarwinNotificationCategory(DarwinCategory.reply, actions: [
+      fln.DarwinNotificationAction.text(
+        kReplyActionId,
+        'Reply',
+        buttonTitle: 'Send',
+        placeholder: 'Message to Claude',
+        options: unlock,
+      ),
+    ]),
+  ];
+}
 
 /// Action ids of request notification buttons.
 class RequestAction {

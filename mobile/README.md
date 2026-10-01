@@ -1,7 +1,7 @@
 # ccnotify (mobile)
 
-Android app that pairs with one or more PCs running the `ccnotify` daemon and
-shows a notification when Claude Code finishes, needs your input, or a session
+Android and iOS app that pairs with one or more PCs (Linux or macOS) running
+the `ccnotify` daemon and shows a notification when Claude Code finishes, needs your input, or a session
 closes. You can also answer Claude Code's permission prompts, questions and
 plan approvals from the phone, read each session's chat, and continue a
 session by sending it a message. LAN only; the phone connects to the PC over `wss://` and accepts the
@@ -125,7 +125,41 @@ For steps for each phone model, see https://dontkillmyapp.com.
 
 ## iOS
 
-The iOS project builds, and the camera, local-network and Bonjour usage keys
-are already set in `Info.plist`. iOS does not allow a permanent background
-socket, so notifications arrive only **while the app is open** (in the
-foreground). Treat iOS as a later target.
+```sh
+flutter pub get
+flutter run --release           # on a connected iPhone
+```
+
+Open `ios/Runner.xcworkspace` in Xcode once and pick your team under
+**Signing & Capabilities** (a free Apple ID works; the app then has to be
+re-installed every 7 days). The app needs iOS 15 or later.
+
+On first launch allow **notifications**, and allow **local network** access
+when iOS asks for it while pairing. Without it the phone cannot reach the PC;
+change it under Settings → Privacy & Security → Local Network.
+
+Everything works as on Android, with these differences:
+
+- **Background.** iOS has no foreground service and suspends an app shortly
+  after you leave it. By default ccnotify stays connected while it is open and
+  for about 25 seconds after; what you missed is fetched when you open it
+  again (History, and a notification for events of the last 30 minutes). To
+  get notifications with the phone in your pocket, turn on **Settings → Stay
+  connected in the background**. The app then plays silent audio while it is
+  in the background, which keeps it running. This uses more battery, and
+  Apple does not accept it in App Store apps (fine for a build you install
+  yourself). Swiping the app away in the app switcher stops it either way.
+  Real push notifications would need Apple's servers and a paid developer
+  account, which this LAN-only project does not use.
+- **Notification buttons.** Pull the banner down, or long-press the
+  notification, to see them. Permission prompts have **Allow**, **Always
+  allow** and **Deny**; plans have **Approve** and **Reject**; "finished"
+  notifications have **Reply**. Everything that lets Claude Code go on asks
+  for Face ID / the passcode when the phone is locked. Questions have no
+  buttons on iOS: tap the notification and answer in the app.
+- **Reply.** iOS removes the notification when you send the reply. The result
+  ("Sent: …", "Queued: …" or "Couldn't send: …") arrives as a new, quiet
+  notification; only a failure makes a sound.
+- There is no persistent "Listening…" notification and no start on boot: open
+  the app once after restarting the phone.
+- The Simulator has no camera: use **Paste code instead**.

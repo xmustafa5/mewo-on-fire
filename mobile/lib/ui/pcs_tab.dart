@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -23,7 +25,7 @@ class PcsTab extends StatelessWidget {
   }
 
   static String statusLabel(String s, bool serviceRunning) {
-    if (!serviceRunning) return 'Service stopped';
+    if (!serviceRunning) return Platform.isIOS ? 'Not listening' : 'Service stopped';
     switch (s) {
       case PcStatus.connected:
         return 'Connected';
@@ -174,6 +176,21 @@ class _ServiceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final running = state.serviceRunning;
+    // iOS has no background service: without keep-alive the connection only
+    // lives while the app is open.
+    final foregroundOnly = Platform.isIOS && !state.settings.keepAlive;
+    final String title;
+    final String subtitle;
+    if (!running) {
+      title = Platform.isIOS ? 'Not listening' : 'Background service stopped';
+      subtitle = state.pcs.isEmpty ? 'Pair a PC to start' : 'No notifications will arrive';
+    } else if (foregroundOnly) {
+      title = 'Listening while ccnotify is open';
+      subtitle = 'iOS pauses it in the background — see Settings → Background';
+    } else {
+      title = Platform.isIOS ? 'Listening, also in the background' : 'Background service running';
+      subtitle = 'Listening for Claude Code sessions';
+    }
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Padding(
@@ -187,14 +204,8 @@ class _ServiceCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(running ? 'Background service running' : 'Background service stopped',
-                      style: Theme.of(context).textTheme.titleSmall),
-                  Text(
-                    running
-                        ? 'Listening for Claude Code sessions'
-                        : (state.pcs.isEmpty ? 'Pair a PC to start' : 'No notifications will arrive'),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+                  Text(title, style: Theme.of(context).textTheme.titleSmall),
+                  Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
             ),

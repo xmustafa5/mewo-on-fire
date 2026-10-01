@@ -49,8 +49,13 @@ void initForegroundTask() {
   );
 }
 
+/// iOS has no foreground service: the task handler runs in the UI isolate
+/// (see [_LocalTask]) for as long as the app runs.
+bool get taskRunsInProcess => Platform.isIOS;
+
 /// Starts the foreground service if it is not running. Returns whether it runs.
 Future<bool> startForegroundService() async {
+  if (taskRunsInProcess) return _LocalTask.start();
   if (await FlutterForegroundTask.isRunningService) return true;
   final result = await FlutterForegroundTask.startService(
     serviceId: kServiceId,
@@ -67,7 +72,75 @@ Future<bool> startForegroundService() async {
 }
 
 Future<void> stopForegroundService() async {
+  if (taskRunsInProcess) return _LocalTask.stop();
   await FlutterForegroundTask.stopService();
+}
+
+/// Whether the task handler is running.
+Future<bool> isServiceRunning() async =>
+    taskRunsInProcess ? _LocalTask.running : await FlutterForegroundTask.isRunningService;
+
+/// Sends a `{"cmd": ...}` message (JSON) to the task handler.
+void sendToTask(String json) {
+  if (taskRunsInProcess) {
+    _LocalTask.send(json);
+  } else {
+    FlutterForegroundTask.sendDataToTask(json);
+  }
+}
+
+/// Registers the UI's receiver of the task handler's messages.
+void addTaskDataCallback(void Function(Object data) callback) {
+  if (taskRunsInProcess) {
+    _LocalTask.onData = callback;
+  } else {
+    FlutterForegroundTask.addTaskDataCallback(callback);
+  }
+}
+
+/// Sends a message (JSON) from the task handler to the UI.
+void _sendToMain(String json) {
+  if (taskRunsInProcess) {
+    _LocalTask.toMain(json);
+  } else {
+    FlutterForegroundTask.sendDataToMain(json);
+  }
+}
+
+/// The task handler hosted in the UI isolate (iOS). Messages are delivered
+/// asynchronously, like the ports between the two isolates on Android.
+class _LocalTask {
+  static const Duration _repeatInterval = Duration(seconds: 15);
+
+  static CcTaskHandler? _handler;
+  static Timer? _repeat;
+  static void Function(Object data)? onData;
+
+  static bool get running => _handler != null;
+
+  static Future<bool> start() async {
+    if (_handler != null) return true;
+    final handler = CcTaskHandler(inProcess: true);
+    _handler = handler;
+    _repeat = Timer.periodic(_repeatInterval, (_) => handler.onRepeatEvent(DateTime.now()));
+    unawaited(handler.onStart(DateTime.now(), TaskStarter.developer));
+    return true;
+  }
+
+  static Future<void> stop() async {
+    final handler = _handler;
+    _handler = null;
+    _repeat?.cancel();
+    _repeat = null;
+    if (handler != null) await handler.onDestroy(DateTime.now(), false);
+  }
+
+  static void send(String json) {
+    final handler = _handler;
+    if (handler != null) scheduleMicrotask(() => handler.onReceiveData(json));
+  }
+
+  static void toMain(String json) => scheduleMicrotask(() => onData?.call(json));
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +231,12 @@ String _str(Object? v) => v is String ? v : (v == null ? '' : '$v');
 /// notifications and sends answers and session messages (from the UI, action
 /// buttons / Reply and the `queued_answer_*` / `queued_send_*` queues).
 class CcTaskHandler extends TaskHandler {
+  CcTaskHandler({this.inProcess = false});
+
+  /// Hosted in the UI isolate (iOS, see [_LocalTask]) instead of the
+  /// foreground-task isolate.
+  final bool inProcess;
+
   final fln.FlutterLocalNotificationsPlugin _notifs = fln.FlutterLocalNotificationsPlugin();
   final Map<String, PcLink> _links = <String, PcLink>{};
   final Map<String, String> _pcSig = <String, String>{};
@@ -217,7 +296,7 @@ class CcTaskHandler extends TaskHandler {
 
     if (_links.isEmpty) {
       // Nothing to listen to (e.g. started on boot after all PCs were removed).
-      unawaited(FlutterForegroundTask.stopService());
+      unawaited(stopForegroundService());
     }
   }
 
@@ -290,6 +369,7 @@ class CcTaskHandler extends TaskHandler {
       await _queueSave();
     } else if (cmd == 'reconnect') {
       _kickDisconnected();
+      _probeConnected();
       _sendStatus(force: true);
       _sendRequests();
       _sendSessions();
@@ -372,8 +452,11 @@ class CcTaskHandler extends TaskHandler {
     }
     await _cancelRequestNotification(pcId, requestId);
     // Unknown request (e.g. dropped locally): still send; the PC replies
-    // `resolved` if it is finished.
-    _links[pcId]?.sendAnswer(requestId, answer);
+    // `resolved` if it is finished. Not connected (e.g. iOS just woke the app
+    // for an action button): reconnect now; the PC then re-sends the request
+    // and `_onRequest` answers it.
+    final link = _links[pcId];
+    if (link != null && !link.sendAnswer(requestId, answer)) link.kick();
   }
 
   // ---- sessions: chat + messages from the phone (v1.2) ----
@@ -405,7 +488,11 @@ class CcTaskHandler extends TaskHandler {
       return;
     }
     _outbox[clientId] = o;
-    if (o.notif != null) await _updateReplyNotification(o, SendStatus.sending, '');
+    // Android shows a spinner on the notification until it is updated; iOS
+    // has already dismissed it.
+    if (o.notif != null && !Platform.isIOS) {
+      await _updateReplyNotification(o, SendStatus.sending, '');
+    }
     _trySend(o, link);
     if (!o.sent) {
       link.kick();
@@ -451,7 +538,7 @@ class CcTaskHandler extends TaskHandler {
   }
 
   void _sendSendResult(String pcId, String sessionId, String clientId, String status, String reason) {
-    FlutterForegroundTask.sendDataToMain(jsonEncode({
+    _sendToMain(jsonEncode({
       'type': 'send_result',
       'pc_id': pcId,
       'session_id': sessionId,
@@ -472,6 +559,7 @@ class CcTaskHandler extends TaskHandler {
         notif: notif,
         body: replyStatusText(status, o.text, reason),
         allowReply: status == SendStatus.delivered || status == SendStatus.queued,
+        failed: status == SendStatus.rejected,
       );
     } catch (e) {
       debugPrint('ccnotify: updating reply notification failed: $e');
@@ -493,7 +581,7 @@ class CcTaskHandler extends TaskHandler {
       error = '${link.pc.name} is offline';
     }
     if (error.isEmpty) return;
-    FlutterForegroundTask.sendDataToMain(jsonEncode({
+    _sendToMain(jsonEncode({
       'type': 'chat_error',
       'pc_id': pcId,
       'session_id': sessionId,
@@ -502,7 +590,7 @@ class CcTaskHandler extends TaskHandler {
   }
 
   Future<void> _onChat(PcLink link, Map<String, dynamic> chat) async {
-    FlutterForegroundTask.sendDataToMain(jsonEncode({
+    _sendToMain(jsonEncode({
       'type': 'chat',
       'pc_id': link.pc.id,
       'session_id': chat['session_id'],
@@ -541,7 +629,7 @@ class CcTaskHandler extends TaskHandler {
     }
     _sortSessions();
     _scheduleSessionsSave();
-    FlutterForegroundTask.sendDataToMain(jsonEncode({
+    _sendToMain(jsonEncode({
       'type': 'session',
       'pc_id': pc.id,
       'pc_name': pc.name,
@@ -557,7 +645,7 @@ class CcTaskHandler extends TaskHandler {
   }
 
   void _sendSessions() {
-    FlutterForegroundTask.sendDataToMain(jsonEncode({
+    _sendToMain(jsonEncode({
       'type': 'sessions',
       'sessions': _sessions.map((e) => e.toJson()).toList(),
     }));
@@ -669,6 +757,13 @@ class CcTaskHandler extends TaskHandler {
     }
   }
 
+  /// A connection may have died unnoticed while the app was suspended.
+  void _probeConnected() {
+    for (final l in _links.values) {
+      if (l.state == PcStatus.connected) l.probe();
+    }
+  }
+
   Future<void> _checkNetwork() async {
     final sig = await _networkSignature();
     if (sig == _netSig) return;
@@ -693,14 +788,15 @@ class CcTaskHandler extends TaskHandler {
 
   void _sendStatus({bool force = false}) {
     final map = <String, String>{for (final e in _links.entries) e.key: e.value.state};
-    FlutterForegroundTask.sendDataToMain(jsonEncode({'type': 'status', 'pcs': map}));
+    _sendToMain(jsonEncode({'type': 'status', 'pcs': map}));
 
     final total = map.length;
     final connected = map.values.where((s) => s == PcStatus.connected).length;
     final summary = total == 0
         ? 'No paired PCs'
         : 'Connected to $connected of $total PC${total == 1 ? '' : 's'}';
-    if (summary != _lastSummary || force) {
+    // In-process (iOS) there is no service notification to update.
+    if (!inProcess && (summary != _lastSummary || force)) {
       _lastSummary = summary;
       unawaited(FlutterForegroundTask.updateService(
         notificationTitle: kServiceTitle,
@@ -719,7 +815,7 @@ class CcTaskHandler extends TaskHandler {
     }
     _scheduleSave();
 
-    FlutterForegroundTask.sendDataToMain(jsonEncode({
+    _sendToMain(jsonEncode({
       'type': 'event',
       'pc_id': pc.id,
       'pc_name': pc.name,
@@ -834,7 +930,7 @@ class CcTaskHandler extends TaskHandler {
 
   /// Tells the UI a request is gone (it drops it and closes its answer screen).
   void _sendResolved(String pcId, String requestId, String by) {
-    FlutterForegroundTask.sendDataToMain(jsonEncode({
+    _sendToMain(jsonEncode({
       'type': 'resolved',
       'pc_id': pcId,
       'request_id': requestId,
@@ -843,7 +939,7 @@ class CcTaskHandler extends TaskHandler {
   }
 
   void _sendRequests() {
-    FlutterForegroundTask.sendDataToMain(jsonEncode({
+    _sendToMain(jsonEncode({
       'type': 'requests',
       'requests': _requests.map((r) => r.toJson()).toList(),
     }));
@@ -864,11 +960,15 @@ class CcTaskHandler extends TaskHandler {
   Future<void> _initNotifications() async {
     // Same callbacks as the UI isolate: whichever isolate initializes last
     // stores the background callback handle natively, so both must pass it.
-    await _notifs.initialize(
-      settings: kNotificationInitSettings,
-      onDidReceiveNotificationResponse: onNotificationResponseBackground,
-      onDidReceiveBackgroundNotificationResponse: onNotificationResponseBackground,
-    );
+    // In-process, the UI (AppState.init) already initialized the plugin of
+    // this isolate; initializing again would replace its tap handler.
+    if (!inProcess) {
+      await _notifs.initialize(
+        settings: kNotificationInitSettings,
+        onDidReceiveNotificationResponse: onNotificationResponseBackground,
+        onDidReceiveBackgroundNotificationResponse: onNotificationResponseBackground,
+      );
+    }
     final android = _notifs.resolvePlatformSpecificImplementation<
         fln.AndroidFlutterLocalNotificationsPlugin>();
     if (android != null) {
@@ -952,11 +1052,18 @@ class CcTaskHandler extends TaskHandler {
         styleInformation: big.isEmpty ? null : fln.BigTextStyleInformation(big),
         actions: actions.isEmpty ? null : actions,
       ),
+      iOS: fln.DarwinNotificationDetails(
+        subtitle: pc.name,
+        threadIdentifier: 'requests',
+        categoryIdentifier: darwinRequestCategory(r),
+      ),
     );
+    // iOS has no separate expanded text: the body carries the detail.
+    final text = Platform.isIOS ? big : body;
     await _notifs.show(
       id: requestNotificationId(pc.id, r.id),
       title: title,
-      body: body.isEmpty ? null : body,
+      body: text.isEmpty ? null : text,
       notificationDetails: details,
       payload: RequestPayload.forRequest(pc.id, r).encode(),
     );
@@ -1004,6 +1111,14 @@ class CcTaskHandler extends TaskHandler {
         ticker: title,
         styleInformation: body.isEmpty ? null : fln.BigTextStyleInformation(body),
         actions: canReply ? <fln.AndroidNotificationAction>[replyAction()] : null,
+      ),
+      iOS: fln.DarwinNotificationDetails(
+        subtitle: pc.name,
+        threadIdentifier: ev.sessionId.isEmpty ? ev.project : ev.sessionId,
+        categoryIdentifier: canReply ? DarwinCategory.reply : null,
+        // Like the low-importance Android channel: no sound, no banner.
+        interruptionLevel:
+            ev.kind == EventKind.sessionEnd ? fln.InterruptionLevel.passive : null,
       ),
     );
     await _notifs.show(

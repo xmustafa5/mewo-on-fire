@@ -154,6 +154,28 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                   ),
                 ),
               ],
+              if (Platform.isIOS) ...[
+                _header(context, 'Background'),
+                SwitchListTile(
+                  secondary: const Icon(Icons.all_inclusive),
+                  title: const Text('Stay connected in the background'),
+                  subtitle: const Text(
+                      'iOS pauses ccnotify shortly after you leave the app, and notifications '
+                      'stop until you open it again. Turn this on to keep it running: it plays '
+                      'silent audio in the background, which uses more battery.'),
+                  isThreeLine: true,
+                  value: s.keepAlive,
+                  onChanged: (v) => state.updateSettings(s.copyWith(keepAlive: v)),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                  child: Text(
+                    'Swiping ccnotify away in the app switcher stops it either way. '
+                    'Events you missed are listed in History when you open the app again.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
               _header(context, 'About'),
               const ListTile(
                 leading: Icon(Icons.lock_outline),

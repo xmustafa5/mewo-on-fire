@@ -106,6 +106,13 @@ class PcLink {
   /// listed requests not re-sent by then were resolved while disconnected.
   static const Duration _requestSyncQuiet = Duration(seconds: 5);
 
+  /// WebSocket ping interval. dart:io closes the socket when a pong does not
+  /// arrive within the same interval.
+  static const Duration _pingInterval = Duration(seconds: 25);
+
+  /// Ping interval while [probe] checks the connection.
+  static const Duration _probeInterval = Duration(seconds: 2);
+
   String _state = PcStatus.connecting;
   String get state => _state;
 
@@ -121,6 +128,7 @@ class PcLink {
   Completer<void>? _wake;
   Duration _backoff = _minBackoff;
   int _failStreak = 0;
+  Timer? _probeTimer;
   final Random _rand = Random();
 
   void start() {
@@ -145,6 +153,20 @@ class PcLink {
     if (_stopped) return;
     _backoff = _minBackoff;
     _wakeUp();
+  }
+
+  /// Checks that a `connected` link is still alive: the socket can die
+  /// unnoticed while the app is suspended (iOS) or the phone dozes. Pings
+  /// right away instead of at the next regular ping; without a pong the
+  /// socket is closed and the loop reconnects.
+  void probe() {
+    final ws = _ws;
+    if (_stopped || ws == null || _state != PcStatus.connected) return;
+    ws.pingInterval = _probeInterval;
+    _probeTimer?.cancel();
+    _probeTimer = Timer(_probeInterval * 3, () {
+      if (identical(_ws, ws)) ws.pingInterval = _pingInterval;
+    });
   }
 
   void _wakeUp() {
@@ -281,7 +303,7 @@ class PcLink {
       return _Outcome.failed;
     }
     _ws = ws;
-    ws.pingInterval = const Duration(seconds: 25);
+    ws.pingInterval = _pingInterval;
 
     var since = await _loadSince();
     var helloLastId = 0;
@@ -405,6 +427,7 @@ class PcLink {
     } finally {
       helloTimer.cancel();
       syncTimer?.cancel();
+      _probeTimer?.cancel();
       if (identical(_ws, ws)) _ws = null;
       _host = null;
       _closeQuietly(ws);

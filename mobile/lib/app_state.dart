@@ -7,6 +7,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' as fln;
 
 import 'background.dart';
+import 'ios_background.dart';
 import 'models.dart';
 import 'requests.dart';
 import 'sessions.dart';
@@ -95,7 +96,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> init() async {
     if (_initStarted) return;
     _initStarted = true;
-    FlutterForegroundTask.addTaskDataCallback(_onTaskData);
+    addTaskDataCallback(_onTaskData);
     WidgetsBinding.instance.addObserver(this);
     try {
       // Same callbacks as the task isolate (see CcTaskHandler._initNotifications).
@@ -134,6 +135,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     } else if (serviceRunning) {
       _send('status');
     }
+    _applyKeepAlive();
+  }
+
+  /// iOS: stay running in the background only while there is something to
+  /// stay connected to.
+  void _applyKeepAlive() {
+    unawaited(setIosKeepAlive(settings.keepAlive && serviceRunning && pcs.isNotEmpty));
   }
 
   /// Taps on a notification while the app runs (and the cold-start tap).
@@ -211,7 +219,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<bool> _isRunning() async {
     try {
-      return await FlutterForegroundTask.isRunningService;
+      return await isServiceRunning();
     } catch (_) {
       return false;
     }
@@ -219,7 +227,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   void _send(String cmd) {
     try {
-      FlutterForegroundTask.sendDataToTask(jsonEncode({'cmd': cmd}));
+      sendToTask(jsonEncode({'cmd': cmd}));
     } catch (e) {
       debugPrint('ccnotify: sendDataToTask($cmd) failed: $e');
     }
@@ -458,8 +466,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       return c.future;
     }
     try {
-      FlutterForegroundTask.sendDataToTask(
-          jsonEncode({'cmd': 'get_chat', 'pc_id': pcId, 'session_id': sessionId}));
+      sendToTask(jsonEncode({'cmd': 'get_chat', 'pc_id': pcId, 'session_id': sessionId}));
     } catch (_) {
       _finishChat(key, error: 'Could not reach the background service');
     }
@@ -493,7 +500,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final msg = sendCmd(pcId, sessionId, t, m.clientId);
     if (await _isRunning()) {
       try {
-        FlutterForegroundTask.sendDataToTask(jsonEncode(msg));
+        sendToTask(jsonEncode(msg));
         return;
       } catch (e) {
         debugPrint('ccnotify: sending message failed: $e');
@@ -532,7 +539,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     if (await _isRunning()) {
       try {
-        FlutterForegroundTask.sendDataToTask(jsonEncode(answerMessage(pcId, requestId, answer)));
+        sendToTask(jsonEncode(answerMessage(pcId, requestId, answer)));
         return;
       } catch (e) {
         debugPrint('ccnotify: sending answer failed: $e');
@@ -573,6 +580,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _userStopped = false;
     serviceRunning = await startForegroundService();
     notifyListeners();
+    _applyKeepAlive();
   }
 
   Future<void> stopService({bool byUser = false}) async {
@@ -583,6 +591,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     serviceRunning = await _isRunning();
     if (!serviceRunning) status = <String, String>{};
     notifyListeners();
+    _applyKeepAlive();
   }
 
   // ---- pcs (UI is the only writer) ----
@@ -594,6 +603,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     if (await _isRunning()) {
       _send('reload');
+      _applyKeepAlive();
     } else {
       await startService();
     }
@@ -610,6 +620,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     await Store.savePcs(pcs);
     status.remove(id);
     notifyListeners();
+    _applyKeepAlive();
     if (!await _isRunning()) return;
     _send('reload'); // task drops the link and its since_/hosts_ keys
     if (pcs.isEmpty) {
@@ -623,6 +634,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> updateSettings(AppSettings s) async {
     settings = s;
     notifyListeners();
+    _applyKeepAlive();
     await Store.saveSettings(s);
     _send('reload');
   }

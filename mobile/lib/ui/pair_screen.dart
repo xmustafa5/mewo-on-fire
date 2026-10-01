@@ -88,6 +88,11 @@ class _PairScreenState extends State<PairScreen> {
           autofocus: true,
           minLines: 3,
           maxLines: 6,
+          // iOS would turn the quotes into typographic ones and "id" into "I'd".
+          autocorrect: false,
+          enableSuggestions: false,
+          smartQuotesType: SmartQuotesType.disabled,
+          smartDashesType: SmartDashesType.disabled,
           decoration: const InputDecoration(
             hintText: '{"v":1,"id":"…","code":"…"}',
             helperText: 'The QR payload line printed by `ccnotify pair`.',
@@ -125,16 +130,20 @@ class _PairScreenState extends State<PairScreen> {
                 MobileScanner(
                   controller: _controller,
                   onDetect: _onDetect,
-                  errorBuilder: (context, error) => Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        error.errorCode == MobileScannerErrorCode.permissionDenied
-                            ? 'Camera permission denied. Allow camera access in system settings, '
-                                'or use "Paste code" below.'
-                            : 'Camera unavailable (${error.errorCode.name}). Use "Paste code" below.',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white),
+                  // Black like the camera preview it replaces (the text is white).
+                  errorBuilder: (context, error) => ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          error.errorCode == MobileScannerErrorCode.permissionDenied
+                              ? 'Camera permission denied. Allow camera access in system settings, '
+                                  'or use "Paste code" below.'
+                              : 'Camera unavailable (${error.errorCode.name}). Use "Paste code" below.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white),
+                        ),
                       ),
                     ),
                   ),

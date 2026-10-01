@@ -37,6 +37,12 @@ Future<String> deviceName() async {
   return 'Phone';
 }
 
+/// iOS asks once whether the app may use the local network; when that was
+/// declined, every connection to the PC fails.
+String get _localNetworkHint => Platform.isIOS
+    ? ' On the iPhone, also check Settings → Privacy & Security → Local Network → ccnotify.'
+    : '';
+
 String _errorText(Object? code) {
   switch (code) {
     case 'invalid_code':
@@ -99,11 +105,11 @@ Future<PairedPc> pairWithPc(QrPayload qr) async {
           'Run `ccnotify pair` again and scan the new code.';
     } on TimeoutException {
       lastError = 'Timed out talking to $host:${qr.port}. Make sure the phone is on the '
-          'same network as the PC and the ccnotify daemon is running.';
+          'same network as the PC and the ccnotify daemon is running.$_localNetworkHint';
     } on SocketException catch (e) {
       final reason = e.osError?.message ?? e.message;
       lastError = "Can't reach $host:${qr.port} ($reason). Make sure the phone is on the "
-          'same network as the PC and the ccnotify daemon is running.';
+          'same network as the PC and the ccnotify daemon is running.$_localNetworkHint';
     } on WebSocketException catch (e) {
       lastError = 'Connection to the PC failed: ${e.message}';
     } on StateError {

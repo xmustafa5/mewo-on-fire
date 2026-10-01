@@ -476,6 +476,7 @@ class AppSettings {
     this.notifyNeedsInput = true,
     this.notifySessionEnd = true,
     this.answerFromPhone = true,
+    this.keepAlive = false,
     this.mutedProjects = const <String>[],
   });
 
@@ -485,6 +486,9 @@ class AppSettings {
 
   /// Show an action notification (Allow / Deny / options…) for requests.
   final bool answerFromPhone;
+
+  /// iOS only: keep the app (and its connections) running in the background.
+  final bool keepAlive;
   final List<String> mutedProjects;
 
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
@@ -492,6 +496,7 @@ class AppSettings {
         notifyNeedsInput: j['notify_needs_input'] is bool ? j['notify_needs_input'] as bool : true,
         notifySessionEnd: j['notify_session_end'] is bool ? j['notify_session_end'] as bool : true,
         answerFromPhone: j['answer_from_phone'] is bool ? j['answer_from_phone'] as bool : true,
+        keepAlive: j['keep_alive'] is bool ? j['keep_alive'] as bool : false,
         mutedProjects: _asStringList(j['muted_projects']),
       );
 
@@ -500,6 +505,7 @@ class AppSettings {
         'notify_needs_input': notifyNeedsInput,
         'notify_session_end': notifySessionEnd,
         'answer_from_phone': answerFromPhone,
+        'keep_alive': keepAlive,
         'muted_projects': mutedProjects,
       };
 
@@ -508,6 +514,7 @@ class AppSettings {
     bool? notifyNeedsInput,
     bool? notifySessionEnd,
     bool? answerFromPhone,
+    bool? keepAlive,
     List<String>? mutedProjects,
   }) =>
       AppSettings(
@@ -515,6 +522,7 @@ class AppSettings {
         notifyNeedsInput: notifyNeedsInput ?? this.notifyNeedsInput,
         notifySessionEnd: notifySessionEnd ?? this.notifySessionEnd,
         answerFromPhone: answerFromPhone ?? this.answerFromPhone,
+        keepAlive: keepAlive ?? this.keepAlive,
         mutedProjects: mutedProjects ?? this.mutedProjects,
       );
 
