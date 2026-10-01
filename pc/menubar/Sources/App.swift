@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 /// Menu bar companion of the ccnotify daemon: service status, pairing QR
@@ -6,6 +7,19 @@ import SwiftUI
 @main
 struct CcnotifyMenuBarApp: App {
   @StateObject private var model = AppModel()
+
+  init() {
+    Self.openAtLoginOnFirstLaunch()
+  }
+
+  /// A fresh install opens at login; after that the "Open at Login" toggle
+  /// decides.
+  private static func openAtLoginOnFirstLaunch() {
+    let key = "openAtLoginDefaultApplied"
+    guard !UserDefaults.standard.bool(forKey: key) else { return }
+    UserDefaults.standard.set(true, forKey: key)
+    try? SMAppService.mainApp.register()
+  }
 
   var body: some Scene {
     MenuBarExtra {

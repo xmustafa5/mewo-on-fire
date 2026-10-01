@@ -638,11 +638,136 @@ fn tray_binary() -> PathBuf {
     }
 }
 
-/// Add "ccnotify" to the desktop's application menu (`ccnotify install`).
-pub fn install_launcher(bin: &Path) -> Result<()> {
+/// `ccnotify install`: add "ccnotify" to the desktop's application menu,
+/// start the icon at login (on the first install only, so unticking "Start
+/// at Login" survives updates) and start it now, restarting a running one
+/// when the binary was replaced.
+pub fn install(bin: &Path, binary_replaced: bool) {
     let path = paths::launcher_entry();
-    paths::write_atomic(&path, desktop_entry(bin).as_bytes(), 0o644)
-        .with_context(|| format!("writing {}", path.display()))
+    let first_install = !path.exists();
+    if let Err(e) = paths::write_atomic(&path, desktop_entry(bin).as_bytes(), 0o644) {
+        println!("Tray:     skipped (writing {}: {e})", path.display());
+        return;
+    }
+    println!("Tray:     \"ccnotify\" added to the application menu");
+    if first_install {
+        match set_autostart(true) {
+            Ok(()) => println!(
+                "Tray:     starts at login (untick \"Start at Login\" in its menu to stop that)"
+            ),
+            Err(e) => println!("Tray:     could not turn on start at login ({e:#})"),
+        }
+    }
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+        if autostart_enabled() {
+            println!("Tray:     no desktop session here; the icon starts at your next desktop login");
+        } else {
+            println!("Tray:     no desktop session here; run `ccnotify tray` from the desktop");
+        }
+        return;
+    }
+    let running = running_trays();
+    if !running.is_empty() {
+        if !binary_replaced {
+            println!("Tray:     already running");
+            return;
+        }
+        stop_trays(&running);
+    }
+    match start_tray(bin) {
+        Ok(()) => println!("Tray:     started; look for the bell in the top bar / system tray"),
+        Err(e) => println!("Tray:     could not start it ({e}); run `ccnotify tray`"),
+    }
+    if !tray_host_available() {
+        println!("Tray:     your desktop shows no tray icons. On GNOME, install the");
+        println!("          \"AppIndicator and KStatusNotifierItem Support\" extension and log in again.");
+    }
+}
+
+/// This user's running `ccnotify tray` processes.
+fn running_trays() -> Vec<i32> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: getuid() has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid: i32 = entry.file_name().to_str()?.parse().ok()?;
+            if entry.metadata().ok()?.uid() != uid {
+                return None;
+            }
+            let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
+            let mut args = cmdline.split(|b| *b == 0);
+            let exe = args.next()?.rsplit(|b| *b == b'/').next()?;
+            (exe == b"ccnotify" && args.next()? == b"tray").then_some(pid)
+        })
+        .collect()
+}
+
+/// Stop a running tray icon (`ccnotify uninstall`). False if none was running.
+pub fn stop() -> bool {
+    let running = running_trays();
+    stop_trays(&running);
+    !running.is_empty()
+}
+
+/// SIGTERM the tray processes and wait up to 3 s for them to exit.
+fn stop_trays(pids: &[i32]) {
+    for &pid in pids {
+        // SAFETY: kill() has no memory-safety preconditions.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+    }
+    for _ in 0..30 {
+        if pids
+            .iter()
+            .all(|pid| !Path::new(&format!("/proc/{pid}")).exists())
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Start `<bin> tray` in a session of its own, so it outlives the terminal.
+fn start_tray(bin: &Path) -> std::result::Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new(bin);
+    cmd.arg("tray")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setsid() is async-signal-safe and touches no memory.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    // It exits at once when it cannot start (e.g. another one holds the lock).
+    std::thread::sleep(Duration::from_millis(500));
+    match child.try_wait() {
+        Ok(Some(status)) => Err(format!("it exited with {status}")),
+        _ => Ok(()),
+    }
+}
+
+/// False when the session bus has no StatusNotifierWatcher, i.e. nothing
+/// shows tray icons (GNOME without the AppIndicator extension). True when
+/// that cannot be checked.
+fn tray_host_available() -> bool {
+    Command::new("busctl")
+        .args(["--user", "status", "org.kde.StatusNotifierWatcher"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(true)
 }
 
 /// Remove the application menu and start-at-login entries

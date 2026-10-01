@@ -49,18 +49,86 @@ pub fn install() -> Result<()> {
     install_service(replaced)?;
     install_hooks(&bin)?;
     #[cfg(target_os = "linux")]
-    match crate::tray::install_launcher(&bin) {
-        Ok(()) => println!(
-            "Tray:     \"ccnotify\" added to the application menu (or run `ccnotify tray`)"
-        ),
-        Err(e) => println!("Tray:     skipped ({e:#})"),
-    }
+    crate::tray::install(&bin, replaced);
+    #[cfg(target_os = "macos")]
+    install_menubar_app();
 
     println!();
     print_firewall_hint(config::configured_port());
     println!();
-    println!("Next: run `ccnotify pair`");
+    println!("Next: pair a phone with \"Pair a Phone…\" in the bell's menu, or run `ccnotify pair`");
     Ok(())
+}
+
+/// `~/Applications/ccnotify.app`
+#[cfg(target_os = "macos")]
+fn menubar_app() -> PathBuf {
+    paths::home().join("Applications").join("ccnotify.app")
+}
+
+/// A release ships the menu bar app next to the binary (`ccnotify.app`
+/// beside `ccnotify`): copy it to ~/Applications, replacing a running copy,
+/// and open it. On its first launch it turns on "Open at Login" itself.
+#[cfg(target_os = "macos")]
+fn install_menubar_app() {
+    let dst = menubar_app();
+    let src = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("ccnotify.app")))
+        .filter(|src| src.is_dir());
+    let Some(src) = src else {
+        if !dst.exists() {
+            println!("Menu bar: not in this build; install it with pc/menubar/install.sh");
+        }
+        return;
+    };
+
+    let _ = Command::new("/usr/bin/pkill")
+        .args(["-x", "ccnotify-menubar"])
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let _ = fs::remove_dir_all(&dst);
+    if let Some(dir) = dst.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    // ditto keeps the bundle's code signature intact.
+    match Command::new("/usr/bin/ditto").arg(&src).arg(&dst).status() {
+        Ok(status) if status.success() => {}
+        _ => {
+            println!("Menu bar: could not copy {} to {}", src.display(), dst.display());
+            return;
+        }
+    }
+    // A browser download marks the files as quarantined; Gatekeeper would
+    // then refuse the unnotarized app.
+    let _ = Command::new("/usr/bin/xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(&dst)
+        .status();
+    println!("Menu bar: installed {}", dst.display());
+    match Command::new("/usr/bin/open").arg(&dst).status() {
+        Ok(status) if status.success() => {
+            println!("Menu bar: started; look for the bell in the menu bar (it opens at login)")
+        }
+        _ => println!("Menu bar: open it from ~/Applications"),
+    }
+}
+
+/// Quit and remove ~/Applications/ccnotify.app (macOS drops its login item
+/// with it).
+#[cfg(target_os = "macos")]
+fn uninstall_menubar_app() {
+    let app = menubar_app();
+    if !app.exists() {
+        return;
+    }
+    let _ = Command::new("/usr/bin/pkill")
+        .args(["-x", "ccnotify-menubar"])
+        .status();
+    match fs::remove_dir_all(&app) {
+        Ok(()) => println!("Menu bar: removed {}", app.display()),
+        Err(e) => println!("Menu bar: could not remove {} ({e})", app.display()),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -663,9 +731,16 @@ pub fn uninstall() -> Result<()> {
 
     uninstall_service()?;
     #[cfg(target_os = "linux")]
-    for path in crate::tray::remove_entries() {
-        println!("Tray:     removed {}", path.display());
+    {
+        for path in crate::tray::remove_entries() {
+            println!("Tray:     removed {}", path.display());
+        }
+        if crate::tray::stop() {
+            println!("Tray:     stopped the icon");
+        }
     }
+    #[cfg(target_os = "macos")]
+    uninstall_menubar_app();
 
     println!();
     println!("Kept (delete manually for a full removal):");

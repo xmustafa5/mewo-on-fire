@@ -17,4 +17,4 @@ codesign --force --sign - "$APP"
 
 open "$APP"
 echo "Installed $APP. Look for the bell in the menu bar."
-echo "To start it at login, turn on \"Open at Login\" in its ⋯ menu."
+echo "It opens at login; turn that off with \"Open at Login\" in its ⋯ menu."

@@ -17,6 +17,7 @@ Claude Code ──hook──▶ ccnotify (Rust; systemd user service / launchd a
 | [pc/](pc/) | Rust binary `ccnotify`: daemon, CLI and Claude Code hook. Runs on Linux and macOS. |
 | [pc/menubar/](pc/menubar/) | macOS menu bar app: service status, pairing QR code, phones and sessions. On Linux the same is built in: `ccnotify tray`. |
 | [mobile/](mobile/) | Flutter app for Android and iOS. On iOS, background delivery is opt-in (see [mobile/README.md](mobile/README.md#ios)). |
+| [web/](web/) | Next.js download site: landing page, `install.sh` and download links for the latest release. |
 | [PROTOCOL.md](PROTOCOL.md) | Wire format both sides follow. |
 
 ## Quick start
@@ -24,9 +25,20 @@ Claude Code ──hook──▶ ccnotify (Rust; systemd user service / launchd a
 **On each PC**
 
 ```bash
+curl -fsSL https://github.com/xmustafa5/mewo-on-fire/releases/latest/download/install.sh | sh
+```
+
+This installs the latest release (Linux x86_64 or macOS): the background
+service, the Claude Code hooks and a bell icon in the top bar / menu bar that
+starts at every login. Pair a phone from the bell's menu, or with
+`ccnotify pair`.
+
+To build from source instead:
+
+```bash
 cd pc
 cargo build --release
-./target/release/ccnotify install   # background service + Claude Code hooks
+./target/release/ccnotify install   # background service + Claude Code hooks + bell icon
 ccnotify pair                       # shows a QR code
 ```
 

@@ -7,6 +7,38 @@ permission prompts, questions and plan approvals from the phone, shows each
 session's chat on the phone and lets you continue a session from the phone.
 See `../PROTOCOL.md`.
 
+## Install a release
+
+On Linux (x86_64) or macOS, without building anything:
+
+```sh
+curl -fsSL https://github.com/xmustafa5/mewo-on-fire/releases/latest/download/install.sh | sh
+```
+
+It downloads the build for this computer and runs `ccnotify install`. The
+bell then shows in the top bar / system tray (Linux) or the menu bar (macOS)
+and starts at every login. Pair a phone from the bell's menu.
+
+On a Mac, prefer this command over downloading the archive in a browser: the
+builds are not notarized, so Gatekeeper refuses a binary that a browser
+downloaded until you run `xattr -dr com.apple.quarantine ccnotify ccnotify.app`.
+
+## Publish a release
+
+`.github/workflows/release.yml` builds a static Linux binary
+(`ccnotify-linux-x86_64.tar.gz`) and a universal macOS binary with the menu
+bar app (`ccnotify-macos.tar.gz`). Pushing a tag publishes them and
+`install.sh` as a GitHub release:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+`install.sh` downloads from public release URLs, so the repository (or a
+separate repository that holds the releases, see `CCNOTIFY_REPO` in
+`install.sh`) must be public.
+
 ## Build
 
 ```sh
@@ -96,14 +128,18 @@ waiting for an answer). Click it for:
 - the Claude Code sessions with their state; click one to read Claude's last reply
 - **⋯**: send a test notification, restart the service, open the log, open at login
 
+A release ships it next to the binary, and `ccnotify install` copies it to
+`~/Applications/ccnotify.app` and opens it. From source:
+
 ```sh
 ./menubar/install.sh
 ```
 
 builds it (needs Xcode or its command line tools, macOS 13 or later), installs
-it as `~/Applications/ccnotify.app` and opens it. It only talks to the daemon's
-local control socket; the daemon itself is still installed with
-`ccnotify install`.
+it as `~/Applications/ccnotify.app` and opens it. Either way it opens at login
+from its first launch on (turn that off with **Open at Login** in its **⋯**
+menu). It only talks to the daemon's local control socket; the daemon itself
+is still installed with `ccnotify install`.
 
 ## Tray icon (Linux)
 
@@ -118,8 +154,11 @@ a prompt is waiting for an answer). Its menu has:
 - the Claude Code sessions with their state; open one to read Claude's last reply
 - **Send Test Notification**, **Restart Service**, **Start at Login**, **Quit**
 
-`ccnotify install` adds "ccnotify" to the desktop's application menu; start it
-from there or run `ccnotify tray`, then tick **Start at Login**.
+`ccnotify install` adds "ccnotify" to the desktop's application menu and
+starts the icon. A first install also turns on **Start at Login**; untick it to
+keep the icon from starting at login (updates keep that choice). Updating
+restarts a running icon with the new binary. Without a desktop session (over
+SSH) the icon is not started; run `ccnotify tray` from the desktop.
 
 The icon uses the StatusNotifierItem protocol: KDE Plasma, Xfce, Cinnamon,
 MATE, LXQt and most panels show it out of the box; GNOME needs the
@@ -186,7 +225,9 @@ daemon and pair again.
 ccnotify uninstall
 ```
 
-Removes only the ccnotify hook entries, the systemd service / launchd agent and,
-on Linux, the tray icon's application-menu and start-at-login entries. Config,
+Removes only the ccnotify hook entries, the systemd service / launchd agent,
+the tray icon (Linux: stops it and removes its application-menu and
+start-at-login entries) and the menu bar app (macOS:
+`~/Applications/ccnotify.app`). Config,
 pairings and history are kept; delete `~/.config/ccnotify`,
 `~/.local/state/ccnotify` and `~/.local/bin/ccnotify` for a full removal.

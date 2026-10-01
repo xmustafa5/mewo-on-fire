@@ -1,0 +1,125 @@
+# Builds ccnotify for Linux (static x86_64), macOS (universal binary plus
+# the menu bar app) and Android (APK). Pushing a tag like v0.1.0 publishes
+# them as a GitHub release together with install.sh; running it by hand only
+# builds them. The download site (web/) serves the latest release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Build
+        working-directory: pc
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/ccnotify-linux-x86_64.tar.gz -C pc/target/x86_64-unknown-linux-musl/release ccnotify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/ccnotify-linux-x86_64.tar.gz
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Build ccnotify (Apple silicon + Intel)
+        working-directory: pc
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p ../dist/mac
+          lipo -create -output ../dist/mac/ccnotify \
+            target/aarch64-apple-darwin/release/ccnotify \
+            target/x86_64-apple-darwin/release/ccnotify
+          codesign --force --sign - ../dist/mac/ccnotify
+      - name: Build the menu bar app (Apple silicon + Intel)
+        working-directory: pc/menubar
+        run: |
+          swift build -c release --arch arm64 --arch x86_64
+          BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
+          APP=../../dist/mac/ccnotify.app
+          mkdir -p "$APP/Contents/MacOS"
+          cp "$BIN/ccnotify-menubar" "$APP/Contents/MacOS/ccnotify-menubar"
+          cp Info.plist "$APP/Contents/Info.plist"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            plutil -replace CFBundleShortVersionString -string "${GITHUB_REF_NAME#v}" "$APP/Contents/Info.plist"
+          fi
+          codesign --force --sign - "$APP"
+      - name: Package
+        run: tar -czf dist/ccnotify-macos.tar.gz -C dist/mac ccnotify ccnotify.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/ccnotify-macos.tar.gz
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      # The release build is signed with the debug key. Every release must use
+      # the same key, or Android refuses to update the installed app.
+      - name: Restore the signing key
+        env:
+          ANDROID_DEBUG_KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          if [ -n "$ANDROID_DEBUG_KEYSTORE" ]; then
+            mkdir -p ~/.android
+            echo "$ANDROID_DEBUG_KEYSTORE" | base64 -d > ~/.android/debug.keystore
+          else
+            echo "::warning::ANDROID_DEBUG_KEYSTORE is not set: this APK is signed with a throwaway key and cannot update an installed app."
+          fi
+      - name: Build
+        working-directory: mobile
+        run: flutter build apk --release
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp mobile/build/app/outputs/flutter-apk/app-release.apk dist/ccnotify-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/ccnotify-android.apk
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [linux, macos, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.apk install.sh \
+            --title "ccnotify $GITHUB_REF_NAME" --generate-notes
