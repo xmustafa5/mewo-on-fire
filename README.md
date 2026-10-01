@@ -1,6 +1,6 @@
 # ccnotify — Claude Code → phone notifications over your Wi-Fi
 
-Get a phone notification when a Claude Code session on any of your Linux PCs:
+Get a phone notification when a Claude Code session on any of your Linux PCs or Macs:
 
 - ✅ **finishes a reply** (`Stop` hook)
 - ⏳ **needs your input**: permission prompt, question, idle (`Notification` hook)
@@ -9,13 +9,14 @@ Get a phone notification when a Claude Code session on any of your Linux PCs:
 Everything stays on your local network. There is no cloud and no account.
 
 ```
-Claude Code ──hook──▶ ccnotify (Rust, systemd user service) ──wss + pinned TLS──▶ ccnotify app (Flutter, Android)
+Claude Code ──hook──▶ ccnotify (Rust; systemd user service / launchd agent) ──wss + pinned TLS──▶ ccnotify app (Flutter; Android, iOS)
 ```
 
 | Folder | What |
 |---|---|
-| [pc/](pc/) | Rust binary `ccnotify`: daemon, CLI and Claude Code hook. Runs on any Linux. |
-| [mobile/](mobile/) | Flutter app. Android now; iOS only while the app is open. |
+| [pc/](pc/) | Rust binary `ccnotify`: daemon, CLI and Claude Code hook. Runs on Linux and macOS. |
+| [pc/menubar/](pc/menubar/) | macOS menu bar app: service status, pairing QR code, phones and sessions. On Linux the same is built in: `ccnotify tray`. |
+| [mobile/](mobile/) | Flutter app for Android and iOS. On iOS, background delivery is opt-in (see [mobile/README.md](mobile/README.md#ios)). |
 | [PROTOCOL.md](PROTOCOL.md) | Wire format both sides follow. |
 
 ## Quick start
@@ -25,25 +26,30 @@ Claude Code ──hook──▶ ccnotify (Rust, systemd user service) ──wss 
 ```bash
 cd pc
 cargo build --release
-./target/release/ccnotify install   # systemd user service + Claude Code hooks
+./target/release/ccnotify install   # background service + Claude Code hooks
 ccnotify pair                       # shows a QR code
 ```
+
+`install` sets up a systemd user service on Linux and a launchd agent on macOS.
 
 If a firewall is on, open the port:
 
 - ufw: `sudo ufw allow 47821/tcp`
 - firewalld: `sudo firewall-cmd --permanent --add-port=47821/tcp --add-service=mdns && sudo firewall-cmd --reload`
+- macOS: allow incoming connections for `~/.local/bin/ccnotify` (see [pc/README.md](pc/README.md#firewall))
 
 **On the phone**
 
 1. `cd mobile && flutter run --release`, or build an APK with `flutter build apk --release`.
-2. Allow notifications and "ignore battery optimization".
+   For an iPhone, see [mobile/README.md](mobile/README.md#ios).
+2. Allow notifications and, on Android, "ignore battery optimization".
 3. Tap **Pair PC** and scan the QR code.
 
 Test it with `ccnotify test`.
 
 ## Notes
 
+- The hooks live in `~/.claude/settings.json`, so they cover Claude Code in a terminal, in the IDE extensions and in the Code tab of the Claude desktop app. Sessions that the desktop app runs elsewhere (cloud sessions, Cowork) do not run on your machine and are not covered.
 - Your existing hooks, including the desktop popup script, are kept. `ccnotify install` only adds its own entries and backs up `~/.claude/settings.json` to `settings.json.bak-ccnotify` first.
 - The phone and PC must be on the same network. Guest Wi-Fi and routers with "AP/client isolation" block the connection.
 - Xiaomi, Samsung and other phones that kill background apps need extra settings. See https://dontkillmyapp.com.

@@ -17,6 +17,8 @@ mod server;
 mod sessions;
 mod store;
 mod transcript;
+#[cfg(target_os = "linux")]
+mod tray;
 
 const HELP: &str = "\
 ccnotify - Claude Code notifications on your phone (LAN only)
@@ -24,7 +26,8 @@ ccnotify - Claude Code notifications on your phone (LAN only)
 Usage: ccnotify <command>
 
 Commands:
-  install        Install binary to ~/.local/bin, systemd user service and Claude Code hooks
+  install        Install binary to ~/.local/bin, the background service (systemd user
+                 unit on Linux, launchd agent on macOS) and Claude Code hooks
   pair           Show a QR code to pair a phone (waits until paired)
   devices        List paired phones
   revoke <id>    Unpair a phone
@@ -33,13 +36,25 @@ Commands:
   chat <session> Show the last 20 chat items of a session (id prefix from `sessions`)
   test           Send a test notification
   test-ask       Send a test permission request and print the phone's answer
-  uninstall      Remove hooks and the systemd service (keeps config and history)
-  daemon         Run the daemon in the foreground (normally started by systemd)
+  tray           Show a system tray icon: status, pairing QR code, phones, sessions
+                 (Linux; on macOS use the menu bar app in menubar/)
+  uninstall      Remove hooks and the background service (keeps config and history)
+  daemon         Run the daemon in the foreground (normally started by systemd / launchd)
   hook           Claude Code hook entry point (reads hook JSON on stdin)
   ask            Claude Code PermissionRequest hook (answer prompts from the phone)
   listen         Claude Code Stop hook (continue the session from the phone)
   help           Show this help
 ";
+
+#[cfg(target_os = "linux")]
+fn tray() -> anyhow::Result<()> {
+    tray::run()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn tray() -> anyhow::Result<()> {
+    anyhow::bail!("`ccnotify tray` is for Linux; on macOS use the menu bar app (pc/menubar/install.sh)")
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -77,6 +92,7 @@ fn main() {
         },
         "test" => cli::test(),
         "test-ask" => cli::test_ask(),
+        "tray" => tray(),
         "install" => install::install(),
         "uninstall" => install::uninstall(),
         "help" | "-h" | "--help" => {

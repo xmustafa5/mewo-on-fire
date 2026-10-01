@@ -1,8 +1,8 @@
 # ccnotify protocol (v1)
 
 Two parts:
-- `pc/` — Rust binary `ccnotify` (daemon + CLI + Claude Code hook) for any Linux.
-- `mobile/` — Flutter Android app that pairs with one or more PCs and shows notifications.
+- `pc/` — Rust binary `ccnotify` (daemon + CLI + Claude Code hook) for Linux and macOS.
+- `mobile/` — Flutter app (Android, iOS) that pairs with one or more PCs and shows notifications.
 
 All traffic is LAN only. The phone connects to the PC.
 
@@ -14,7 +14,10 @@ All traffic is LAN only. The phone connects to the PC.
 | `~/.config/ccnotify/cert.der`, `key.der` | self-signed cert + PKCS#8 key (DER), generated on first run |
 | `~/.config/ccnotify/devices.json` | `[{"id": "<8 hex>", "name": "Pixel 8", "token": "<64 hex>", "created": <ms>}]` (mode 600) |
 | `~/.local/state/ccnotify/events.json` | `{"next_id": N, "events": [Event, ...]}` — last 500 events |
-| `$XDG_RUNTIME_DIR/ccnotify.sock` | local control socket (fallback `/tmp/ccnotify-$USER.sock`) |
+| `$XDG_RUNTIME_DIR/ccnotify.sock` | local control socket on Linux (fallback `/tmp/ccnotify-$USER.sock`) |
+| `~/.local/state/ccnotify/ccnotify.sock` | local control socket on macOS (fallback `/tmp/ccnotify-$USER.sock` if the path is longer than 103 bytes). It does not depend on the environment: the daemon (launchd), the CLI (terminal) and the hooks (terminal or the Claude desktop app) run with different ones. |
+
+`name` defaults to the hostname; on macOS to the computer name (`scutil --get ComputerName`).
 
 Fingerprint `fp` = lowercase hex SHA-256 of the cert DER bytes.
 
@@ -62,7 +65,7 @@ Hook stdin fields used: `hook_event_name`, `session_id`, `cwd`, `last_assistant_
 {"v":1,"id":"<pc_id>","name":"<hostname>","hosts":["192.168.68.133"],"port":47821,"fp":"<sha256 hex>","code":"<pairing code>"}
 ```
 
-- `hosts`: IPv4 of up, non-loopback interfaces, excluding names starting with `docker`, `br-`, `veth`, `virbr`, `lxc`, `tun`, `tailscale`, `wg`.
+- `hosts`: IPv4 of up, non-loopback interfaces, excluding names starting with `docker`, `br-`, `veth`, `virbr`, `lxc`, `tun`, `tailscale`, `wg`. On macOS also `utun`, `awdl`, `llw`, `anpi`, `vmnet`; addresses of `bridge*` interfaces (VM networks, Internet Sharing) are listed last.
 - `code`: 16 random hex chars, single use, valid 5 minutes.
 
 ## Phone ↔ PC transport
@@ -202,6 +205,7 @@ Multi-select answers join labels with ", ". A typed custom answer is sent as the
 - Tapping the notification body opens the app on the answer screen for that request (full detail, option list with multi-select, "Other…" free text, deny/reject with an optional message).
 - The app shows pending requests at the top of the PCs tab ("Waiting for you").
 - On `resolved`: cancel the notification and drop the request from the pending list.
+- iOS: the buttons of a notification come from its category (a fixed set registered at start): `ccn_permission` (Allow, Deny), `ccn_permission_always` (Allow, Always allow, Deny), `ccn_plan` (Approve, Reject). Allow / Always allow / Approve need the phone unlocked. A question has no buttons: its option labels differ per request, so it is answered in the app. Notifications cannot be `ongoing`; they stay in Notification Center until resolved.
 
 ---
 
@@ -250,7 +254,7 @@ Kept in memory and persisted to `~/.local/state/ccnotify/sessions.json` (last 50
 ```
 
 - `state`: `working` (UserPromptSubmit, or a phone message was delivered) · `idle` (Stop) · `waiting` (needs_input event or a pending v1.1 request for the session) · `ended` (SessionEnd).
-- `title`: last `ai-title` entry's `aiTitle` in the transcript, else the project name.
+- `title`: last `custom-title` entry's `customTitle` in the transcript (a renamed session; the Claude desktop app titles its sessions this way), else the last `ai-title` entry's `aiTitle`, else the project name.
 - `listening`: a `listen` hook is currently registered.
 - `read_only`: `state == "working"` AND `effort` is `xhigh` or `max` AND agents are running (see below).
 - Any change → push `{"type":"session","session":{Session}}` to phones.
@@ -259,7 +263,7 @@ Kept in memory and persisted to `~/.local/state/ccnotify/sessions.json` (last 50
 
 The daemon reads the last 4 MB of `transcript_path` (JSONL; drop the first partial line) on demand.
 
-- Skip lines with `isSidechain: true` or `isMeta: true`, and every `type` other than `user` / `assistant` / `ai-title`.
+- Skip lines with `isSidechain: true` or `isMeta: true`, and every `type` other than `user` / `assistant` / `ai-title` / `custom-title`.
 - `user`, content string or `text` blocks → strip `<system-reminder>…</system-reminder>`, `<ide_selection>…</ide_selection>`, `<ide_opened_file>…</ide_opened_file>` and `<command-…>…</command-…>` wrappers; non-empty remainder → item role `user`. `image` blocks → "[image]". `tool_result` blocks → skipped.
 - `assistant`: `text` blocks → role `assistant`; `thinking` → skipped; `tool_use` → role `tool` with a one-liner:
   Bash → first line of `command` · Edit/Write/MultiEdit/NotebookEdit/Read → file path · Grep/Glob → `pattern` ·
@@ -296,3 +300,8 @@ ChatItem: `{"id": "<line uuid or generated>", "ts": <ms>, "role": "user|assistan
 - **Chat screen**: items as bubbles — `user` and `phone` right-aligned (phone ones marked "📱 from phone"), `assistant` left with Markdown, `tool` as compact grey one-liners (grouped consecutive ones collapsible). Pull to refresh; auto-refresh on `session` updates and `stop` events for this session. Bottom input: disabled with the reason when `read_only` or `ended`; otherwise send → show the `send_result` status on the bubble (Delivered / Queued / Rejected + reason).
 - Tapping a `stop` / `needs_input` / `session_end` notification (or a history item with `session_id`) opens that session's chat.
 - `stop` notifications get a **Reply** action with inline text input (RemoteInput) → handled in the background like v1.1 answers → `send`; the notification is updated to "Sent: <text>" / "Queued" / the rejection reason.
+- iOS: Reply is the text-input action of category `ccn_reply` (needs the phone unlocked). iOS removes the notification when the reply is sent, so the result is posted as a new notification: quietly for "Sent" / "Queued", with an alert for a rejection.
+
+## iOS: connection lifetime
+
+iOS has no foreground service. The connections live in the app process: always while the app is open, for about 25 s after it goes to the background (and again when a notification button wakes it), and for as long as the app stays in the background when the user turns on **Stay connected in the background** (silent audio with the `audio` background mode). On resume the app pings every connected PC and reconnects the ones that do not answer; events missed in between are replayed through `since` as on Android.

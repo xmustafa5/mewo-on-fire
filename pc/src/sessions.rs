@@ -206,7 +206,7 @@ impl Entry {
     fn apply_meta(&mut self, meta: &Meta) {
         if !meta.cwd.is_empty() && meta.cwd != self.session.cwd {
             let project = hook::project_name(&meta.cwd);
-            // The title falls back to the project name until an ai-title is known.
+            // The title falls back to the project name until the transcript has one.
             if self.session.title.is_empty() || self.session.title == self.session.project {
                 self.session.title = project.clone();
             }

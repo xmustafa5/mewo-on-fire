@@ -57,12 +57,35 @@ pub fn random_hex(nbytes: usize) -> String {
     hex::encode(buf)
 }
 
+#[cfg(not(target_os = "macos"))]
 pub fn hostname() -> String {
     fs::read_to_string("/proc/sys/kernel/hostname")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "linux-pc".to_string())
+}
+
+/// macOS: the computer name from System Settings ("Sam's MacBook Pro"), else
+/// the Bonjour host name, else the kernel host name without its domain.
+#[cfg(target_os = "macos")]
+pub fn hostname() -> String {
+    fn output_of(program: &str, args: &[&str]) -> Option<String> {
+        let out = std::process::Command::new(program).args(args).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+    output_of("/usr/sbin/scutil", &["--get", "ComputerName"])
+        .or_else(|| output_of("/usr/sbin/scutil", &["--get", "LocalHostName"]))
+        .or_else(|| output_of("/bin/hostname", &["-s"]))
+        .unwrap_or_else(|| "mac".to_string())
 }
 
 /// Lowercase hex SHA-256 of the certificate DER bytes.

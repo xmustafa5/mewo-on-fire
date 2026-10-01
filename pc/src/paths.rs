@@ -43,16 +43,37 @@ pub fn sessions_file() -> PathBuf {
     state_dir().join("sessions.json")
 }
 
+/// `/tmp/ccnotify-$USER.sock`
+fn tmp_socket_path() -> PathBuf {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "user".to_string());
+    PathBuf::from(format!("/tmp/ccnotify-{user}.sock"))
+}
+
 /// `$XDG_RUNTIME_DIR/ccnotify.sock`, fallback `/tmp/ccnotify-$USER.sock`.
+#[cfg(not(target_os = "macos"))]
 pub fn socket_path() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("ccnotify.sock"),
-        _ => {
-            let user = std::env::var("USER")
-                .or_else(|_| std::env::var("LOGNAME"))
-                .unwrap_or_else(|_| "user".to_string());
-            PathBuf::from(format!("/tmp/ccnotify-{user}.sock"))
-        }
+        _ => tmp_socket_path(),
+    }
+}
+
+/// macOS: `~/.local/state/ccnotify/ccnotify.sock`. The daemon (launchd), the
+/// CLI (a terminal) and the hooks (Claude Code in a terminal, or the Claude
+/// desktop app) all run with different environments, so the path depends on
+/// the home directory only. Fallback `/tmp/ccnotify-$USER.sock` when the home
+/// path does not fit a socket address.
+#[cfg(target_os = "macos")]
+pub fn socket_path() -> PathBuf {
+    /// `sockaddr_un.sun_path` holds 104 bytes including the NUL.
+    const MAX_SOCKET_PATH_BYTES: usize = 103;
+    let path = state_dir().join("ccnotify.sock");
+    if path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES {
+        path
+    } else {
+        tmp_socket_path()
     }
 }
 
@@ -61,13 +82,53 @@ pub fn installed_bin() -> PathBuf {
     home().join(".local").join("bin").join("ccnotify")
 }
 
+/// launchd label of the daemon's LaunchAgent.
+#[cfg(target_os = "macos")]
+pub const LAUNCHD_LABEL: &str = "com.torchcorp.ccnotify";
+
+/// `~/Library/LaunchAgents/com.torchcorp.ccnotify.plist`
+#[cfg(target_os = "macos")]
+pub fn launch_agent() -> PathBuf {
+    home()
+        .join("Library")
+        .join("LaunchAgents")
+        .join(format!("{LAUNCHD_LABEL}.plist"))
+}
+
+/// `~/Library/Logs/ccnotify.log` (the daemon's output under launchd).
+#[cfg(target_os = "macos")]
+pub fn log_file() -> PathBuf {
+    home().join("Library").join("Logs").join("ccnotify.log")
+}
+
 /// `~/.config/systemd/user/ccnotify.service`
+#[cfg(not(target_os = "macos"))]
 pub fn systemd_unit() -> PathBuf {
     home()
         .join(".config")
         .join("systemd")
         .join("user")
         .join("ccnotify.service")
+}
+
+/// `~/.local/share/applications/ccnotify-tray.desktop`: the tray icon in the
+/// desktop's application menu.
+#[cfg(target_os = "linux")]
+pub fn launcher_entry() -> PathBuf {
+    home()
+        .join(".local")
+        .join("share")
+        .join("applications")
+        .join("ccnotify-tray.desktop")
+}
+
+/// `~/.config/autostart/ccnotify-tray.desktop`: starts the tray icon at login.
+#[cfg(target_os = "linux")]
+pub fn autostart_entry() -> PathBuf {
+    home()
+        .join(".config")
+        .join("autostart")
+        .join("ccnotify-tray.desktop")
 }
 
 /// `~/.claude/settings.json`

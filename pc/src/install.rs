@@ -1,5 +1,6 @@
-//! `ccnotify install` / `ccnotify uninstall`: binary, systemd user unit and
-//! Claude Code hooks in ~/.claude/settings.json.
+//! `ccnotify install` / `ccnotify uninstall`: binary, background service
+//! (systemd user unit on Linux, launchd LaunchAgent on macOS) and Claude Code
+//! hooks in ~/.claude/settings.json.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -25,6 +26,7 @@ const ASK_TIMEOUT_SECS: u64 = 86_400;
 const LISTEN_EVENT: &str = "Stop";
 const LISTEN_TIMEOUT_SECS: u64 = 86_400;
 
+#[cfg(not(target_os = "macos"))]
 const UNIT_FILE: &str = "[Unit]
 Description=ccnotify - Claude Code notifications to your phone over LAN
 
@@ -46,17 +48,39 @@ pub fn install() -> Result<()> {
     let (bin, replaced) = install_binary()?;
     install_service(replaced)?;
     install_hooks(&bin)?;
+    #[cfg(target_os = "linux")]
+    match crate::tray::install_launcher(&bin) {
+        Ok(()) => println!(
+            "Tray:     \"ccnotify\" added to the application menu (or run `ccnotify tray`)"
+        ),
+        Err(e) => println!("Tray:     skipped ({e:#})"),
+    }
 
-    let port = config::configured_port();
     println!();
+    print_firewall_hint(config::configured_port());
+    println!();
+    println!("Next: run `ccnotify pair`");
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn print_firewall_hint(port: u16) {
     println!("Firewall: if the phone cannot connect, allow the port:");
     println!("  ufw:        sudo ufw allow {port}/tcp");
     println!(
         "  firewalld:  sudo firewall-cmd --permanent --add-port={port}/tcp --add-service=mdns && sudo firewall-cmd --reload"
     );
-    println!();
-    println!("Next: run `ccnotify pair`");
-    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn print_firewall_hint(port: u16) {
+    let bin = paths::installed_bin();
+    let bin = bin.display();
+    println!("Firewall: if the phone cannot connect (TCP port {port}) and the macOS firewall is on");
+    println!("  (System Settings > Network > Firewall), allow incoming connections:");
+    println!("  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add {bin}");
+    println!("  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp {bin}");
+    println!("If macOS asks whether ccnotify may find devices on your local network, allow it.");
 }
 
 /// Copy the running executable to ~/.local/bin/ccnotify (skipped when it is
@@ -98,19 +122,37 @@ fn install_binary() -> Result<(PathBuf, bool)> {
     Ok((dst, true))
 }
 
+// ---------------------------------------------------------------------------
+// service: systemd (Linux)
+// ---------------------------------------------------------------------------
+
+/// Shell command that starts the installed service (for hints).
+#[cfg(not(target_os = "macos"))]
+pub fn start_command() -> String {
+    "systemctl --user start ccnotify".to_string()
+}
+
+/// Shell command that restarts the installed service (for hints).
+#[cfg(not(target_os = "macos"))]
+pub fn restart_command() -> String {
+    "systemctl --user restart ccnotify".to_string()
+}
+
 /// Run `systemctl --user <args>`. Err(NotFound) if systemctl is missing.
+#[cfg(not(target_os = "macos"))]
 fn systemctl(args: &[&str]) -> std::io::Result<bool> {
     let status = Command::new("systemctl").arg("--user").args(args).status()?;
     Ok(status.success())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn print_manual_daemon_hint() {
     println!("          Run the daemon manually instead (e.g. from your session autostart):");
     println!("            {} daemon", paths::installed_bin().display());
 }
 
-/// `systemctl start/restart` returns before the daemon binds its socket, so
-/// poll `status` for up to 3 s; otherwise an immediate `ccnotify pair` races it.
+/// Starting the service returns before the daemon binds its socket, so poll
+/// `status` for up to 3 s; otherwise an immediate `ccnotify pair` races it.
 fn wait_for_daemon() -> bool {
     let timeout = std::time::Duration::from_millis(300);
     for _ in 0..30 {
@@ -122,6 +164,7 @@ fn wait_for_daemon() -> bool {
     false
 }
 
+#[cfg(not(target_os = "macos"))]
 fn install_service(binary_replaced: bool) -> Result<()> {
     let unit = paths::systemd_unit();
     paths::write_atomic(&unit, UNIT_FILE.as_bytes(), 0o644)
@@ -169,12 +212,210 @@ fn install_service(binary_replaced: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
+fn uninstall_service() -> Result<()> {
+    let unit = paths::systemd_unit();
+    match systemctl(&["disable", "--now", "ccnotify"]) {
+        Ok(true) => println!("Service:  stopped and disabled"),
+        Ok(false) => println!("Service:  was not enabled/running (nothing to stop)"),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            println!("Service:  systemctl not found; stop any `ccnotify daemon` you started manually.")
+        }
+        Err(e) => println!("Service:  could not run systemctl ({e})"),
+    }
+    if unit.exists() {
+        fs::remove_file(&unit).with_context(|| format!("removing {}", unit.display()))?;
+        println!("Service:  removed {}", unit.display());
+    }
+    let _ = systemctl(&["daemon-reload"]);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// service: launchd LaunchAgent (macOS)
+// ---------------------------------------------------------------------------
+
+/// The user's GUI launchd domain: `gui/<uid>`.
+#[cfg(target_os = "macos")]
+fn launchd_domain() -> String {
+    // SAFETY: getuid() has no preconditions and cannot fail.
+    format!("gui/{}", unsafe { libc::getuid() })
+}
+
+/// `gui/<uid>/com.torchcorp.ccnotify`
+#[cfg(target_os = "macos")]
+fn launchd_target() -> String {
+    format!("{}/{}", launchd_domain(), paths::LAUNCHD_LABEL)
+}
+
+/// Shell command that starts the installed service (for hints).
+#[cfg(target_os = "macos")]
+pub fn start_command() -> String {
+    format!("launchctl kickstart {}", launchd_target())
+}
+
+/// Shell command that restarts the installed service (for hints).
+#[cfg(target_os = "macos")]
+pub fn restart_command() -> String {
+    format!("launchctl kickstart -k {}", launchd_target())
+}
+
+#[cfg(target_os = "macos")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// The LaunchAgent: start at login, restart after a crash (not after a clean
+/// exit), output appended to ~/Library/Logs/ccnotify.log.
+#[cfg(target_os = "macos")]
+fn launch_agent_plist() -> String {
+    let bin = xml_escape(&paths::installed_bin().to_string_lossy());
+    let log = xml_escape(&paths::log_file().to_string_lossy());
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>{label}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{bin}</string>
+		<string>daemon</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>{log}</string>
+	<key>StandardErrorPath</key>
+	<string>{log}</string>
+</dict>
+</plist>
+"#,
+        label = paths::LAUNCHD_LABEL,
+    )
+}
+
+/// Run `launchctl <args>` quietly. Ok(()) on success, else its error output.
+#[cfg(target_os = "macos")]
+fn launchctl(args: &[&str]) -> std::result::Result<(), String> {
+    let out = Command::new("/bin/launchctl")
+        .args(args)
+        .output()
+        .map_err(|e| format!("could not run launchctl: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let reason = stderr.lines().map(str::trim).find(|l| !l.is_empty());
+    Err(match reason {
+        Some(line) => line.to_string(),
+        None => format!("launchctl exited with {}", out.status),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn launchd_loaded(target: &str) -> bool {
+    launchctl(&["print", target]).is_ok()
+}
+
+/// `launchctl bootout` returns before the service is gone, and a `bootstrap`
+/// that races it fails: wait for up to 5 s.
+#[cfg(target_os = "macos")]
+fn wait_unloaded(target: &str) {
+    for _ in 0..50 {
+        if !launchd_loaded(target) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn install_service(binary_replaced: bool) -> Result<()> {
+    let plist = paths::launch_agent();
+    let text = launch_agent_plist();
+    let changed = fs::read_to_string(&plist).map(|old| old != text).unwrap_or(true);
+    if changed {
+        paths::write_atomic(&plist, text.as_bytes(), 0o644)
+            .with_context(|| format!("writing {}", plist.display()))?;
+        println!("Service:  wrote {}", plist.display());
+    } else {
+        println!("Service:  {} (already in place)", plist.display());
+    }
+    // launchd does not create the directory of the log file.
+    if let Some(dir) = paths::log_file().parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+
+    let domain = launchd_domain();
+    let target = launchd_target();
+    let started = if launchd_loaded(&target) && !changed {
+        // Loaded from this plist: start it if it is not running; `-k` makes
+        // an already-running daemon pick up the new binary.
+        if binary_replaced {
+            launchctl(&["kickstart", "-k", &target])
+        } else {
+            launchctl(&["kickstart", &target])
+        }
+    } else {
+        if launchd_loaded(&target) {
+            let _ = launchctl(&["bootout", &target]);
+            wait_unloaded(&target);
+        }
+        // An earlier `launchctl disable` would make bootstrap fail.
+        let _ = launchctl(&["enable", &target]);
+        launchctl(&["bootstrap", &domain, &plist.to_string_lossy()])
+    };
+
+    match started {
+        Ok(()) => {
+            if wait_for_daemon() {
+                println!("Service:  loaded and started (launchctl print {target})");
+            } else {
+                println!("Service:  loaded, but the daemon is not answering yet.");
+            }
+            println!("          Log: {}", paths::log_file().display());
+        }
+        Err(reason) => {
+            println!("Service:  launchctl could not start the LaunchAgent ({reason}).");
+            println!("          It is loaded at your next desktop login. Until then, run the daemon yourself:");
+            println!("            {} daemon", paths::installed_bin().display());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn uninstall_service() -> Result<()> {
+    let target = launchd_target();
+    if launchd_loaded(&target) {
+        match launchctl(&["bootout", &target]) {
+            Ok(()) => println!("Service:  stopped and unloaded"),
+            Err(reason) => println!("Service:  launchctl bootout failed ({reason})"),
+        }
+    } else {
+        println!("Service:  was not loaded (nothing to stop)");
+    }
+    let plist = paths::launch_agent();
+    if plist.exists() {
+        fs::remove_file(&plist).with_context(|| format!("removing {}", plist.display()))?;
+        println!("Service:  removed {}", plist.display());
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // ~/.claude/settings.json
 // ---------------------------------------------------------------------------
 
 /// `<bin> <subcommand>`, quoting the binary path if it contains whitespace.
-fn bin_command(bin: &Path, subcommand: &str) -> String {
+pub(crate) fn bin_command(bin: &Path, subcommand: &str) -> String {
     let p = bin.to_string_lossy();
     if p.chars().any(char::is_whitespace) {
         format!("\"{p}\" {subcommand}")
@@ -404,7 +645,7 @@ fn install_hooks(bin: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 pub fn uninstall() -> Result<()> {
-    // Hooks first, so Claude Code stops calling us even if systemd fails.
+    // Hooks first, so Claude Code stops calling us even if the service part fails.
     let path = settings_path();
     match read_settings(&path) {
         Ok((mut settings, true)) => {
@@ -420,20 +661,11 @@ pub fn uninstall() -> Result<()> {
         Err(e) => println!("Hooks:    skipped ({e:#})"),
     }
 
-    let unit = paths::systemd_unit();
-    match systemctl(&["disable", "--now", "ccnotify"]) {
-        Ok(true) => println!("Service:  stopped and disabled"),
-        Ok(false) => println!("Service:  was not enabled/running (nothing to stop)"),
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            println!("Service:  systemctl not found; stop any `ccnotify daemon` you started manually.")
-        }
-        Err(e) => println!("Service:  could not run systemctl ({e})"),
+    uninstall_service()?;
+    #[cfg(target_os = "linux")]
+    for path in crate::tray::remove_entries() {
+        println!("Tray:     removed {}", path.display());
     }
-    if unit.exists() {
-        fs::remove_file(&unit).with_context(|| format!("removing {}", unit.display()))?;
-        println!("Service:  removed {}", unit.display());
-    }
-    let _ = systemctl(&["daemon-reload"]);
 
     println!();
     println!("Kept (delete manually for a full removal):");

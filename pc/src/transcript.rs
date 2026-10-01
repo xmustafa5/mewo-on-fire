@@ -36,7 +36,9 @@ pub struct ChatItem {
 pub struct Transcript {
     /// The last `limit` items, oldest first.
     pub items: Vec<ChatItem>,
-    /// Last `ai-title` entry's `aiTitle`.
+    /// Last `custom-title` entry's `customTitle` (a session renamed by the
+    /// user; the Claude desktop app writes its titles this way too), else the
+    /// last `ai-title` entry's `aiTitle`.
     pub title: Option<String>,
     /// After the last role-`user` item, some Agent/Task/Workflow tool_use has
     /// no matching tool_result.
@@ -92,7 +94,8 @@ fn flag(v: &Value, key: &str) -> bool {
 /// Parse JSONL (bad lines are skipped) into chat items; see the module doc.
 fn parse(bytes: &[u8], limit: usize) -> Transcript {
     let mut items: VecDeque<ChatItem> = VecDeque::new();
-    let mut title: Option<String> = None;
+    let mut ai_title: Option<String> = None;
+    let mut custom_title: Option<String> = None;
     // Agent/Task/Workflow tool_use ids without a tool_result since the last
     // role-user item.
     let mut open_agents: HashSet<String> = HashSet::new();
@@ -110,7 +113,14 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
         if kind == "ai-title" {
             let t = str_of(&v, "aiTitle").trim();
             if !t.is_empty() {
-                title = Some(t.to_string());
+                ai_title = Some(t.to_string());
+            }
+            continue;
+        }
+        if kind == "custom-title" {
+            let t = str_of(&v, "customTitle").trim();
+            if !t.is_empty() {
+                custom_title = Some(t.to_string());
             }
             continue;
         }
@@ -161,7 +171,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
 
     Transcript {
         items: items.into_iter().collect(),
-        title,
+        title: custom_title.or(ai_title),
         agents_running: !open_agents.is_empty(),
     }
 }

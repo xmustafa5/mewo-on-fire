@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use crate::ask;
 use crate::config::now_ms;
 use crate::control;
+use crate::install;
 use crate::paths;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(3);
@@ -22,10 +23,18 @@ const CHAT_ITEMS: u64 = 20;
 fn not_running_hint() -> String {
     format!(
         "The ccnotify daemon is not running (no answer on {}).\n\
-         Start it with:   systemctl --user start ccnotify\n\
+         Start it with:   {}\n\
          Or install it:   ccnotify install\n\
          Or run it in a terminal:   ccnotify daemon",
-        paths::socket_path().display()
+        paths::socket_path().display(),
+        install::start_command()
+    )
+}
+
+fn too_old_hint() -> String {
+    format!(
+        "the running daemon is too old for this; restart it: {}",
+        install::restart_command()
     )
 }
 
@@ -44,7 +53,7 @@ fn call_with(req: &Value, timeout: Duration) -> Result<Value> {
             .and_then(Value::as_str)
             .unwrap_or("unknown error");
         if err == "unknown_cmd" {
-            bail!("the running daemon is too old for this; restart it: systemctl --user restart ccnotify");
+            bail!("{}", too_old_hint());
         }
         bail!("daemon error: {err}");
     }
@@ -302,9 +311,7 @@ pub fn test_ask() -> Result<()> {
             println!("No phone connected; the hook would fall back to the normal prompt.");
             Ok(())
         }
-        "unknown_cmd" => bail!(
-            "the running daemon is too old for this; restart it: systemctl --user restart ccnotify"
-        ),
+        "unknown_cmd" => bail!("{}", too_old_hint()),
         "" => bail!("daemon error: unknown error"),
         other => bail!("daemon error: {other}"),
     }
@@ -366,9 +373,7 @@ pub fn chat(prefix: &str) -> Result<()> {
         match str_field(&resp, "error") {
             "not_found" => bail!("no session id starts with {prefix} (see `ccnotify sessions`)"),
             "ambiguous" => bail!("{prefix} matches several sessions; use more characters"),
-            "unknown_cmd" => bail!(
-                "the running daemon is too old for this; restart it: systemctl --user restart ccnotify"
-            ),
+            "unknown_cmd" => bail!("{}", too_old_hint()),
             "" => bail!("daemon error: unknown error"),
             other => bail!("daemon error: {other}"),
         }
@@ -436,7 +441,7 @@ pub fn chat(prefix: &str) -> Result<()> {
 }
 
 /// "12s ago", "5m ago", "3h ago", "2d ago".
-fn ago(now: u64, ms: u64) -> String {
+pub(crate) fn ago(now: u64, ms: u64) -> String {
     if ms == 0 {
         return "-".to_string();
     }
