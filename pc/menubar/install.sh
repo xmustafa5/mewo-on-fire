@@ -9,9 +9,10 @@ APP="$HOME/Applications/ccnotify.app"
 # Replace a running copy.
 pkill -x ccnotify-menubar 2>/dev/null || true
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/ccnotify-menubar "$APP/Contents/MacOS/ccnotify-menubar"
 cp Info.plist "$APP/Contents/Info.plist"
+cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Ad-hoc signature: enough to run on this Mac.
 codesign --force --sign - "$APP"
 
