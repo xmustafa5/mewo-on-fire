@@ -6,6 +6,7 @@ import 'background.dart';
 import 'ui/answer_screen.dart';
 import 'ui/chat_screen.dart';
 import 'ui/home_screen.dart';
+import 'watch_bridge.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,6 +37,7 @@ class _CcNotifyAppState extends State<CcNotifyApp> {
     AppState.instance.openRequest.addListener(_onOpenRequest);
     AppState.instance.openSession.addListener(_onOpenSession);
     AppState.instance.init();
+    WatchBridge.instance.init();
   }
 
   @override

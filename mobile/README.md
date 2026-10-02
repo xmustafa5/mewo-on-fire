@@ -104,6 +104,8 @@ run `ccnotify install` again. It adds the `listen` Stop hook and the
 - Long-press a message for its options: **Reply** (quotes the message above
   yours), **Copy** and **Select text**. A message that was rejected can be
   sent again or removed from there.
+- While the keyboard is open, the keyboard button left of the box closes it
+  (so does dragging the chat).
 - Type in the box at the bottom to continue the session. Each message shows its
   status: **Sending…**, **Delivered**, **Queued** (Claude gets it when it
   finishes the current reply), or **Rejected** with the reason. The box is
@@ -172,3 +174,51 @@ Everything works as on Android, with these differences:
 - There is no persistent "Listening…" notification and no start on boot: open
   the app once after restarting the phone.
 - The Simulator has no camera: use **Paste code instead**.
+
+## Apple Watch
+
+The iPhone app carries a watch app (`ios/CcnotifyWatch`, SwiftUI, watchOS 10
+or later). It installs with the iPhone app: if it does not show up on the
+watch, open the **Watch** app on the iPhone and install **ccnotify** under
+"Available Apps".
+
+- The first screen lists what Claude is **waiting for** and the **sessions**
+  of all paired PCs.
+- Open a waiting prompt to answer it: **Allow** / **Always allow** / **Deny**,
+  **Approve** / **Reject**, or the options of a question (several questions
+  and "choose all that apply" work too). **Deny, say why**, **Reject, say
+  why** and **Other… say it** take your answer by voice.
+- Open a session to read its chat: your messages on the right, Claude's on the
+  left (with code blocks), tool calls as one grey line. **Earlier messages**
+  loads the page above. The chat checks for news every few seconds while it
+  is on screen.
+- **Reply by voice** records a message (up to two minutes): tap it, speak,
+  tap **Done**. The recording goes to the iPhone, which turns it into text
+  (watchOS has no speech recognition); the watch shows the text, and **Send**
+  sends it. Claude Code gets text, not a recording. The globe button switches
+  between English and Arabic, **It was …** reads the same recording in the
+  other language, **Say it again** records anew, and **Type instead** opens
+  the watch's keyboard. The first time, allow the microphone on the watch and
+  **Speech Recognition** on the iPhone (the iPhone app asks when you open it).
+
+The watch never talks to a PC. Everything goes through the iPhone app over
+WatchConnectivity: `ios/Runner/WatchBridge.swift` hands the watch's commands to
+`lib/watch_bridge.dart`, which answers them from the app's state. So:
+
+- The iPhone has to be in reach of the watch, and on the PC's network.
+- A command from the watch wakes the iPhone app up when iOS has suspended it,
+  and the app reconnects to the PC first (a few seconds). If the app was
+  closed in the app switcher, or the phone was restarted, open it once.
+  With **Stay connected in the background** on, the watch's lists also stay
+  up to date by themselves.
+- Notifications on the watch are the iPhone's (iOS shows them on the watch
+  while the phone is locked), with the same buttons.
+
+To install on a real watch from Xcode, the watch has to be registered for
+development like the phone: with the iPhone connected to the Mac, turn on
+**Developer Mode** on the watch (Settings → Privacy & Security) and let Xcode
+prepare it (Window → Devices and Simulators), then build the `Runner` scheme
+for the iPhone. The watch target uses the bundle id
+`<app bundle id>.watchkitapp`; if you change the app's bundle id, change it
+there and in `ios/CcnotifyWatch/Info.plist` (`WKCompanionAppBundleIdentifier`).
+

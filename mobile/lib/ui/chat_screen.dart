@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../models.dart';
 import '../requests.dart' show Answers;
 import 'answer_screen.dart';
+import 'keyboard_hide_button.dart';
 import 'sessions_tab.dart' show SessionStateChip;
 
 /// One session's chat (PROTOCOL.md v1.2): bubbles, tool one-liners, and an
@@ -545,6 +546,7 @@ class _ChatScreenState extends State<ChatScreen> {
         controller: _scroll,
         reverse: true,
         physics: const AlwaysScrollableScrollPhysics(),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
         itemCount: rows.length,
         itemBuilder: (context, i) => rows[rows.length - 1 - i],
@@ -741,6 +743,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
+                        const KeyboardHideButton(),
                         IconButton(
                           tooltip: 'Attach pictures',
                           onPressed: _attachments.length >= _maxImages ? null : _attach,

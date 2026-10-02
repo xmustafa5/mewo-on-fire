@@ -236,6 +236,19 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Something outside the app's screens needs the PCs now (the watch asked
+  /// while the app was in the background): connect again without waiting for
+  /// the next retry.
+  Future<void> wake() async {
+    if (pcs.isEmpty) return;
+    if (await _isRunning()) {
+      serviceRunning = true;
+      _send('reconnect');
+    } else if (!_userStopped) {
+      await startService();
+    }
+  }
+
   Future<bool> _isRunning() async {
     try {
       return await isServiceRunning();
@@ -573,15 +586,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Sends [text] (and [images], v1.3) to a session through the task
   /// isolate. When the service is not running, a text message is queued and
-  /// the service started.
-  Future<void> sendMessage(
+  /// the service started. Returns the message (its status changes as the PC
+  /// answers), or null when there was nothing to send.
+  Future<OutgoingMessage?> sendMessage(
     String pcId,
     String sessionId,
     String text, {
     List<Uint8List> images = const <Uint8List>[],
   }) async {
     final t = text.trim();
-    if (t.isEmpty && images.isEmpty) return;
+    if (t.isEmpty && images.isEmpty) return null;
     final key = sessionKey(pcId, sessionId);
     final m = OutgoingMessage(
       clientId: newClientId(),
@@ -598,7 +612,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (await _isRunning()) {
       try {
         sendToTask(jsonEncode(msg));
-        return;
+        return m;
       } catch (e) {
         debugPrint('ccnotify: sending message failed: $e');
       }
@@ -609,7 +623,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       m.reason = 'Not connected to the PC yet — send it again in a moment';
       notifyListeners();
       if (pcs.isNotEmpty) await startService();
-      return;
+      return m;
     }
     try {
       await Store.queueSend(msg);
@@ -617,9 +631,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       m.status = SendStatus.rejected;
       m.reason = 'Could not queue the message';
       notifyListeners();
-      return;
+      return m;
     }
     if (pcs.isNotEmpty) await startService();
+    return m;
   }
 
   /// Drops a message that was rejected (it never reached the chat).

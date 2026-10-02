@@ -16,11 +16,15 @@ import flutter_local_notifications
     // Banners while the app is open, and taps / buttons on notifications.
     UNUserNotificationCenter.current().delegate = self as UNUserNotificationCenterDelegate
     add(BackgroundKeepAlive.shared)
+    WatchBridge.shared.start()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    // lib/watch_bridge.dart
+    WatchBridge.shared.attach(messenger: engineBridge.applicationRegistrar.messenger())
 
     // lib/ios_background.dart
     let channel = FlutterMethodChannel(
