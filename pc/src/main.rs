@@ -17,6 +17,7 @@ mod server;
 mod sessions;
 mod store;
 mod transcript;
+mod uploads;
 #[cfg(target_os = "linux")]
 mod tray;
 

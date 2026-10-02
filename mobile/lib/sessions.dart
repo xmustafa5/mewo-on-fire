@@ -78,12 +78,14 @@ class ReplyNotif {
 }
 
 /// Message understood by the task isolate (port, sendDataToTask and queue).
+/// [images] (v1.3): `{"mime", "data": <base64>}` each.
 Map<String, dynamic> sendCmd(
   String pcId,
   String sessionId,
   String text,
   String clientId, {
   ReplyNotif? notif,
+  List<Map<String, String>> images = const <Map<String, String>>[],
 }) =>
     {
       'cmd': 'send',
@@ -92,6 +94,7 @@ Map<String, dynamic> sendCmd(
       'text': text,
       'client_id': clientId,
       if (notif != null) 'notif': notif.toJson(),
+      if (images.isNotEmpty) 'images': images,
     };
 
 /// Payload of an event notification (`stop` / `needs_input` / `session_end`):

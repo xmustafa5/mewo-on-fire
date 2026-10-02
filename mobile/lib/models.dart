@@ -441,6 +441,7 @@ class ChatItem {
     required this.role,
     required this.text,
     this.tool = '',
+    this.images = const <String>[],
   });
 
   final String id;
@@ -449,12 +450,20 @@ class ChatItem {
   final String text;
   final String tool; // role tool only
 
+  /// Ids of the message's images (v1.3), fetched with `get_image`.
+  final List<String> images;
+
   factory ChatItem.fromJson(Map<String, dynamic> j) => ChatItem(
         id: _asString(j['id']),
         ts: _asInt(j['ts']),
         role: _asString(j['role']),
         text: _asString(j['text']),
         tool: _asString(j['tool']),
+        images: <String>[
+          if (j['images'] is List)
+            for (final e in j['images'] as List)
+              if (e is Map && e['id'] is String && (e['id'] as String).isNotEmpty) e['id'] as String,
+        ],
       );
 
   DateTime get time => DateTime.fromMillisecondsSinceEpoch(ts);

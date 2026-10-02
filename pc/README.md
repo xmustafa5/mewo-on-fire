@@ -177,6 +177,8 @@ daemon and pair again.
 - `~/.local/state/ccnotify/events.json` — last 500 events
 - `~/.local/state/ccnotify/sessions.json` — last 50 sessions (state, queued
   and recorded phone messages)
+- `~/.local/state/ccnotify/uploads/` — pictures sent from a phone with a
+  message, per session; deleted after 7 days
 - `$XDG_RUNTIME_DIR/ccnotify.sock` — local control socket (Linux)
 - `~/.local/state/ccnotify/ccnotify.sock` — local control socket (macOS)
 

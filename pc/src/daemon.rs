@@ -16,7 +16,7 @@ use crate::requests::{self, AskReply, Request, Requests};
 use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session, Sessions};
 use crate::store::{Event, Store};
 use crate::transcript::{self, ChatItem};
-use crate::{control, mdns, net, paths, server};
+use crate::{control, mdns, net, paths, server, uploads};
 
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
 const BROADCAST_CAPACITY: usize = 256;
@@ -341,14 +341,75 @@ impl AppState {
         Some((session, items))
     }
 
-    /// A message from a phone for a session (PROTOCOL.md v1.2 "send rules").
-    pub async fn send_message(&self, session_id: &str, text: &str, client_id: &str) -> SendOutcome {
+    /// A message from a phone for a session (PROTOCOL.md v1.2 "send rules"),
+    /// with its images (v1.3): they are saved first and removed again when
+    /// the message is rejected.
+    pub async fn send_message(
+        &self,
+        session_id: &str,
+        text: &str,
+        client_id: &str,
+        images: Vec<uploads::Upload>,
+    ) -> SendOutcome {
         // Current agents-running state for read_only.
         self.refresh_sessions(Some(session_id)).await;
-        let mut sessions = lock(&self.sessions);
-        let (outcome, update) = sessions.send(session_id, text, client_id);
-        self.push_session(update);
+        let saved = if images.is_empty() {
+            Vec::new()
+        } else {
+            let short: String = session_id.chars().take(8).collect();
+            // Names the files; a message without a client id gets a random one.
+            let stem = if client_id.trim().is_empty() {
+                random_hex(8)
+            } else {
+                client_id.to_string()
+            };
+            let saved =
+                tokio::task::spawn_blocking(move || uploads::save(&short, &stem, &images)).await;
+            match saved {
+                Ok(Ok(saved)) => saved,
+                Ok(Err(e)) => {
+                    eprintln!("ccnotify: saving images from a phone failed: {e}");
+                    return SendOutcome::Rejected("The PC could not save the images");
+                }
+                Err(_) => return SendOutcome::Rejected("The PC could not save the images"),
+            }
+        };
+        let outcome = {
+            let mut sessions = lock(&self.sessions);
+            let (outcome, update) = sessions.send(session_id, text, client_id, &saved);
+            self.push_session(update);
+            outcome
+        };
+        if matches!(outcome, SendOutcome::Rejected(_)) {
+            uploads::remove(&saved);
+        }
         outcome
+    }
+
+    /// An image of a session's chat (PROTOCOL.md v1.3): (media type, base64).
+    pub async fn image(&self, session_id: &str, image_id: &str) -> Option<(String, String)> {
+        let mut parts = image_id.splitn(3, '/');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some("up"), Some(short), Some(_)) => {
+                // Only uploads of this session.
+                if short != session_id.chars().take(8).collect::<String>() {
+                    return None;
+                }
+                let id = image_id.to_string();
+                let (mime, data) = tokio::task::spawn_blocking(move || uploads::read(&id))
+                    .await
+                    .ok()??;
+                Some((mime.to_string(), data))
+            }
+            (Some("tr"), Some(uuid), Some(index)) => {
+                let (path, _) = lock(&self.sessions).chat_source(session_id)?;
+                let (uuid, index) = (uuid.to_string(), index.parse::<usize>().ok()?);
+                tokio::task::spawn_blocking(move || transcript::image(&path, &uuid, index))
+                    .await
+                    .ok()?
+            }
+            _ => None,
+        }
     }
 
     // --- pairing codes -----------------------------------------------------
@@ -521,13 +582,19 @@ async fn run_async() -> Result<()> {
     Ok(())
 }
 
-/// Periodically drop phone requests nobody answered (PROTOCOL.md: 24 h).
+/// Periodically drop phone requests nobody answered (PROTOCOL.md: 24 h),
+/// and once an hour the images phones sent more than a week ago.
 async fn expire_loop(state: Arc<AppState>) {
     let mut tick = tokio::time::interval(EXPIRE_CHECK_INTERVAL);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut minutes = 0u64;
     loop {
         tick.tick().await;
         state.expire_requests();
+        if minutes % 60 == 0 {
+            let _ = tokio::task::spawn_blocking(uploads::prune).await;
+        }
+        minutes += 1;
     }
 }
 

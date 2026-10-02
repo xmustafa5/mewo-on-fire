@@ -434,6 +434,10 @@ pub fn chat(prefix: &str) -> Result<()> {
         for line in text.lines() {
             println!("    {line}");
         }
+        let images = item.get("images").and_then(Value::as_array).map_or(0, Vec::len);
+        if images > 0 && str_field(item, "role") == "phone" {
+            println!("    [{images} image(s)]");
+        }
     }
     println!();
     println!("(times in UTC)");

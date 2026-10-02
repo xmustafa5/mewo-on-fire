@@ -15,7 +15,8 @@ use crate::ask::truncate_chars;
 use crate::config::{now_ms, random_hex};
 use crate::hook;
 use crate::paths;
-use crate::transcript::{self, ChatItem, FileKey};
+use crate::transcript::{self, ChatItem, FileKey, ImageRef};
+use crate::uploads;
 
 /// Sessions kept (most recently active first).
 const MAX_SESSIONS: usize = 50;
@@ -124,6 +125,29 @@ impl SendOutcome {
             _ => "",
         }
     }
+}
+
+/// What Claude Code gets for a phone message: its text, then the files of
+/// the attached images (Claude Code looks at an image by reading the file).
+fn delivery_text(text: &str, images: &[uploads::Saved]) -> String {
+    if images.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    if !text.is_empty() {
+        out.push_str(text);
+        out.push_str("\n\n");
+    }
+    out.push_str(if images.len() == 1 {
+        "The user attached an image from their phone. Look at it with the Read tool:"
+    } else {
+        "The user attached images from their phone. Look at them with the Read tool:"
+    });
+    for image in images {
+        out.push('\n');
+        out.push_str(&image.path.to_string_lossy());
+    }
+    out
 }
 
 /// A session whose transcript should be checked for changes.
@@ -494,7 +518,7 @@ impl Sessions {
                 ts: now_ms(),
                 role: "phone".to_string(),
                 text,
-                tool: None,
+                ..ChatItem::default()
             },
         );
         entry.sync();
@@ -503,15 +527,22 @@ impl Sessions {
         Some(snapshot)
     }
 
-    /// A message from a phone (PROTOCOL.md v1.2 "send rules"). A retried
-    /// `client_id` gets the first outcome again instead of a second delivery.
-    pub fn send(&mut self, session_id: &str, text: &str, client_id: &str) -> (SendOutcome, Option<Session>) {
+    /// A message from a phone (PROTOCOL.md v1.2 "send rules"), with the
+    /// images saved for it (v1.3). A retried `client_id` gets the first
+    /// outcome again instead of a second delivery.
+    pub fn send(
+        &mut self,
+        session_id: &str,
+        text: &str,
+        client_id: &str,
+        images: &[uploads::Saved],
+    ) -> (SendOutcome, Option<Session>) {
         let text = text.trim();
         let entry = match self.entries.get_mut(session_id) {
             Some(e) if e.session.state != "ended" => e,
             _ => return (SendOutcome::Rejected(REASON_CLOSED), None),
         };
-        if text.is_empty() {
+        if text.is_empty() && images.is_empty() {
             return (SendOutcome::Rejected(REASON_EMPTY), None);
         }
         if text.chars().count() > MAX_SEND_CHARS {
@@ -536,23 +567,36 @@ impl Sessions {
         }
 
         let before = entry.session.clone();
+        // Shown in the chat.
         let item = ChatItem {
             id: item_id,
             ts: now_ms(),
             role: "phone".to_string(),
             text: text.to_string(),
             tool: None,
+            images: images
+                .iter()
+                .map(|image| ImageRef {
+                    id: image.id.clone(),
+                })
+                .collect(),
         };
+        // Handed to Claude Code: the text plus where the images are.
+        let delivery = delivery_text(text, images);
         let mut delivered = false;
         if let Some(listener) = entry.listener.take() {
             // Fails only if the listen hook just went away: fall through.
-            delivered = listener.tx.send(ListenReply::Text(item.text.clone())).is_ok();
+            delivered = listener.tx.send(ListenReply::Text(delivery.clone())).is_ok();
         }
         let outcome = if delivered {
             entry.session.state = "working".to_string();
             SendOutcome::Delivered
         } else if matches!(entry.session.state.as_str(), "working" | "waiting") {
-            entry.queue.push(item.clone());
+            entry.queue.push(ChatItem {
+                text: delivery,
+                images: Vec::new(),
+                ..item.clone()
+            });
             SendOutcome::Queued
         } else {
             SendOutcome::Rejected(REASON_NOT_LISTENING)

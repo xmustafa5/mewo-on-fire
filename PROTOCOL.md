@@ -305,3 +305,61 @@ ChatItem: `{"id": "<line uuid or generated>", "ts": <ms>, "role": "user|assistan
 ## iOS: connection lifetime
 
 iOS has no foreground service. The connections live in the app process: always while the app is open, for about 25 s after it goes to the background (and again when a notification button wakes it), and for as long as the app stays in the background when the user turns on **Stay connected in the background** (silent audio with the `audio` background mode). On resume the app pings every connected PC and reconnects the ones that do not answer; events missed in between are replayed through `since` as on Android.
+
+---
+
+# v1.3 — images in the chat
+
+## Sending images from the phone
+
+`send` takes up to 4 images:
+
+```
+→ {"type":"send","session_id":"...","text":"...","client_id":"<id>",
+   "images":[{"mime":"image/jpeg","data":"<base64>"}]}
+```
+
+- `text` may be empty when there are images.
+- An image is at most 2.5 MB (decoded) and must be a JPEG, PNG, GIF or WebP; the daemon tells the type by the content, not by `mime`. Otherwise the message is `rejected` ("Too many images (4 at most)", "An image is too large", "Only JPEG, PNG, GIF and WebP images can be sent").
+- The daemon saves them as `~/.local/state/ccnotify/uploads/<session short>/<client_id>-<n>.<ext>` (mode 600, directory 700) and deletes them again when the message is rejected. Uploads older than 7 days are removed.
+- What Claude Code gets (through `listen`) is the text followed by the files, which it looks at with its Read tool:
+
+  ```
+  <text>
+
+  The user attached images from their phone. Look at them with the Read tool:
+  /home/u/.local/state/ccnotify/uploads/44155e15/9f2c…-1.jpg
+  /home/u/.local/state/ccnotify/uploads/44155e15/9f2c…-2.jpg
+  ```
+
+## ChatItem
+
+ChatItem gains `"images": [{"id": "<image id>"}]` (left out when there are none):
+
+- a `phone` item: the images sent with it, `up/<session short>/<file>`; its `text` is the message without the file list;
+- a `user` item: the image blocks of that transcript line, `tr/<line uuid>/<content block index>`. The text still has one "[image]" per image for phones that do not show images; a phone that does leaves those lines out.
+
+## Fetching an image
+
+```
+→ {"type":"get_image","session_id":"...","image_id":"..."}
+← {"type":"image","session_id":"...","image_id":"...","mime":"image/png","data":"<base64>"}
+← {"type":"image","session_id":"...","image_id":"...","error":"not_found"}
+```
+
+An `up/…` id is only served for its own session. For a `tr/…` id the daemon finds the line by its uuid in the session's transcript (the whole file, not only the last 4 MB).
+
+## Phone
+
+- The input bar has an attach button: photo library (up to 4) or camera. Pictures are scaled to 1600 px and re-encoded before sending. They are not queued while the service is stopped: the message is rejected locally instead.
+- Bubbles show their pictures (fetched once, kept in memory); a tap opens one in full.
+- Every bubble is Markdown; what the user typed keeps its line breaks.
+- A long press on a bubble opens its options: **Reply**, **Copy**, **Select text**; a rejected message of this phone has **Send again** and **Remove**.
+- **Reply** quotes the start of the message (its prose up to the first code block or table, at most 240 characters) as a Markdown quote above the reply, so no protocol change is needed:
+
+  ```
+  > <start of the quoted message>
+
+  <the reply>
+  ```
+

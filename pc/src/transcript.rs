@@ -20,7 +20,7 @@ pub const DEFAULT_LIMIT: usize = 100;
 pub const MAX_LIMIT: usize = 1000;
 
 /// PROTOCOL.md v1.2 "ChatItem". Field order matches the protocol; `tool`
-/// only for role `tool`.
+/// only for role `tool`, `images` (v1.3) only when the message has some.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChatItem {
@@ -30,6 +30,17 @@ pub struct ChatItem {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageRef>,
+}
+
+/// An image of a chat item; phones fetch it with `get_image` (v1.3).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImageRef {
+    /// `tr/<line uuid>/<content block index>` for an image in the transcript,
+    /// `up/<session short>/<file>` for one sent from a phone.
+    pub id: String,
 }
 
 #[derive(Debug, Default)]
@@ -138,10 +149,21 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
 
         // (role, text, tool) for this line.
         let mut found: Vec<(&'static str, String, Option<String>)> = Vec::new();
+        // Images of the line's user item; only a line with a uuid can be
+        // found again by `image`.
+        let mut images: Vec<ImageRef> = Vec::new();
         if kind == "user" {
-            if let Some(text) = user_text(content, &mut open_agents) {
+            if let Some((text, blocks)) = user_text(content, &mut open_agents) {
                 open_agents.clear();
                 found.push(("user", text, None));
+                if !base_id.starts_with("line-") {
+                    images = blocks
+                        .into_iter()
+                        .map(|block| ImageRef {
+                            id: format!("tr/{base_id}/{block}"),
+                        })
+                        .collect();
+                }
             }
         } else {
             assistant_items(content, &mut found, &mut open_agents);
@@ -162,6 +184,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
                 role: role.to_string(),
                 text: truncate_chars(&text, MAX_ITEM_CHARS),
                 tool,
+                images: std::mem::take(&mut images),
             });
             while items.len() > limit {
                 items.pop_front();
@@ -176,17 +199,28 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
     }
 }
 
-/// The visible text of a user line (None if nothing is left), dropping the
-/// tool_results' ids from `open_agents` along the way.
-fn user_text(content: Option<&Value>, open_agents: &mut HashSet<String>) -> Option<String> {
+/// The visible text of a user line and the indexes of its image blocks
+/// (None if nothing is left), dropping the tool_results' ids from
+/// `open_agents` along the way. Each image also leaves "[image]" in the
+/// text, for phones that do not show images yet.
+fn user_text(
+    content: Option<&Value>,
+    open_agents: &mut HashSet<String>,
+) -> Option<(String, Vec<usize>)> {
     let mut parts: Vec<String> = Vec::new();
+    let mut images: Vec<usize> = Vec::new();
     match content {
         Some(Value::String(s)) => parts.push(strip_wrappers(s)),
         Some(Value::Array(blocks)) => {
-            for b in blocks {
+            for (index, b) in blocks.iter().enumerate() {
                 match str_of(b, "type") {
                     "text" => parts.push(strip_wrappers(str_of(b, "text"))),
-                    "image" => parts.push("[image]".to_string()),
+                    "image" => {
+                        parts.push("[image]".to_string());
+                        if image_source(b).is_some() {
+                            images.push(index);
+                        }
+                    }
                     "tool_result" => {
                         open_agents.remove(str_of(b, "tool_use_id"));
                     }
@@ -205,7 +239,55 @@ fn user_text(content: Option<&Value>, open_agents: &mut HashSet<String>) -> Opti
     if text.is_empty() {
         None
     } else {
-        Some(text)
+        Some((text, images))
+    }
+}
+
+/// (media type, base64 data) of an inline image block.
+fn image_source(block: &Value) -> Option<(&str, &str)> {
+    let source = block.get("source")?;
+    if str_of(source, "type") != "base64" {
+        return None;
+    }
+    let data = str_of(source, "data");
+    if data.is_empty() {
+        None
+    } else {
+        Some((str_of(source, "media_type"), data))
+    }
+}
+
+/// The image of content block `index` of the user line `uuid`: (media type,
+/// base64 data). Reads the whole transcript line by line; blocking.
+pub fn image(path: &str, uuid: &str, index: usize) -> Option<(String, String)> {
+    use std::io::BufRead;
+    if uuid.is_empty() {
+        return None;
+    }
+    let needle = format!("\"{uuid}\"");
+    let mut reader = std::io::BufReader::new(File::open(path).ok()?);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).ok()? == 0 {
+            return None;
+        }
+        // Cheap check before parsing megabytes of JSON.
+        if !line.windows(needle.len()).any(|w| w == needle.as_bytes()) {
+            continue;
+        }
+        let Ok(v) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        if str_of(&v, "uuid") != uuid {
+            continue;
+        }
+        let block = v.get("message")?.get("content")?.get(index)?;
+        if str_of(block, "type") != "image" {
+            return None;
+        }
+        let (mime, data) = image_source(block)?;
+        return Some((mime.to_string(), data.to_string()));
     }
 }
 

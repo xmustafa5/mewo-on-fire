@@ -25,6 +25,7 @@ if-addrs = "0.15"
 qrcode = { version = "0.14", default-features = false }
 dirs = "5"
 anyhow = "1"
+base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

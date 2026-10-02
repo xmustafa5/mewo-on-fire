@@ -91,10 +91,19 @@ run `ccnotify install` again. It adds the `listen` Stop hook and the
   that counts messages still queued. Pull down to refresh.
 - Tap a session to open its chat. Your prompts appear on the right, and
   messages sent from the phone are marked "📱 from phone". Claude's replies
-  appear on the left as Markdown, and you can select the text. Tool calls show
+  appear on the left. Tool calls show
   as grey one-line entries. Consecutive tool calls are collapsed into one line;
   tap it to expand them. The chat refreshes on its own when the session changes
   or Claude finishes a reply. You can also pull down to refresh it.
+- Messages are shown as Markdown (code blocks, tables, lists, quotes).
+  Pictures you pasted into Claude on the PC appear in the chat; tap one to see
+  it in full.
+- Tap the picture button next to the box to attach up to four photos from the
+  library or the camera. They are saved on the PC, and Claude is told where
+  to find them.
+- Long-press a message for its options: **Reply** (quotes the message above
+  yours), **Copy** and **Select text**. A message that was rejected can be
+  sent again or removed from there.
 - Type in the box at the bottom to continue the session. Each message shows its
   status: **Sending…**, **Delivered**, **Queued** (Claude gets it when it
   finishes the current reply), or **Rejected** with the reason. The box is

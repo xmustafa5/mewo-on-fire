@@ -62,6 +62,10 @@ typedef LinkSessionCallback = Future<void> Function(PcLink link, CcSession sessi
 /// Called for every `chat` reply (the raw frame: `session_id`, `title`, `items`).
 typedef LinkChatCallback = Future<void> Function(PcLink link, Map<String, dynamic> chat);
 
+/// Called for every `image` reply (the raw frame: `session_id`, `image_id`,
+/// then `mime` + `data`, or `error`).
+typedef LinkImageCallback = Future<void> Function(PcLink link, Map<String, dynamic> image);
+
 /// Called for every `send_result`; [status] is `delivered`, `queued` or `rejected`.
 typedef LinkSendResultCallback = Future<void> Function(
     PcLink link, String clientId, String status, String reason);
@@ -83,6 +87,7 @@ class PcLink {
     required this.onSessions,
     required this.onSession,
     required this.onChat,
+    required this.onImage,
     required this.onSendResult,
   });
 
@@ -95,6 +100,7 @@ class PcLink {
   final LinkSessionsCallback onSessions;
   final LinkSessionCallback onSession;
   final LinkChatCallback onChat;
+  final LinkImageCallback onImage;
   final LinkSendResultCallback onSendResult;
 
   static const Duration _minBackoff = Duration(seconds: 1);
@@ -187,9 +193,25 @@ class PcLink {
   bool getChat(String sessionId, {int limit = 100}) =>
       _sendFrame({'type': 'get_chat', 'session_id': sessionId, 'limit': limit});
 
-  /// Sends a message to a session (reply → [onSendResult]). False if not connected.
-  bool sendMessage(String sessionId, String text, String clientId) => _sendFrame(
-      {'type': 'send', 'session_id': sessionId, 'text': text, 'client_id': clientId});
+  /// Asks for an image of a session's chat (reply → [onImage]). False if not connected.
+  bool getImage(String sessionId, String imageId) =>
+      _sendFrame({'type': 'get_image', 'session_id': sessionId, 'image_id': imageId});
+
+  /// Sends a message to a session (reply → [onSendResult]). False if not
+  /// connected. [images]: `{"mime", "data": <base64>}` each (v1.3).
+  bool sendMessage(
+    String sessionId,
+    String text,
+    String clientId, {
+    List<Object?> images = const <Object?>[],
+  }) =>
+      _sendFrame({
+        'type': 'send',
+        'session_id': sessionId,
+        'text': text,
+        'client_id': clientId,
+        if (images.isNotEmpty) 'images': images,
+      });
 
   bool _sendFrame(Map<String, dynamic> frame) {
     final ws = _ws;
@@ -408,6 +430,12 @@ class PcLink {
           if (id is! String || id.isEmpty) continue;
           try {
             await onChat(this, msg);
+          } catch (_) {}
+        } else if (type == 'image') {
+          final id = msg['image_id'];
+          if (id is! String || id.isEmpty) continue;
+          try {
+            await onImage(this, msg);
           } catch (_) {}
         } else if (type == 'send_result') {
           final id = msg['client_id'];
