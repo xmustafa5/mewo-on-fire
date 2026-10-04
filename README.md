@@ -9,7 +9,7 @@ Get a phone notification when a Claude Code session on any of your Linux PCs or 
 Everything stays on your local network. There is no cloud and no account.
 
 ```
-Claude Code ──hook──▶ Mewo on Fire (Rust; systemd user service / launchd agent) ──wss + pinned TLS──▶ Mewo on Fire app (Flutter; Android, iOS)
+Claude Code ──hook──▶ Mewo on Fire (Rust; systemd user service / launchd agent) ──wss + pinned TLS──▶ Mewo on Fire app (Flutter; Android, iOS) 
 ```
 
 | Folder | What |
