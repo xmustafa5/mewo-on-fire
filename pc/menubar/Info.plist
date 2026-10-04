@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleExecutable</key>
 	<string>ccnotify-menubar</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.torchcorp.ccnotify.menubar</string>
 	<key>CFBundleName</key>

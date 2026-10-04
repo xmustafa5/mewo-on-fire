@@ -12,11 +12,14 @@ mod listen;
 mod mdns;
 mod net;
 mod paths;
+mod relay;
 mod requests;
 mod server;
 mod sessions;
 mod store;
+mod suggest;
 mod transcript;
+mod uploads;
 #[cfg(target_os = "linux")]
 mod tray;
 
@@ -36,6 +39,13 @@ Commands:
   chat <session> Show the last 20 chat items of a session (id prefix from `sessions`)
   test           Send a test notification
   test-ask       Send a test permission request and print the phone's answer
+  relay <url>    Use a relay so phones also connect away from the LAN (`relay off`
+                 to stop; see relay/ for the relay itself)
+  relay-server [port]
+                 Be the relay: run this on a machine the internet can reach
+  suggestions on|off
+                 Have Claude end its replies with suggested next messages, shown
+                 as buttons in the app
   tray           Show a system tray icon: status, pairing QR code, phones, sessions
                  (Linux; on macOS use the menu bar app in menubar/)
   uninstall      Remove hooks and the background service (keeps config and history)
@@ -92,6 +102,25 @@ fn main() {
         },
         "test" => cli::test(),
         "test-ask" => cli::test_ask(),
+        "relay" => match args.get(1) {
+            Some(url) => cli::relay(url),
+            None => {
+                eprintln!("usage: ccnotify relay <wss://…>   or   ccnotify relay off");
+                std::process::exit(2);
+            }
+        },
+        "relay-server" => {
+            let port = args.get(1).and_then(|p| p.parse().ok()).unwrap_or(8787);
+            relay::serve(port)
+        }
+        "suggestions" => match args.get(1).map(String::as_str) {
+            Some("on") => cli::suggestions(true),
+            Some("off") => cli::suggestions(false),
+            _ => {
+                eprintln!("usage: ccnotify suggestions on|off");
+                std::process::exit(2);
+            }
+        },
         "tray" => tray(),
         "install" => install::install(),
         "uninstall" => install::uninstall(),

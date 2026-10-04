@@ -305,3 +305,160 @@ ChatItem: `{"id": "<line uuid or generated>", "ts": <ms>, "role": "user|assistan
 ## iOS: connection lifetime
 
 iOS has no foreground service. The connections live in the app process: always while the app is open, for about 25 s after it goes to the background (and again when a notification button wakes it), and for as long as the app stays in the background when the user turns on **Stay connected in the background** (silent audio with the `audio` background mode). On resume the app pings every connected PC and reconnects the ones that do not answer; events missed in between are replayed through `since` as on Android.
+
+---
+
+# v1.3 — images in the chat
+
+## Sending images from the phone
+
+`send` takes up to 4 images:
+
+```
+→ {"type":"send","session_id":"...","text":"...","client_id":"<id>",
+   "images":[{"mime":"image/jpeg","data":"<base64>"}]}
+```
+
+- `text` may be empty when there are images.
+- An image is at most 2.5 MB (decoded) and must be a JPEG, PNG, GIF or WebP; the daemon tells the type by the content, not by `mime`. Otherwise the message is `rejected` ("Too many images (4 at most)", "An image is too large", "Only JPEG, PNG, GIF and WebP images can be sent").
+- The daemon saves them as `~/.local/state/ccnotify/uploads/<session short>/<client_id>-<n>.<ext>` (mode 600, directory 700) and deletes them again when the message is rejected. Uploads older than 7 days are removed.
+- What Claude Code gets (through `listen`) is the text followed by the files, which it looks at with its Read tool:
+
+  ```
+  <text>
+
+  The user attached images from their phone. Look at them with the Read tool:
+  /home/u/.local/state/ccnotify/uploads/44155e15/9f2c…-1.jpg
+  /home/u/.local/state/ccnotify/uploads/44155e15/9f2c…-2.jpg
+  ```
+
+## ChatItem
+
+ChatItem gains `"images": [{"id": "<image id>"}]` (left out when there are none):
+
+- a `phone` item: the images sent with it, `up/<session short>/<file>`; its `text` is the message without the file list;
+- a `user` item: the image blocks of that transcript line, `tr/<line uuid>/<content block index>`. The text still has one "[image]" per image for phones that do not show images; a phone that does leaves those lines out.
+
+## Fetching an image
+
+```
+→ {"type":"get_image","session_id":"...","image_id":"..."}
+← {"type":"image","session_id":"...","image_id":"...","mime":"image/png","data":"<base64>"}
+← {"type":"image","session_id":"...","image_id":"...","error":"not_found"}
+```
+
+An `up/…` id is only served for its own session. For a `tr/…` id the daemon finds the line by its uuid in the session's transcript (the whole file, not only the last 4 MB).
+
+## Phone
+
+- The input bar has an attach button: photo library (up to 4) or camera. Pictures are scaled to 1600 px and re-encoded before sending. They are not queued while the service is stopped: the message is rejected locally instead.
+- Bubbles show their pictures (fetched once, kept in memory); a tap opens one in full.
+- Every bubble is Markdown; what the user typed keeps its line breaks.
+- A long press on a bubble opens its options: **Reply**, **Copy**, **Select text**; a rejected message of this phone has **Send again** and **Remove**.
+- **Reply** quotes the start of the message (its prose up to the first code block or table, at most 240 characters) as a Markdown quote above the reply, so no protocol change is needed:
+
+  ```
+  > <start of the quoted message>
+
+  <the reply>
+  ```
+
+# v1.4 — reaching the PC from outside the LAN
+
+The transport does not change: the phone connects to one of the PC's
+addresses with the pinned certificate. What changes is which addresses there
+are and how the phone picks one.
+
+## Addresses
+
+`hosts` (QR payload, `status`, `hello`) lists, in this order:
+
+1. the LAN addresses (as before);
+2. the PC's Tailscale addresses: IPv4 in `100.64.0.0/10` on any interface;
+3. `extra_hosts` of `config.json` (`["mac.example.ts.net", "10.8.0.2"]`):
+   other VPN addresses, or DNS names;
+4. the relay of `config.json` (`relay`, set with `ccnotify relay <url>`), as
+   its URL: `wss://relay.example`. See "Relay" below.
+
+mDNS still advertises LAN addresses only.
+
+## hello
+
+```json
+{"type":"hello","pc_id":"...","name":"...","last_id":N,"hosts":["192.168.0.64","100.101.102.103"]}
+```
+
+`hosts` is optional (absent from older daemons). A phone that gets it stores
+the list in place of the one from pairing, so a paired phone learns a new
+remote address the next time it connects at home.
+
+## Phone
+
+- A host that starts with `wss://` (or `ws://`) is a relay: the phone
+  connects to `<relay>/pc/<pc_id>/connect` and runs the usual connection
+  (TLS with the pinned certificate, `auth`, …) through it.
+- A host is *LAN* when it is an address in `10/8`, `172.16/12`, `192.168/16`,
+  `169.254/16` (or IPv6 link-local / `fc00::/7`), and *remote* otherwise
+  (VPN addresses, names).
+- Each round tries the stored hosts with the one that last got a `hello`
+  first, then the others in stored order. With more than one host, a LAN host
+  gets 4 s to connect (10 s otherwise): away from home it cannot answer.
+- After mDNS discovery, the stored hosts become the discovered addresses
+  followed by the remote hosts known before.
+
+## Relay
+
+For a PC that the internet cannot reach (provider NAT). The daemon and the
+phone both connect out to the relay with WebSockets; it passes bytes between
+them and understands none of them. `relay/` is one for Cloudflare Workers,
+`ccnotify relay-server [port]` one for a machine of your own.
+
+- Daemon: `GET <relay>/pc/<pc_id>/listen?key=<relay_key>`. The first daemon
+  for a `pc_id` sets the key (48 hex characters, `relay_key` in
+  `config.json`); another key is refused afterwards. A new connection of the
+  daemon replaces the old one and closes its phones.
+- Phone: `GET <relay>/pc/<pc_id>/connect`; refused (HTTP 503, or closed) when
+  the daemon is not connected.
+- Relay → daemon, text: `{"open": N}` when a phone connected (N: unsigned 32
+  bit), `{"close": N}` when it left. Daemon → relay, text: `{"close": N}`.
+- Daemon ↔ relay, binary: 4 bytes N (big endian), then the bytes of that
+  phone's connection. Phone ↔ relay, binary: the bytes.
+- The daemon opens a TCP connection to its own port on `127.0.0.1` for every
+  `open` and pipes it; it pings the relay every 30 s and reconnects (1 s … 60 s
+  backoff) when it hears nothing for 75 s.
+- The phone opens a listening socket on `127.0.0.1`, pipes it to the relay,
+  and connects to it as to any other address of the PC.
+
+# v1.5 — suggested next messages
+
+Claude Code's own prompt suggestion exists only inside the app that shows it
+(it is not in the transcript, and no hook gets it). So the phone's comes from
+Claude itself:
+
+- `suggestions: true` in `config.json` (`ccnotify suggestions on|off`; read by
+  the hooks on every prompt, no restart).
+- With it on, `ccnotify hook` answers `UserPromptSubmit` with
+  `hookSpecificOutput.additionalContext`: a request to end the final reply
+  with one more line, after an empty line:
+
+  ```text
+  [next]: # "first suggestion | second suggestion"
+  ```
+
+  One to three short messages the user would plausibly send next. It is a
+  Markdown link reference definition, which no renderer displays. `listen`
+  appends the same request to a message from the phone (no
+  `UserPromptSubmit` runs for those).
+- The daemon takes the last line that starts with `[next]: #` out of an
+  assistant text (transcript items, and the `stop` event's message), splits
+  what is between the quotes (or parentheses) at `|`, and keeps up to three
+  entries of up to 120 characters as the ChatItem's `suggestions`:
+
+  ```json
+  {"id":"…","ts":1790000000000,"role":"assistant","text":"All tests pass.","suggestions":["commit it","push"]}
+  ```
+
+- Phone: offers the `suggestions` of the last chat item while it is Claude's,
+  the session is not `working` or `ended`, and nothing was sent after it. A
+  tap puts the text in the message box (the watch asks, then sends).
+

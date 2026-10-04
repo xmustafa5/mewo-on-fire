@@ -35,7 +35,24 @@
 		<string>_ccnotify._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>The camera is used to scan the pairing QR code shown by ccnotify on your PC.</string>
+	<string>The camera is used to scan the pairing QR code shown by ccnotify on your PC, and to take photos you send to Claude.</string>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Claude Code</string>
+		</dict>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>CC Notify</string>
+		</dict>
+	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Records the voice messages you send to Claude.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Voice messages you record here or on your Apple Watch are turned into text for Claude.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Pictures you pick are sent to Claude Code on your PC.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>ccnotify connects to your PC on the local network to receive Claude Code notifications.</string>
 	<key>UIApplicationSceneManifest</key>

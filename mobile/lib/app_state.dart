@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -39,13 +40,26 @@ class ChatState {
 /// A message sent from this phone, until the chat shows it (or forever when
 /// rejected — rejected messages never reach the transcript).
 class OutgoingMessage {
-  OutgoingMessage({required this.clientId, required this.text, required this.ts});
+  OutgoingMessage({
+    required this.clientId,
+    required this.text,
+    required this.ts,
+    this.images = const <Uint8List>[],
+  });
 
   final String clientId;
   final String text;
   final int ts; // unix ms
+  final List<Uint8List> images;
   String status = SendStatus.sending;
   String reason = '';
+}
+
+/// An image of a chat, fetched from the PC on demand (in memory only).
+class ChatImage {
+  Uint8List? bytes;
+  bool loading = false;
+  String error = '';
 }
 
 /// UI-isolate state. Only writer of `pcs` and `settings`; talks to the task
@@ -80,6 +94,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final ValueNotifier<SessionRef?> openSession = ValueNotifier<SessionRef?>(null);
 
   final Map<String, ChatState> _chats = <String, ChatState>{};
+
+  /// Fetched chat images by `pcId|sessionId|imageId`, oldest first.
+  final Map<String, ChatImage> _images = <String, ChatImage>{};
+  final Map<String, Timer> _imageTimeouts = <String, Timer>{};
+  static const int _maxCachedImages = 40;
   final Map<String, List<OutgoingMessage>> _outgoing = <String, List<OutgoingMessage>>{};
   final Map<String, int> _watched = <String, int>{}; // open chat screens by session key
   final Map<String, Timer> _chatRefreshTimers = <String, Timer>{};
@@ -217,6 +236,19 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Something outside the app's screens needs the PCs now (the watch asked
+  /// while the app was in the background): connect again without waiting for
+  /// the next retry.
+  Future<void> wake() async {
+    if (pcs.isEmpty) return;
+    if (await _isRunning()) {
+      serviceRunning = true;
+      _send('reconnect');
+    } else if (!_userStopped) {
+      await startService();
+    }
+  }
+
   Future<bool> _isRunning() async {
     try {
       return await isServiceRunning();
@@ -299,9 +331,77 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     } else if (type == 'chat_error') {
       final key = sessionKey('${msg['pc_id']}', '${msg['session_id']}');
       _finishChat(key, error: msg['error'] is String ? msg['error'] as String : 'Failed');
+    } else if (type == 'image') {
+      _onImage(msg);
     } else if (type == 'send_result') {
       _onSendResult(msg);
     }
+  }
+
+  // ---- chat images (v1.3) ----
+
+  static String _imageKey(String pcId, String sessionId, String imageId) =>
+      '$pcId|$sessionId|$imageId';
+
+  /// The image's state; starts fetching it when it is not there yet (or
+  /// failed and [retry] is set).
+  ChatImage chatImage(String pcId, String sessionId, String imageId, {bool retry = false}) {
+    final key = _imageKey(pcId, sessionId, imageId);
+    var image = _images[key];
+    if (image != null && (image.bytes != null || image.loading || (image.error.isNotEmpty && !retry))) {
+      return image;
+    }
+    image = ChatImage()..loading = true;
+    _images.remove(key);
+    _images[key] = image;
+    while (_images.length > _maxCachedImages) {
+      _images.remove(_images.keys.first);
+    }
+    _imageTimeouts[key]?.cancel();
+    _imageTimeouts[key] = Timer(const Duration(seconds: 20), () => _finishImage(key, error: 'No answer'));
+    unawaited(_requestImage(key, pcId, sessionId, imageId));
+    return image;
+  }
+
+  Future<void> _requestImage(String key, String pcId, String sessionId, String imageId) async {
+    if (!await _isRunning()) {
+      _finishImage(key, error: 'Not connected');
+      return;
+    }
+    try {
+      sendToTask(jsonEncode(
+          {'cmd': 'get_image', 'pc_id': pcId, 'session_id': sessionId, 'image_id': imageId}));
+    } catch (_) {
+      _finishImage(key, error: 'Not connected');
+    }
+  }
+
+  void _onImage(Map<String, dynamic> msg) {
+    final key = _imageKey('${msg['pc_id']}', '${msg['session_id']}', '${msg['image_id']}');
+    final data = msg['data'];
+    if (data is String && data.isNotEmpty) {
+      try {
+        _finishImage(key, bytes: base64Decode(data));
+        return;
+      } catch (_) {}
+    }
+    _finishImage(key, error: msg['error'] == 'offline' ? 'PC offline' : 'Not available');
+  }
+
+  /// Fetches an image again after it failed.
+  void retryChatImage(String pcId, String sessionId, String imageId) {
+    chatImage(pcId, sessionId, imageId, retry: true);
+    notifyListeners();
+  }
+
+  void _finishImage(String key, {Uint8List? bytes, String error = ''}) {
+    _imageTimeouts.remove(key)?.cancel();
+    final image = _images[key];
+    if (image == null || !image.loading) return;
+    image.loading = false;
+    image.bytes = bytes;
+    image.error = bytes == null ? error : '';
+    notifyListeners();
   }
 
   // ---- sessions + chat (task owns `sessions_cache`; chats live in memory) ----
@@ -415,6 +515,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   ChatState? chatOf(String pcId, String sessionId) => _chats[sessionKey(pcId, sessionId)];
 
+  /// What to offer as the next message (v1.5): the suggestions of Claude's
+  /// reply while it is the last thing in the chat and Claude is not working.
+  List<String> suggestionsOf(String pcId, String sessionId) {
+    final items = chatOf(pcId, sessionId)?.items ?? const <ChatItem>[];
+    if (items.isEmpty || items.last.role != ChatRole.assistant) return const <String>[];
+    final session = findSession(pcId, sessionId)?.session;
+    if (session != null && (session.state == SessionState.working || session.ended)) {
+      return const <String>[];
+    }
+    if (outgoingOf(pcId, sessionId).any((m) => m.status != SendStatus.rejected)) {
+      return const <String>[]; // something was sent after it
+    }
+    return items.last.suggestions;
+  }
+
   List<OutgoingMessage> outgoingOf(String pcId, String sessionId) =>
       _outgoing[sessionKey(pcId, sessionId)] ?? const <OutgoingMessage>[];
 
@@ -484,27 +599,46 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _sessionsWaiters.remove(c);
   }
 
-  /// Sends [text] to a session through the task isolate. When the service is
-  /// not running, the message is queued and the service started.
-  Future<void> sendMessage(String pcId, String sessionId, String text) async {
+  /// Sends [text] (and [images], v1.3) to a session through the task
+  /// isolate. When the service is not running, a text message is queued and
+  /// the service started. Returns the message (its status changes as the PC
+  /// answers), or null when there was nothing to send.
+  Future<OutgoingMessage?> sendMessage(
+    String pcId,
+    String sessionId,
+    String text, {
+    List<Uint8List> images = const <Uint8List>[],
+  }) async {
     final t = text.trim();
-    if (t.isEmpty) return;
+    if (t.isEmpty && images.isEmpty) return null;
     final key = sessionKey(pcId, sessionId);
     final m = OutgoingMessage(
       clientId: newClientId(),
       text: t,
       ts: DateTime.now().millisecondsSinceEpoch,
+      images: images,
     );
     (_outgoing[key] ??= <OutgoingMessage>[]).add(m);
     notifyListeners();
-    final msg = sendCmd(pcId, sessionId, t, m.clientId);
+    final msg = sendCmd(pcId, sessionId, t, m.clientId, images: [
+      // The PC tells the format by the content.
+      for (final bytes in images) {'mime': 'image/jpeg', 'data': base64Encode(bytes)},
+    ]);
     if (await _isRunning()) {
       try {
         sendToTask(jsonEncode(msg));
-        return;
+        return m;
       } catch (e) {
         debugPrint('ccnotify: sending message failed: $e');
       }
+    }
+    if (images.isNotEmpty) {
+      // Too big for the queue in the preferences: connect first.
+      m.status = SendStatus.rejected;
+      m.reason = 'Not connected to the PC yet — send it again in a moment';
+      notifyListeners();
+      if (pcs.isNotEmpty) await startService();
+      return m;
     }
     try {
       await Store.queueSend(msg);
@@ -512,9 +646,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       m.status = SendStatus.rejected;
       m.reason = 'Could not queue the message';
       notifyListeners();
-      return;
+      return m;
     }
     if (pcs.isNotEmpty) await startService();
+    return m;
+  }
+
+  /// Drops a message that was rejected (it never reached the chat).
+  void removeOutgoing(String pcId, String sessionId, String clientId) {
+    _outgoing[sessionKey(pcId, sessionId)]?.removeWhere((m) => m.clientId == clientId);
+    notifyListeners();
   }
 
   // ---- requests (task owns `pending_requests`) ----

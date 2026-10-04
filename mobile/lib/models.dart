@@ -441,6 +441,8 @@ class ChatItem {
     required this.role,
     required this.text,
     this.tool = '',
+    this.images = const <String>[],
+    this.suggestions = const <String>[],
   });
 
   final String id;
@@ -449,12 +451,24 @@ class ChatItem {
   final String text;
   final String tool; // role tool only
 
+  /// Ids of the message's images (v1.3), fetched with `get_image`.
+  final List<String> images;
+
+  /// Messages the user may want to send next (v1.5; a reply of Claude only).
+  final List<String> suggestions;
+
   factory ChatItem.fromJson(Map<String, dynamic> j) => ChatItem(
         id: _asString(j['id']),
         ts: _asInt(j['ts']),
         role: _asString(j['role']),
         text: _asString(j['text']),
         tool: _asString(j['tool']),
+        images: <String>[
+          if (j['images'] is List)
+            for (final e in j['images'] as List)
+              if (e is Map && e['id'] is String && (e['id'] as String).isNotEmpty) e['id'] as String,
+        ],
+        suggestions: _asStringList(j['suggestions']),
       );
 
   DateTime get time => DateTime.fromMillisecondsSinceEpoch(ts);
@@ -477,6 +491,7 @@ class AppSettings {
     this.notifySessionEnd = true,
     this.answerFromPhone = true,
     this.keepAlive = false,
+    this.voiceLanguage = '',
     this.mutedProjects = const <String>[],
   });
 
@@ -489,6 +504,10 @@ class AppSettings {
 
   /// iOS only: keep the app (and its connections) running in the background.
   final bool keepAlive;
+
+  /// Language voice messages are spoken in ("en-US", "ar-SA"); empty = the
+  /// phone's own language.
+  final String voiceLanguage;
   final List<String> mutedProjects;
 
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
@@ -497,6 +516,7 @@ class AppSettings {
         notifySessionEnd: j['notify_session_end'] is bool ? j['notify_session_end'] as bool : true,
         answerFromPhone: j['answer_from_phone'] is bool ? j['answer_from_phone'] as bool : true,
         keepAlive: j['keep_alive'] is bool ? j['keep_alive'] as bool : false,
+        voiceLanguage: _asString(j['voice_language']),
         mutedProjects: _asStringList(j['muted_projects']),
       );
 
@@ -506,6 +526,7 @@ class AppSettings {
         'notify_session_end': notifySessionEnd,
         'answer_from_phone': answerFromPhone,
         'keep_alive': keepAlive,
+        'voice_language': voiceLanguage,
         'muted_projects': mutedProjects,
       };
 
@@ -515,6 +536,7 @@ class AppSettings {
     bool? notifySessionEnd,
     bool? answerFromPhone,
     bool? keepAlive,
+    String? voiceLanguage,
     List<String>? mutedProjects,
   }) =>
       AppSettings(
@@ -523,6 +545,7 @@ class AppSettings {
         notifySessionEnd: notifySessionEnd ?? this.notifySessionEnd,
         answerFromPhone: answerFromPhone ?? this.answerFromPhone,
         keepAlive: keepAlive ?? this.keepAlive,
+        voiceLanguage: voiceLanguage ?? this.voiceLanguage,
         mutedProjects: mutedProjects ?? this.mutedProjects,
       );
 

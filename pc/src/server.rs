@@ -24,6 +24,7 @@ use crate::requests::Request;
 use crate::sessions::Session;
 use crate::store::Event;
 use crate::transcript;
+use crate::uploads;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
 type WsSink = SplitSink<Ws, Message>;
@@ -237,6 +238,7 @@ async fn handle_auth(
             "pc_id": state.config.pc_id,
             "name": state.config.name,
             "last_id": sub.last_id,
+            "hosts": state.hosts(),
         }),
     )
     .await?;
@@ -346,7 +348,7 @@ async fn subscriber_loop(
 }
 
 /// A text frame from a subscribed phone: `answer` (v1.1), `sessions`,
-/// `get_chat`, `send` (v1.2). Other frames are ignored.
+/// `get_chat`, `send` (v1.2), `get_image` (v1.3). Other frames are ignored.
 async fn handle_frame(
     state: &AppState,
     device: &Device,
@@ -365,6 +367,7 @@ async fn handle_frame(
             send_json(sink, &json!({"type": "sessions", "sessions": sessions})).await
         }
         "get_chat" => handle_get_chat(state, sink, &msg).await,
+        "get_image" => handle_get_image(state, sink, &msg).await,
         "send" => handle_send(state, device, sink, &msg).await,
         _ => Ok(()),
     }
@@ -394,6 +397,23 @@ async fn handle_get_chat(state: &AppState, sink: &mut WsSink, msg: &Value) -> Re
     .await
 }
 
+/// `get_image` → `image` with the data, or with `error` when it is gone.
+async fn handle_get_image(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    let session_id = str_field(msg, "session_id");
+    let image_id = str_field(msg, "image_id");
+    let reply = match state.image(session_id, image_id).await {
+        Some((mime, data)) => json!({
+            "type": "image", "session_id": session_id, "image_id": image_id,
+            "mime": mime, "data": data,
+        }),
+        None => json!({
+            "type": "image", "session_id": session_id, "image_id": image_id,
+            "error": "not_found",
+        }),
+    };
+    send_json(sink, &reply).await
+}
+
 /// `send` → deliver / queue / reject (PROTOCOL.md v1.2), then `send_result`.
 async fn handle_send(
     state: &AppState,
@@ -403,9 +423,14 @@ async fn handle_send(
 ) -> Result<()> {
     let session_id = str_field(msg, "session_id");
     let client_id = str_field(msg, "client_id");
-    let outcome = state
-        .send_message(session_id, str_field(msg, "text"), client_id)
-        .await;
+    let outcome = match uploads::decode(msg.get("images")) {
+        Ok(images) => {
+            state
+                .send_message(session_id, str_field(msg, "text"), client_id, images)
+                .await
+        }
+        Err(reason) => crate::sessions::SendOutcome::Rejected(reason),
+    };
     let short: String = session_id.chars().take(8).collect();
     eprintln!(
         "ccnotify: phone message for session {short} from device {} ({}): {} {}",

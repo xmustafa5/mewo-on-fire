@@ -16,7 +16,8 @@ Claude Code ──hook──▶ ccnotify (Rust; systemd user service / launchd a
 |---|---|
 | [pc/](pc/) | Rust binary `ccnotify`: daemon, CLI and Claude Code hook. Runs on Linux and macOS. |
 | [pc/menubar/](pc/menubar/) | macOS menu bar app: service status, pairing QR code, phones and sessions. On Linux the same is built in: `ccnotify tray`. |
-| [mobile/](mobile/) | Flutter app for Android and iOS. On iOS, background delivery is opt-in (see [mobile/README.md](mobile/README.md#ios)). |
+| [mobile/](mobile/) | Flutter app for Android and iOS, with an Apple Watch app (see [mobile/README.md](mobile/README.md#apple-watch)). On iOS, background delivery is opt-in (see [mobile/README.md](mobile/README.md#ios)). |
+| [relay/](relay/) | Relay for using the app away from the PC's network (Cloudflare Worker, or `ccnotify relay-server`); see [pc/README.md](pc/README.md#away-from-the-local-network). |
 | [web/](web/) | Next.js download site: landing page, `install.sh` and download links for the latest release. |
 | [PROTOCOL.md](PROTOCOL.md) | Wire format both sides follow. |
 

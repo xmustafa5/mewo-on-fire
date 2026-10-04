@@ -91,10 +91,31 @@ run `ccnotify install` again. It adds the `listen` Stop hook and the
   that counts messages still queued. Pull down to refresh.
 - Tap a session to open its chat. Your prompts appear on the right, and
   messages sent from the phone are marked "📱 from phone". Claude's replies
-  appear on the left as Markdown, and you can select the text. Tool calls show
+  appear on the left. Tool calls show
   as grey one-line entries. Consecutive tool calls are collapsed into one line;
   tap it to expand them. The chat refreshes on its own when the session changes
   or Claude finishes a reply. You can also pull down to refresh it.
+- Messages are shown as Markdown (code blocks, tables, lists, quotes).
+  Pictures you pasted into Claude on the PC appear in the chat; tap one to see
+  it in full.
+- Tap the picture button next to the box to attach up to four photos from the
+  library or the camera. They are saved on the PC, and Claude is told where
+  to find them.
+- Long-press a message for its options: **Reply** (quotes the message above
+  yours), **Copy** and **Select text**. A message that was rejected can be
+  sent again or removed from there.
+- **Suggestions**: with `ccnotify suggestions on` on the PC, Claude's reply
+  comes with up to three suggested next messages, shown as buttons above the
+  box. Tap one to put it in the box, then send or change it. (On the watch
+  they are under the chat; a tap asks before it sends.)
+- While the keyboard is open, the keyboard button left of the box closes it
+  (so does dragging the chat).
+- iOS: while the box is empty, the send button is a **microphone**. Tap it,
+  speak (up to two minutes) and tap **Done**: the phone turns the recording
+  into text and puts it in the box, for a look before you send it. The
+  language button switches between English and Arabic, and "It was …" under
+  the result reads the same recording in the other language. Claude Code
+  gets text, not a recording.
 - Type in the box at the bottom to continue the session. Each message shows its
   status: **Sending…**, **Delivered**, **Queued** (Claude gets it when it
   finishes the current reply), or **Rejected** with the reason. The box is
@@ -163,3 +184,72 @@ Everything works as on Android, with these differences:
 - There is no persistent "Listening…" notification and no start on boot: open
   the app once after restarting the phone.
 - The Simulator has no camera: use **Paste code instead**.
+
+## Siri and Shortcuts (iOS 16.4 or later)
+
+"Hey Siri, **tell Claude Code**" (or "message Claude Code"): Siri asks what
+you want to say and sends it to a session. The app also answers to "CC
+Notify".
+
+Which session:
+
+- none named: the one that was active last. When several were active within
+  half an hour of it, Siri asks "Which session?".
+- "tell Claude Code **in mewo-on-fire**": the session of that project
+  (sessions are called by their project, which is short enough to say).
+- In the Shortcuts app, the **Tell Claude Code** action takes a message and a
+  session; a shortcut with a fixed session can get a name or a button of its
+  own.
+
+The message is sent in the background while the app is running (also away
+from home, through a relay). When the app is closed, it is put in the app's
+queue and Siri opens the app to send it. Siri hears the message in its own
+language: for Arabic with an English Siri, use the microphone in the chat.
+
+## Apple Watch
+
+The iPhone app carries a watch app (`ios/CcnotifyWatch`, SwiftUI, watchOS 10
+or later). It installs with the iPhone app: if it does not show up on the
+watch, open the **Watch** app on the iPhone and install **ccnotify** under
+"Available Apps".
+
+- The first screen lists what Claude is **waiting for** and the **sessions**
+  of all paired PCs.
+- Open a waiting prompt to answer it: **Allow** / **Always allow** / **Deny**,
+  **Approve** / **Reject**, or the options of a question (several questions
+  and "choose all that apply" work too). **Deny, say why**, **Reject, say
+  why** and **Other… say it** take your answer by voice.
+- Open a session to read its chat: your messages on the right, Claude's on the
+  left (with code blocks), tool calls as one grey line. **Earlier messages**
+  loads the page above. The chat checks for news every few seconds while it
+  is on screen.
+- **Reply by voice** records a message (up to two minutes): tap it, speak,
+  tap **Done**. The recording goes to the iPhone, which turns it into text
+  (watchOS has no speech recognition); the watch shows the text, and **Send**
+  sends it. Claude Code gets text, not a recording. The globe button switches
+  between English and Arabic, **It was …** reads the same recording in the
+  other language, **Say it again** records anew, and **Type instead** opens
+  the watch's keyboard. The first time, allow the microphone on the watch and
+  **Speech Recognition** on the iPhone (the iPhone app asks when you open it).
+
+The watch never talks to a PC. Everything goes through the iPhone app over
+WatchConnectivity: `ios/Runner/WatchBridge.swift` hands the watch's commands to
+`lib/watch_bridge.dart`, which answers them from the app's state. So:
+
+- The iPhone has to be in reach of the watch, and on the PC's network.
+- A command from the watch wakes the iPhone app up when iOS has suspended it,
+  and the app reconnects to the PC first (a few seconds). If the app was
+  closed in the app switcher, or the phone was restarted, open it once.
+  With **Stay connected in the background** on, the watch's lists also stay
+  up to date by themselves.
+- Notifications on the watch are the iPhone's (iOS shows them on the watch
+  while the phone is locked), with the same buttons.
+
+To install on a real watch from Xcode, the watch has to be registered for
+development like the phone: with the iPhone connected to the Mac, turn on
+**Developer Mode** on the watch (Settings → Privacy & Security) and let Xcode
+prepare it (Window → Devices and Simulators), then build the `Runner` scheme
+for the iPhone. The watch target uses the bundle id
+`<app bundle id>.watchkitapp`; if you change the app's bundle id, change it
+there and in `ios/CcnotifyWatch/Info.plist` (`WKCompanionAppBundleIdentifier`).
+

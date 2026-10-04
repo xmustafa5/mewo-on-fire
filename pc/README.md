@@ -210,12 +210,58 @@ If another program already uses port `47821` (the log says "Address already in
 use"), set another `"port"` in `~/.config/ccnotify/config.json`, restart the
 daemon and pair again.
 
+## Suggested next messages
+
+```sh
+ccnotify suggestions on     # or: off
+```
+
+Claude Code suggests a next prompt in its own window, but keeps it there. With
+this on, ccnotify asks Claude (through the UserPromptSubmit hook) to end each
+reply with a line that Markdown does not display, holding one to three
+suggested next messages; the app shows them as buttons. It costs a few dozen
+tokens per reply and applies to every Claude Code session on this PC, from
+the next prompt on. In a plain terminal the line is visible as
+`[next]: # "…"`.
+
+## Away from the local network
+
+The phone reaches the PC at any of the addresses the daemon tells it about
+(`ccnotify status` lists them). It uses the local network when it is there
+and falls back to the others elsewhere. There are two ways to give it one
+that works from outside:
+
+**A relay** — nothing to install on the phone. The daemon and the phone both
+connect out to a small relay on the internet, which passes the (still
+encrypted) connection between them. This also works when the PC cannot be
+reached from the internet at all, which is the usual case at home.
+[`relay/`](../relay/) has the relay (free on Cloudflare, or on a machine of
+your own) and how to deploy it; then:
+
+```sh
+ccnotify relay wss://ccnotify-relay.<you>.workers.dev
+```
+
+**A VPN** — with [Tailscale](https://tailscale.com) on the PC and the phone,
+the daemon finds its Tailscale address by itself. For another VPN or a DNS
+name, list it in `~/.config/ccnotify/config.json` and restart the daemon:
+
+```json
+{ "extra_hosts": ["mac.example.ts.net"] }
+```
+
+A paired phone learns new addresses the next time it connects at home. The
+PC has to be awake, and the phone still needs the app running to get
+notifications (see the mobile README).
+
 ## Files
 
 - `~/.config/ccnotify/` — `config.json`, `cert.der`, `key.der`, `devices.json`
 - `~/.local/state/ccnotify/events.json` — last 500 events
 - `~/.local/state/ccnotify/sessions.json` — last 50 sessions (state, queued
   and recorded phone messages)
+- `~/.local/state/ccnotify/uploads/` — pictures sent from a phone with a
+  message, per session; deleted after 7 days
 - `$XDG_RUNTIME_DIR/ccnotify.sock` — local control socket (Linux)
 - `~/.local/state/ccnotify/ccnotify.sock` — local control socket (macOS)
 

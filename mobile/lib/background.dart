@@ -193,6 +193,7 @@ class _Outgoing {
     required this.sessionId,
     required this.text,
     required this.clientId,
+    this.images = const <Object?>[],
     this.notif,
   });
 
@@ -200,6 +201,7 @@ class _Outgoing {
   final String sessionId;
   final String text;
   final String clientId;
+  final List<Object?> images; // `{"mime", "data"}` each (v1.3)
   final ReplyNotif? notif; // set when typed into a notification (Reply)
   bool sent = false;
   Timer? timer;
@@ -383,6 +385,8 @@ class CcTaskHandler extends TaskHandler {
       await _handleSend(msg);
     } else if (cmd == 'get_chat') {
       _handleGetChat(msg);
+    } else if (cmd == 'get_image') {
+      _handleGetImage(msg);
     } else if (cmd == 'refresh_sessions') {
       _handleRefreshSessions();
     }
@@ -471,14 +475,16 @@ class CcTaskHandler extends TaskHandler {
     var clientId = _str(msg['client_id']);
     if (clientId.isEmpty) clientId = newClientId();
     if (_outbox.containsKey(clientId)) return; // duplicate
+    final images = msg['images'];
     final o = _Outgoing(
       pcId: pcId,
       sessionId: sessionId,
       text: _str(msg['text']).trim(),
       clientId: clientId,
+      images: images is List ? images : const <Object?>[],
       notif: ReplyNotif.fromJson(msg['notif']),
     );
-    if (o.text.isEmpty) {
+    if (o.text.isEmpty && o.images.isEmpty) {
       await _finishSend(o, SendStatus.rejected, 'The message was empty');
       return;
     }
@@ -503,7 +509,7 @@ class CcTaskHandler extends TaskHandler {
   }
 
   void _trySend(_Outgoing o, PcLink link) {
-    if (o.sent || !link.sendMessage(o.sessionId, o.text, o.clientId)) return;
+    if (o.sent || !link.sendMessage(o.sessionId, o.text, o.clientId, images: o.images)) return;
     o.sent = true;
     o.timer?.cancel();
     o.timer = Timer(_sendResultTimeout, () {
@@ -586,6 +592,37 @@ class CcTaskHandler extends TaskHandler {
       'pc_id': pcId,
       'session_id': sessionId,
       'error': error,
+    }));
+  }
+
+  /// `{"pc_id", "session_id", "image_id"}` → `get_image`; the reply is
+  /// forwarded as `image`, or right away with an error when the PC is not
+  /// connected.
+  void _handleGetImage(Map<String, dynamic> msg) {
+    final pcId = _str(msg['pc_id']);
+    final sessionId = _str(msg['session_id']);
+    final imageId = _str(msg['image_id']);
+    if (pcId.isEmpty || sessionId.isEmpty || imageId.isEmpty) return;
+    final link = _links[pcId];
+    if (link != null && link.getImage(sessionId, imageId)) return;
+    link?.kick();
+    _sendToMain(jsonEncode({
+      'type': 'image',
+      'pc_id': pcId,
+      'session_id': sessionId,
+      'image_id': imageId,
+      'error': 'offline',
+    }));
+  }
+
+  Future<void> _onImage(PcLink link, Map<String, dynamic> image) async {
+    _sendToMain(jsonEncode({
+      'type': 'image',
+      'pc_id': link.pc.id,
+      'session_id': image['session_id'],
+      'image_id': image['image_id'],
+      if (image['data'] is String) 'data': image['data'],
+      if (image['error'] is String) 'error': image['error'],
     }));
   }
 
@@ -732,6 +769,7 @@ class CcTaskHandler extends TaskHandler {
         onSessions: _onSessions,
         onSession: _onSession,
         onChat: _onChat,
+        onImage: _onImage,
         onSendResult: _onSendResult,
       );
       _links[pc.id] = link;
@@ -768,7 +806,12 @@ class CcTaskHandler extends TaskHandler {
     final sig = await _networkSignature();
     if (sig == _netSig) return;
     _netSig = sig;
-    if (sig.isNotEmpty) _kickDisconnected();
+    if (sig.isEmpty) return;
+    _kickDisconnected();
+    // Home Wi-Fi joined or left: back to the LAN address, or on to the relay.
+    for (final l in _links.values) {
+      l.networkChanged();
+    }
   }
 
   static Future<String> _networkSignature() async {

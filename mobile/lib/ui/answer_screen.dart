@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../models.dart';
 import '../requests.dart';
 import 'history_tab.dart' show relativeTime;
+import 'keyboard_hide_button.dart';
 
 /// Answers one pending request (permission prompt, question or plan approval).
 /// Opened from the "Waiting for you" list or by tapping a request notification.
@@ -149,7 +150,10 @@ class _AnswerScreenState extends State<AnswerScreen> {
   Widget build(BuildContext context) {
     final e = _entry;
     return Scaffold(
-      appBar: AppBar(title: Text(e == null ? 'Request' : AnswerScreen.kindLabel(e.request.kind))),
+      appBar: AppBar(
+        title: Text(e == null ? 'Request' : AnswerScreen.kindLabel(e.request.kind)),
+        actions: const [KeyboardHideButton()],
+      ),
       body: e == null ? _gone(context) : _body(context, e),
     );
   }
@@ -190,6 +194,7 @@ class _AnswerScreenState extends State<AnswerScreen> {
       children: [
         Expanded(
           child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             children: [
               _Header(entry: e),

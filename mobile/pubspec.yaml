@@ -42,6 +42,7 @@ dependencies:
   bonsoir: ^7.1.5
   device_info_plus: ^13.2.0
   flutter_markdown_plus: ^1.0.12
+  image_picker: ^1.2.3
 
 dev_dependencies:
   flutter_test:
