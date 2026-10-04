@@ -43,7 +43,9 @@ pub fn split(text: &str) -> (String, Vec<String>) {
     };
     let suggestions: Vec<String> = inner
         .split('|')
-        .map(|s| s.trim().chars().take(MAX_CHARS).collect::<String>())
+        // Quotes around an entry (Claude sometimes adds them) are not part of it.
+        .map(|s| s.trim().trim_matches(|c| matches!(c, '"' | '\'' | '`' | '\u{201C}' | '\u{201D}')).trim())
+        .map(|s| s.chars().take(MAX_CHARS).collect::<String>())
         .filter(|s| !s.is_empty())
         .take(MAX_SUGGESTIONS)
         .collect();
@@ -70,6 +72,8 @@ mod tests {
         assert_eq!(s, vec!["yes", "no", "maybe"]);
         let (_, s) = split("[next]: # نعم | لا");
         assert_eq!(s, vec!["نعم", "لا"]);
+        let (_, s) = split("[next]: # \"\"write the migration\" | 'flip it'\"");
+        assert_eq!(s, vec!["write the migration", "flip it"]);
         let (text, s) = split("Done.\n\n[next]: # \"\"");
         assert_eq!((text.as_str(), s.len()), ("Done.", 0));
     }

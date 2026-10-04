@@ -24,8 +24,9 @@ const MAX_SESSIONS: usize = 50;
 const ENDED_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// Phone messages recorded per session for the chat.
 const MAX_PHONE_MESSAGES: usize = 100;
-/// Longest message accepted from a phone.
-const MAX_SEND_CHARS: usize = 20_000;
+/// Longest message accepted from a phone: room for a pasted log or API
+/// response (the chat shows the first 6000 characters of it).
+const MAX_SEND_CHARS: usize = 200_000;
 /// A Stop arriving this soon after queued messages were handed to a fresh
 /// `listen` belongs to the turn that ended right before: the session stays
 /// `working` (the Stop `hook` and `listen` hooks run concurrently).
