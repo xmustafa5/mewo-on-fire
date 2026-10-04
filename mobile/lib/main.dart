@@ -15,20 +15,20 @@ void main() {
   // Channel "ccnotify_service", ongoing "Listening for Claude Code sessions",
   // auto-run on boot, wifi lock.
   initForegroundTask();
-  runApp(const CcNotifyApp());
+  runApp(const MewoApp());
 }
 
 /// Claude-ish terracotta.
 const Color kSeedColor = Color(0xFFD97757);
 
-class CcNotifyApp extends StatefulWidget {
-  const CcNotifyApp({super.key});
+class MewoApp extends StatefulWidget {
+  const MewoApp({super.key});
 
   @override
-  State<CcNotifyApp> createState() => _CcNotifyAppState();
+  State<MewoApp> createState() => _MewoAppState();
 }
 
-class _CcNotifyAppState extends State<CcNotifyApp> {
+class _MewoAppState extends State<MewoApp> {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
@@ -87,7 +87,7 @@ class _CcNotifyAppState extends State<CcNotifyApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: _navigatorKey,
-      title: 'ccnotify',
+      title: 'Mewo on Fire',
       debugShowCheckedModeBanner: false,
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),

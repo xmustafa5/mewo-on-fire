@@ -22,10 +22,10 @@ const CHAT_ITEMS: u64 = 20;
 
 fn not_running_hint() -> String {
     format!(
-        "The ccnotify daemon is not running (no answer on {}).\n\
+        "The Mewo on Fire daemon is not running (no answer on {}).\n\
          Start it with:   {}\n\
-         Or install it:   ccnotify install\n\
-         Or run it in a terminal:   ccnotify daemon",
+         Or install it:   mewo install\n\
+         Or run it in a terminal:   mewo daemon",
         paths::socket_path().display(),
         install::start_command()
     )
@@ -101,7 +101,7 @@ pub fn pair() -> Result<()> {
 
     let qr = render_qr(&payload)?;
     println!();
-    println!("Scan this QR code with the ccnotify app:");
+    println!("Scan this QR code with the Mewo on Fire app:");
     println!();
     println!("{qr}");
     println!();
@@ -153,7 +153,7 @@ pub fn pair() -> Result<()> {
             return Ok(());
         }
     }
-    bail!("pairing code expired; run `ccnotify pair` again")
+    bail!("pairing code expired; run `mewo pair` again")
 }
 
 pub fn devices() -> Result<()> {
@@ -164,7 +164,7 @@ pub fn devices() -> Result<()> {
         .cloned()
         .unwrap_or_default();
     if list.is_empty() {
-        println!("No paired devices. Run `ccnotify pair` to add one.");
+        println!("No paired devices. Run `mewo pair` to add one.");
         return Ok(());
     }
     let name_width = list
@@ -184,7 +184,7 @@ pub fn devices() -> Result<()> {
         );
     }
     println!();
-    println!("Revoke a device with: ccnotify revoke <ID>");
+    println!("Revoke a device with: mewo revoke <ID>");
     Ok(())
 }
 
@@ -196,7 +196,7 @@ pub fn revoke(id: &str) -> Result<()> {
         return Ok(());
     }
     match str_field(&resp, "error") {
-        "not_found" => bail!("no paired device with id {id} (see `ccnotify devices`)"),
+        "not_found" => bail!("no paired device with id {id} (see `mewo devices`)"),
         other => bail!("daemon error: {other}"),
     }
 }
@@ -216,7 +216,7 @@ pub fn status() -> Result<()> {
     // The relay is listed with the addresses for the phones; here it gets a
     // line of its own.
     let hosts: Vec<String> = hosts.into_iter().filter(|h| !h.contains("://")).collect();
-    println!("ccnotify daemon: running");
+    println!("Mewo on Fire daemon: running");
     println!(
         "  PC name:      {} (id {})",
         str_field(&resp, "name"),
@@ -259,7 +259,7 @@ pub fn status() -> Result<()> {
     Ok(())
 }
 
-/// `ccnotify relay <url>` / `ccnotify relay off`: where phones outside the
+/// `mewo relay <url>` / `mewo relay off`: where phones outside the
 /// LAN connect through. Paired phones learn it the next time they connect.
 pub fn relay(url: &str) -> Result<()> {
     let off = matches!(url, "off" | "none" | "");
@@ -281,14 +281,14 @@ pub fn relay(url: &str) -> Result<()> {
         .map(|s| s.success())
         .unwrap_or(false);
     if restarted {
-        println!("Daemon restarted. `ccnotify status` shows the relay.");
+        println!("Daemon restarted. `mewo status` shows the relay.");
     } else {
         println!("Restart the daemon to apply it: {restart}");
     }
     Ok(())
 }
 
-/// `ccnotify suggestions on|off`. The hooks read the setting on every
+/// `mewo suggestions on|off`. The hooks read the setting on every
 /// prompt, so it applies from the next one.
 pub fn suggestions(on: bool) -> Result<()> {
     crate::config::set_suggestions(on)?;
@@ -307,10 +307,10 @@ pub fn test() -> Result<()> {
         .unwrap_or_default();
     let event = json!({
         "kind": "stop",
-        "project": "ccnotify",
+        "project": "mewo-on-fire",
         "cwd": cwd,
         "session": "test",
-        "message": "Test notification from ccnotify",
+        "message": "Test notification from Mewo on Fire",
         "detail": "",
     });
     call(&json!({"cmd": "emit", "event": event}))?;
@@ -334,19 +334,19 @@ pub fn test_ask() -> Result<()> {
         "cwd": cwd,
         "tool_name": "Bash",
         "tool_input": {
-            "command": "echo hello from ccnotify",
-            "description": "Test request from `ccnotify test-ask`",
+            "command": "echo hello from Mewo on Fire",
+            "description": "Test request from `mewo test-ask`",
         },
         "permission_suggestions": [{
             "type": "addRules",
-            "rules": [{"toolName": "Bash", "ruleContent": "echo hello from ccnotify"}],
+            "rules": [{"toolName": "Bash", "ruleContent": "echo hello from Mewo on Fire"}],
             "behavior": "allow",
             "destination": "localSettings",
         }],
     });
     let request = ask::map_request(&hook_input);
 
-    println!("Sending a test permission request (Bash: echo hello from ccnotify)...");
+    println!("Sending a test permission request (Bash: echo hello from Mewo on Fire)...");
     println!("Answer it on the phone (Ctrl+C to cancel).");
     let resp = ask::ask_daemon(&request, "")
         .map_err(|e| anyhow!("{}\n({e:#})", not_running_hint()))?;
@@ -380,7 +380,7 @@ pub fn sessions() -> Result<()> {
         .unwrap_or_default();
     if list.is_empty() {
         println!("No sessions yet. They appear after the next prompt or reply in Claude Code");
-        println!("(run `ccnotify install` once so the v1.2 hooks are in place).");
+        println!("(run `mewo install` once so the v1.2 hooks are in place).");
         return Ok(());
     }
     let now = now_ms();
@@ -411,7 +411,7 @@ pub fn sessions() -> Result<()> {
     if any_read_only {
         println!("* read-only: Claude is running agents at high effort");
     }
-    println!("Show a session's chat with: ccnotify chat <SESSION>");
+    println!("Show a session's chat with: mewo chat <SESSION>");
     Ok(())
 }
 
@@ -424,7 +424,7 @@ pub fn chat(prefix: &str) -> Result<()> {
     .map_err(|e| anyhow!("{}\n({e:#})", not_running_hint()))?;
     if resp.get("ok").and_then(Value::as_bool) != Some(true) {
         match str_field(&resp, "error") {
-            "not_found" => bail!("no session id starts with {prefix} (see `ccnotify sessions`)"),
+            "not_found" => bail!("no session id starts with {prefix} (see `mewo sessions`)"),
             "ambiguous" => bail!("{prefix} matches several sessions; use more characters"),
             "unknown_cmd" => bail!("{}", too_old_hint()),
             "" => bail!("daemon error: unknown error"),

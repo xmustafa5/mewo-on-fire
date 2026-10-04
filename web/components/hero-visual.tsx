@@ -87,7 +87,7 @@ export function HeroVisual() {
               <span className="flex size-4 items-center justify-center rounded bg-[#1c1917]">
                 <BellMark className="size-2.5" />
               </span>
-              ccnotify · now
+              Mewo on Fire · now
             </div>
             <p className="text-[11px] font-semibold text-white">Claude needs your permission</p>
             <p className="text-[10.5px] text-white/70">mewo-on-fire · Bash: npm run build</p>
@@ -103,7 +103,7 @@ export function HeroVisual() {
               <span className="flex size-4 items-center justify-center rounded bg-[#1c1917]">
                 <BellMark className="size-2.5" />
               </span>
-              ccnotify · 2m ago
+              Mewo on Fire · 2m ago
             </div>
             <p className="text-[11px] font-semibold text-white">✅ Claude finished</p>
             <p className="text-[10.5px] text-white/70">api-server · Added pagination to the users endpoint.</p>

@@ -17,7 +17,7 @@ final class VoiceRecorder: NSObject, ObservableObject {
 
   func start() async throws {
     guard await AVAudioApplication.requestRecordPermission() else {
-      throw LinkError(text: "Allow the microphone for ccnotify in the watch's Settings → Privacy")
+      throw LinkError(text: "Allow the microphone for Mewo on Fire in the watch's Settings → Privacy")
     }
     let session = AVAudioSession.sharedInstance()
     try session.setCategory(.record, mode: .default)

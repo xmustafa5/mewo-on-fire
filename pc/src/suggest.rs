@@ -2,7 +2,7 @@
 //!
 //! Claude Code's own prompt suggestion only exists inside the app that shows
 //! it, so the phone gets one another way: when the feature is on
-//! (`ccnotify suggestions on`), the UserPromptSubmit hook asks Claude to end
+//! (`mewo suggestions on`), the UserPromptSubmit hook asks Claude to end
 //! its reply with a line no Markdown renderer shows,
 //!
 //! ```text
@@ -18,7 +18,7 @@ const MAX_SUGGESTIONS: usize = 3;
 const MAX_CHARS: usize = 120;
 
 /// What the hook adds to a prompt.
-pub const INSTRUCTION: &str = "ccnotify: the user also follows this session on their phone, \
+pub const INSTRUCTION: &str = "Mewo on Fire: the user also follows this session on their phone, \
 which offers suggested next messages. End your final reply of this turn with one extra line, \
 after an empty line, in exactly this form:\n\
 [next]: # \"first suggestion | second suggestion\"\n\

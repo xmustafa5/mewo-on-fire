@@ -1,5 +1,5 @@
 //! Images sent from a phone with a message (PROTOCOL.md v1.3). They are
-//! saved under `~/.local/state/ccnotify/uploads/<session short>/`; the message
+//! saved under `~/.local/state/mewo-on-fire/uploads/<session short>/`; the message
 //! handed to Claude Code names the files so it can look at them.
 
 use std::fs;

@@ -824,7 +824,7 @@ class _ChatScreenState extends State<ChatScreen> {
       } else if (_state.statusOf(widget.pcId) != PcStatus.connected) {
         hint = '$pcName is not connected — a message waits up to a minute for it.';
       } else if (s != null && s.state == SessionState.idle && !s.listening) {
-        hint = 'This session is not listening — run `ccnotify install` on the PC and '
+        hint = 'This session is not listening — run `mewo install` on the PC and '
             'send one message from the PC first.';
       } else if (s != null && (s.state == SessionState.working || s.state == SessionState.waiting)) {
         hint = 'Claude is busy — your message is queued until it finishes.';

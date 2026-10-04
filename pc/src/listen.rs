@@ -1,4 +1,4 @@
-//! `ccnotify listen` — Claude Code Stop hook with `asyncRewake` (PROTOCOL.md
+//! `mewo listen` — Claude Code Stop hook with `asyncRewake` (PROTOCOL.md
 //! v1.2). Runs in the background after every reply and waits for a message
 //! from the phone: exit 2 with the message on stderr wakes Claude; anything
 //! else exits 0 silently. Never prints to stdout.
@@ -13,10 +13,10 @@ use crate::control;
 /// Bounds sending the request; the reply itself is awaited without a timeout.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 /// When the daemon is unreachable or drops the connection (restarting, e.g.
-/// after `ccnotify install`), keep trying to re-register for this long.
+/// after `mewo install`), keep trying to re-register for this long.
 const RECONNECT_WINDOW: Duration = Duration::from_secs(15);
 const RECONNECT_DELAY: Duration = Duration::from_secs(1);
-const MESSAGE_PREFIX: &str = "The user sent this message from their phone (via ccnotify). Treat it exactly as if they had typed it in this session:\n\n";
+const MESSAGE_PREFIX: &str = "The user sent this message from their phone (via Mewo on Fire). Treat it exactly as if they had typed it in this session:\n\n";
 
 pub fn run() -> ! {
     // Exit code 0 or 2 only, even on panic.

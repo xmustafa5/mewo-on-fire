@@ -95,7 +95,7 @@ class _PairScreenState extends State<PairScreen> {
           smartDashesType: SmartDashesType.disabled,
           decoration: const InputDecoration(
             hintText: '{"v":1,"id":"…","code":"…"}',
-            helperText: 'The QR payload line printed by `ccnotify pair`.',
+            helperText: 'The QR payload line printed by `mewo pair`.',
             border: OutlineInputBorder(),
           ),
           style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
@@ -205,7 +205,7 @@ class _PairScreenState extends State<PairScreen> {
                     ),
                   ] else
                     Text(
-                      'Run `ccnotify pair` on your PC and point the camera at the QR code.',
+                      'Run `mewo pair` on your PC and point the camera at the QR code.',
                       style: t.bodyMedium,
                       textAlign: TextAlign.center,
                     ),

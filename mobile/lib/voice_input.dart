@@ -7,7 +7,7 @@ import 'package:flutter/services.dart';
 /// device and hands the text back (ios/Runner/VoiceInput.swift). iOS only for
 /// now; elsewhere [supported] is false and the chat shows no microphone.
 class VoiceInput {
-  static const MethodChannel _channel = MethodChannel('ccnotify/voice');
+  static const MethodChannel _channel = MethodChannel('mewo-on-fire/voice');
 
   /// Same limit as the native side.
   static const Duration maxLength = Duration(seconds: 120);
@@ -50,9 +50,9 @@ class VoiceInput {
   static String errorText(Object error) {
     switch (error is PlatformException ? error.code : '') {
       case 'mic_denied':
-        return 'Allow the microphone for ccnotify in the Settings app';
+        return 'Allow the microphone for Mewo on Fire in the Settings app';
       case 'speech_denied':
-        return 'Allow Speech Recognition for ccnotify in the Settings app';
+        return 'Allow Speech Recognition for Mewo on Fire in the Settings app';
       case 'speech_unavailable':
         return 'This language cannot be recognized right now';
       case 'too_short':

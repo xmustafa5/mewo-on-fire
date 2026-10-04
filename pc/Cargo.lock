@@ -98,32 +98,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ccnotify"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "dirs",
- "futures-util",
- "hex",
- "if-addrs",
- "ksni",
- "libc",
- "mdns-sd",
- "qrcode",
- "rand",
- "rcgen",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -513,6 +487,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "mewo-on-fire"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "dirs",
+ "futures-util",
+ "hex",
+ "if-addrs",
+ "ksni",
+ "libc",
+ "mdns-sd",
+ "qrcode",
+ "rand",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

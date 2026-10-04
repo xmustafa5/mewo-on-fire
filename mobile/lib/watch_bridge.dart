@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'app_state.dart';
 import 'models.dart';
 
-/// The Apple Watch app (ios/CcnotifyWatch). A watch cannot keep a connection
+/// The Apple Watch app (ios/MewoWatch). A watch cannot keep a connection
 /// to a PC of its own, so it goes through this app: the native side
 /// (ios/Runner/WatchBridge.swift) hands the watch's commands to [_onCall] and
 /// gets the list of waiting prompts and sessions pushed whenever it changes.
@@ -23,7 +23,7 @@ class WatchBridge {
   WatchBridge._();
   static final WatchBridge instance = WatchBridge._();
 
-  static const MethodChannel _channel = MethodChannel('ccnotify/watch');
+  static const MethodChannel _channel = MethodChannel('mewo-on-fire/watch');
 
   final AppState _state = AppState.instance;
   Timer? _pushTimer;
@@ -71,7 +71,7 @@ class WatchBridge {
       await _channel.invokeMethod<void>('context', Uint8List.fromList(utf8.encode(json)));
       _pushed = json;
     } catch (e) {
-      debugPrint('ccnotify: watch push failed: $e');
+      debugPrint('mewo: watch push failed: $e');
     }
   }
 
@@ -88,7 +88,7 @@ class WatchBridge {
     try {
       reply = await _run(q);
     } catch (e) {
-      debugPrint('ccnotify: watch command failed: $e');
+      debugPrint('mewo: watch command failed: $e');
       reply = {'error': 'The iPhone app could not do that'};
     }
     return Uint8List.fromList(utf8.encode(jsonEncode(reply)));
@@ -99,7 +99,7 @@ class WatchBridge {
   Future<Map<String, dynamic>> _run(Map<String, dynamic> q) async {
     await _until(() => _state.loaded, const Duration(seconds: 5));
     if (_state.pcs.isEmpty) {
-      return {'error': 'Pair a PC in ccnotify on the iPhone first'};
+      return {'error': 'Pair a PC in Mewo on Fire on the iPhone first'};
     }
     final pcId = _str(q['pcId']);
     switch (_str(q['cmd'])) {
@@ -130,7 +130,7 @@ class WatchBridge {
             () => _state.findRequest(pcId, requestId) == null, const Duration(seconds: 5));
         return {'resolved': resolved};
       default:
-        return {'error': 'Update ccnotify on the iPhone'};
+        return {'error': 'Update Mewo on Fire on the iPhone'};
     }
   }
 

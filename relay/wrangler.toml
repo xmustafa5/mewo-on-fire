@@ -1,4 +1,4 @@
-name = "ccnotify-relay"
+name = "mewo-on-fire-relay"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
 

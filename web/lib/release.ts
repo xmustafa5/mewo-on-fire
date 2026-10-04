@@ -8,9 +8,9 @@ export const REPO = process.env.GITHUB_REPO ?? "xmustafa5/mewo-on-fire";
 
 /** Release asset names, keyed by the short names /download/<key> accepts. */
 export const ASSETS = {
-  macos: "ccnotify-macos.tar.gz",
-  linux: "ccnotify-linux-x86_64.tar.gz",
-  android: "ccnotify-android.apk",
+  macos: "mewo-on-fire-macos.tar.gz",
+  linux: "mewo-on-fire-linux-x86_64.tar.gz",
+  android: "mewo-on-fire-android.apk",
   installer: "install.sh",
 } as const;
 

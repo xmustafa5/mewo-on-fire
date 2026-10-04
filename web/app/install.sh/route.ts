@@ -19,11 +19,11 @@ export async function GET(request: Request) {
   const res = url ? await fetch(url, { cache: "no-store" }).catch(() => null) : null;
   if (!res?.ok) {
     return script(
-      'echo "ccnotify: no release has been published yet. Try again later." >&2\nexit 1\n',
+      'echo "mewo: no release has been published yet. Try again later." >&2\nexit 1\n',
     );
   }
   const text = await res.text();
   return script(
-    text.replace("${CCNOTIFY_DOWNLOAD_URL:-}", `\${CCNOTIFY_DOWNLOAD_URL:-${site}/download}`),
+    text.replace("${MEWO_DOWNLOAD_URL:-}", `\${MEWO_DOWNLOAD_URL:-${site}/download}`),
   );
 }

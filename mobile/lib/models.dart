@@ -569,7 +569,7 @@ class AppSettings {
   }
 }
 
-/// The QR payload printed by `ccnotify pair` (PROTOCOL.md "QR payload").
+/// The QR payload printed by `mewo pair` (PROTOCOL.md "QR payload").
 class QrPayload {
   const QrPayload({
     required this.id,
@@ -596,15 +596,15 @@ class QrPayload {
     try {
       decoded = jsonDecode(raw.trim());
     } catch (_) {
-      throw const FormatException('This is not a ccnotify pairing code.');
+      throw const FormatException('This is not a Mewo on Fire pairing code.');
     }
     if (decoded is! Map) {
-      throw const FormatException('This is not a ccnotify pairing code.');
+      throw const FormatException('This is not a Mewo on Fire pairing code.');
     }
     final j = Map<String, dynamic>.from(decoded);
     if (_asInt(j['v'], -1) != 1) {
       throw const FormatException(
-          'Unsupported pairing code version. Update ccnotify on the PC and on this phone.');
+          'Unsupported pairing code version. Update Mewo on Fire on the PC and on this phone.');
     }
     final id = _asString(j['id']);
     final name = _asString(j['name']);

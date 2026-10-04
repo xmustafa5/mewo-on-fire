@@ -85,8 +85,8 @@ const FAQ: { q: string; a: ReactNode }[] = [
       <>
         Phone and computer must be on the same network; guest Wi-Fi and routers with
         &ldquo;client isolation&rdquo; block it. If a firewall is on, allow TCP port 47821: on
-        Linux <code className="text-stone-200">sudo ufw allow 47821/tcp</code>, on macOS allow
-        ccnotify in System Settings → Network → Firewall.
+        Linux <code className="text-stone-200">sudo ufw allow 47821/tcp</code>, on macOS allow{" "}
+        <code className="text-stone-200">mewo</code> in System Settings → Network → Firewall.
       </>
     ),
   },
@@ -96,7 +96,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
       <>
         GNOME needs the &ldquo;AppIndicator and KStatusNotifierItem Support&rdquo; extension
         (Ubuntu ships it). KDE, Xfce, Cinnamon and most other desktops show it as is. You can
-        also start it by hand with <code className="text-stone-200">ccnotify tray</code>.
+        also start it by hand with <code className="text-stone-200">mewo tray</code>.
       </>
     ),
   },
@@ -106,7 +106,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
       <>
         The builds are not notarized yet. Install with the Terminal command, which avoids the
         warning, or run{" "}
-        <code className="text-stone-200">xattr -dr com.apple.quarantine ccnotify ccnotify.app</code>{" "}
+        <code className="text-stone-200">xattr -dr com.apple.quarantine mewo mewo-on-fire.app</code>{" "}
         on a manual download.
       </>
     ),
@@ -115,7 +115,7 @@ const FAQ: { q: string; a: ReactNode }[] = [
     q: "How do I uninstall it?",
     a: (
       <>
-        Run <code className="text-stone-200">ccnotify uninstall</code>. It removes the hooks, the
+        Run <code className="text-stone-200">mewo uninstall</code>. It removes the hooks, the
         background service and the bell, and keeps your pairings in case you come back.
       </>
     ),
@@ -157,7 +157,7 @@ export default async function Home() {
             <span className="flex size-8 items-center justify-center rounded-lg bg-surface-raised ring-1 ring-line">
               <Bell className="size-4 fill-accent text-accent" />
             </span>
-            ccnotify
+            Mewo on Fire
           </a>
           <nav className="flex items-center gap-1 text-sm text-stone-400">
             <a href="#features" className="hidden rounded-lg px-3 py-2 transition hover:text-white sm:block">
@@ -244,7 +244,7 @@ export default async function Home() {
             ))}
           </ol>
           <div className="no-scrollbar mt-6 flex items-center gap-3 overflow-x-auto rounded-2xl border border-line bg-surface px-6 py-5 font-mono text-xs text-stone-400">
-            {["Claude Code", "hook", "ccnotify on your computer", "Wi-Fi · pinned TLS", "ccnotify on your phone"].map(
+            {["Claude Code", "hook", "Mewo on Fire on your computer", "Wi-Fi · pinned TLS", "Mewo on Fire on your phone"].map(
               (part, i) => (
                 <span key={part} className="flex shrink-0 items-center gap-3">
                   {i > 0 && <span className="text-accent">→</span>}
@@ -257,7 +257,7 @@ export default async function Home() {
           </div>
         </Section>
 
-        <Section id="download" eyebrow="Download" title="Install ccnotify on your computer and your phone.">
+        <Section id="download" eyebrow="Download" title="Install Mewo on Fire on your computer and your phone.">
           <DownloadTabs command={command} sizes={sizes} />
           {release && (
             <p className="mt-4 text-xs text-stone-500">
@@ -291,7 +291,7 @@ export default async function Home() {
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-8 text-xs text-stone-500 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p className="flex items-center gap-2">
             <Bell className="size-3.5 fill-accent text-accent" />
-            ccnotify: Claude Code notifications on your phone
+            Mewo on Fire: Claude Code notifications on your phone
           </p>
           <p>Not affiliated with Anthropic. Claude is a trademark of Anthropic.</p>
         </div>

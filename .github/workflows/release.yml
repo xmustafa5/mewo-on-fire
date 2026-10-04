@@ -1,4 +1,4 @@
-# Builds ccnotify for Linux (static x86_64), macOS (universal binary plus
+# Builds Mewo on Fire for Linux (static x86_64), macOS (universal binary plus
 # the menu bar app) and Android (APK). Pushing a tag like v0.1.0 publishes
 # them as a GitHub release together with install.sh; running it by hand only
 # builds them. The download site (web/) serves the latest release.
@@ -28,11 +28,11 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          tar -czf dist/ccnotify-linux-x86_64.tar.gz -C pc/target/x86_64-unknown-linux-musl/release ccnotify
+          tar -czf dist/mewo-on-fire-linux-x86_64.tar.gz -C pc/target/x86_64-unknown-linux-musl/release mewo
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: dist/ccnotify-linux-x86_64.tar.gz
+          path: dist/mewo-on-fire-linux-x86_64.tar.gz
 
   macos:
     runs-on: macos-latest
@@ -41,35 +41,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - name: Build ccnotify (Apple silicon + Intel)
+      - name: Build mewo (Apple silicon + Intel)
         working-directory: pc
         run: |
           cargo build --release --locked --target aarch64-apple-darwin
           cargo build --release --locked --target x86_64-apple-darwin
           mkdir -p ../dist/mac
-          lipo -create -output ../dist/mac/ccnotify \
-            target/aarch64-apple-darwin/release/ccnotify \
-            target/x86_64-apple-darwin/release/ccnotify
-          codesign --force --sign - ../dist/mac/ccnotify
+          lipo -create -output ../dist/mac/mewo \
+            target/aarch64-apple-darwin/release/mewo \
+            target/x86_64-apple-darwin/release/mewo
+          codesign --force --sign - ../dist/mac/mewo
       - name: Build the menu bar app (Apple silicon + Intel)
         working-directory: pc/menubar
         run: |
           swift build -c release --arch arm64 --arch x86_64
           BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
-          APP=../../dist/mac/ccnotify.app
+          APP=../../dist/mac/mewo-on-fire.app
           mkdir -p "$APP/Contents/MacOS"
-          cp "$BIN/ccnotify-menubar" "$APP/Contents/MacOS/ccnotify-menubar"
+          cp "$BIN/mewo-menubar" "$APP/Contents/MacOS/mewo-menubar"
           cp Info.plist "$APP/Contents/Info.plist"
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             plutil -replace CFBundleShortVersionString -string "${GITHUB_REF_NAME#v}" "$APP/Contents/Info.plist"
           fi
           codesign --force --sign - "$APP"
       - name: Package
-        run: tar -czf dist/ccnotify-macos.tar.gz -C dist/mac ccnotify ccnotify.app
+        run: tar -czf dist/mewo-on-fire-macos.tar.gz -C dist/mac mewo mewo-on-fire.app
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: dist/ccnotify-macos.tar.gz
+          path: dist/mewo-on-fire-macos.tar.gz
 
   android:
     runs-on: ubuntu-latest
@@ -101,11 +101,11 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          cp mobile/build/app/outputs/flutter-apk/app-release.apk dist/ccnotify-android.apk
+          cp mobile/build/app/outputs/flutter-apk/app-release.apk dist/mewo-on-fire-android.apk
       - uses: actions/upload-artifact@v4
         with:
           name: android
-          path: dist/ccnotify-android.apk
+          path: dist/mewo-on-fire-android.apk
 
   release:
     if: github.ref_type == 'tag'
@@ -122,4 +122,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.apk install.sh \
-            --title "ccnotify $GITHUB_REF_NAME" --generate-notes
+            --title "Mewo on Fire $GITHUB_REF_NAME" --generate-notes

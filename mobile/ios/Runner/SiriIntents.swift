@@ -22,7 +22,7 @@ enum SiriSessions {
   static func store(snapshot: Data) {
     UserDefaults.standard.set(snapshot, forKey: snapshotKey)
     if #available(iOS 16.4, *) {
-      CcnotifyShortcuts.updateAppShortcutParameters()
+      MewoShortcuts.updateAppShortcutParameters()
     }
   }
 
@@ -160,7 +160,7 @@ struct TellClaudeIntent: AppIntent {
       let current = SiriSessions.current()
       guard let newest = current.first else {
         return .result(
-          dialog: "I don't know of a Claude Code session. Open ccnotify once so it can look.")
+          dialog: "I don't know of a Claude Code session. Open Mewo on Fire once so it can look.")
       }
       target =
         current.count > 1
@@ -175,10 +175,10 @@ struct TellClaudeIntent: AppIntent {
       // The app is not running: it sends the message when it comes up.
       SiriSessions.queue(pcId: target.pcId, sessionId: target.sessionId, text: text)
       if #available(iOS 26.0, *) {
-        try await continueInForeground("ccnotify has to open to send this.", alwaysConfirm: false)
+        try await continueInForeground("Mewo on Fire has to open to send this.", alwaysConfirm: false)
         return .result(dialog: "Sending it to \(target.name).")
       }
-      return .result(dialog: "Open ccnotify: the message is sent as soon as it starts.")
+      return .result(dialog: "Open mewo: the message is sent as soon as it starts.")
     }
     if let error = reply["error"] as? String, !error.isEmpty {
       return .result(dialog: "Not sent: \(error)")
@@ -200,7 +200,7 @@ struct TellClaudeIntent: AppIntent {
 /// The phrases that work without setting anything up. The app answers to
 /// "Claude Code" too (`INAlternativeAppNames` in Info.plist).
 @available(iOS 16.4, *)
-struct CcnotifyShortcuts: AppShortcutsProvider {
+struct MewoShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     AppShortcut(
       intent: TellClaudeIntent(),

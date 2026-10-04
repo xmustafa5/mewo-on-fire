@@ -30,7 +30,7 @@ import flutter_local_notifications
 
     // lib/ios_background.dart
     let channel = FlutterMethodChannel(
-      name: "ccnotify/background",
+      name: "mewo-on-fire/background",
       binaryMessenger: engineBridge.applicationRegistrar.messenger())
     channel.setMethodCallHandler { call, result in
       switch call.method {

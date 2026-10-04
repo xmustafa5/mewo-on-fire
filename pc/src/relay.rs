@@ -95,8 +95,8 @@ pub async fn run(state: Arc<AppState>) {
         let result = session(&state, &base).await;
         state.relay_up.store(false, Ordering::SeqCst);
         match result {
-            Ok(()) => eprintln!("ccnotify: relay closed the connection"),
-            Err(e) => eprintln!("ccnotify: relay: {e:#}"),
+            Ok(()) => eprintln!("mewo: relay closed the connection"),
+            Err(e) => eprintln!("mewo: relay: {e:#}"),
         }
         if started.elapsed() > Duration::from_secs(30) {
             backoff = Duration::from_secs(1);
@@ -118,7 +118,7 @@ async fn session(state: &Arc<AppState>, base: &str) -> Result<()> {
     .await
     .map_err(|_| anyhow!("no answer from {base}"))?
     .with_context(|| format!("connecting to {base}"))?;
-    eprintln!("ccnotify: relay connected: {base}");
+    eprintln!("mewo: relay connected: {base}");
     state.relay_up.store(true, Ordering::SeqCst);
 
     let (mut sink, mut stream) = ws.split();
@@ -210,7 +210,7 @@ async fn pipe(id: u32, port: u16, out: mpsc::Sender<Message>, mut from_phone: mp
 }
 
 // ---------------------------------------------------------------------------
-// the relay itself (`ccnotify relay-server`)
+// the relay itself (`mewo relay-server`)
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
@@ -259,7 +259,7 @@ pub fn serve(port: u16) -> Result<()> {
         let listener = TcpListener::bind(("0.0.0.0", port))
             .await
             .with_context(|| format!("binding 0.0.0.0:{port}"))?;
-        eprintln!("ccnotify relay: listening on port {port} (ws://, put TLS in front of it)");
+        eprintln!("mewo relay: listening on port {port} (ws://, put TLS in front of it)");
         let pcs: Pcs = Arc::default();
         loop {
             let (tcp, _) = listener.accept().await?;

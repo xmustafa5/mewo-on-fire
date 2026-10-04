@@ -22,7 +22,7 @@ import 'storage.dart';
 
 /// Name of the task isolate's ReceivePort for answers (IsolateNameServer).
 /// Also carries v1.2 `send` messages (Reply action, see `sessions.dart`).
-const String kAnswerPortName = 'ccnotify_answers';
+const String kAnswerPortName = 'mewo_on_fire_answers';
 
 /// flutter_local_notifications settings, shared by the UI and task isolates.
 final fln.InitializationSettings kNotificationInitSettings = fln.InitializationSettings(
@@ -278,7 +278,7 @@ Future<bool> routeActionAnswer(fln.NotificationResponse response) async {
   try {
     await Store.queueAnswer(p.pcId, p.requestId, answer);
   } catch (e) {
-    debugPrint('ccnotify: queueing answer failed: $e');
+    debugPrint('mewo: queueing answer failed: $e');
   }
   return true;
 }

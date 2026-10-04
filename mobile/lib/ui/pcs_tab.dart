@@ -45,7 +45,7 @@ class PcsTab extends StatelessWidget {
         title: Text('Remove ${pc.name}?'),
         content: const Text(
             'This phone will stop receiving notifications from this PC. '
-            'You can also revoke it on the PC with `ccnotify devices` / `ccnotify revoke`.'),
+            'You can also revoke it on the PC with `mewo devices` / `mewo revoke`.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
@@ -67,7 +67,7 @@ class PcsTab extends StatelessWidget {
       builder: (context, _) {
         final cs = Theme.of(context).colorScheme;
         return Scaffold(
-          appBar: AppBar(title: const Text('ccnotify')),
+          appBar: AppBar(title: const Text('Mewo on Fire')),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: () => _openPair(context),
             icon: const Icon(Icons.qr_code_scanner),
@@ -185,7 +185,7 @@ class _ServiceCard extends StatelessWidget {
       title = Platform.isIOS ? 'Not listening' : 'Background service stopped';
       subtitle = state.pcs.isEmpty ? 'Pair a PC to start' : 'No notifications will arrive';
     } else if (foregroundOnly) {
-      title = 'Listening while ccnotify is open';
+      title = 'Listening while Mewo on Fire is open';
       subtitle = 'iOS pauses it in the background — see Settings → Background';
     } else {
       title = Platform.isIOS ? 'Listening, also in the background' : 'Background service running';
@@ -251,7 +251,7 @@ class _EmptyPcs extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
             ),
             child: const SelectableText(
-              'ccnotify install\nccnotify pair',
+              'mewo install\nmewo pair',
               style: TextStyle(fontFamily: 'monospace'),
             ),
           ),

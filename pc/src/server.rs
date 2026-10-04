@@ -57,7 +57,7 @@ pub async fn serve(state: Arc<AppState>, listener: TcpListener, acceptor: TlsAcc
         let (tcp, peer) = match listener.accept().await {
             Ok(x) => x,
             Err(e) => {
-                eprintln!("ccnotify: accept error: {e}");
+                eprintln!("mewo: accept error: {e}");
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 continue;
             }
@@ -67,7 +67,7 @@ pub async fn serve(state: Arc<AppState>, listener: TcpListener, acceptor: TlsAcc
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
             if let Err(e) = handle(state, acceptor, tcp).await {
-                eprintln!("ccnotify: client {peer}: {e:#}");
+                eprintln!("mewo: client {peer}: {e:#}");
             }
         });
     }
@@ -157,7 +157,7 @@ async fn handle_pair(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result
         .trim()
         .to_ascii_lowercase();
     if code.is_empty() || !state.take_pair_code(&code) {
-        eprintln!("ccnotify: pairing attempt with invalid code");
+        eprintln!("mewo: pairing attempt with invalid code");
         let _ = send_json(sink, &json!({"type": "error", "error": "invalid_code"})).await;
         close(sink).await;
         return Ok(());
@@ -182,7 +182,7 @@ async fn handle_pair(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result
             return Err(e);
         }
     };
-    eprintln!("ccnotify: paired device {} ({})", device.id, device.name);
+    eprintln!("mewo: paired device {} ({})", device.id, device.name);
 
     let reply = json!({
         "type": "paired",
@@ -245,7 +245,7 @@ async fn handle_auth(
 
     let _guard = ConnGuard::new(&state.connected);
     eprintln!(
-        "ccnotify: device {} ({}) connected, since={} replay={} pending={}",
+        "mewo: device {} ({}) connected, since={} replay={} pending={}",
         device.id,
         device.name,
         since,
@@ -255,7 +255,7 @@ async fn handle_auth(
 
     let result = subscriber_loop(state, &device, &mut sink, &mut stream, sub, since).await;
     close(&mut sink).await;
-    eprintln!("ccnotify: device {} ({}) disconnected", device.id, device.name);
+    eprintln!("mewo: device {} ({}) disconnected", device.id, device.name);
     result
 }
 
@@ -433,7 +433,7 @@ async fn handle_send(
     };
     let short: String = session_id.chars().take(8).collect();
     eprintln!(
-        "ccnotify: phone message for session {short} from device {} ({}): {} {}",
+        "mewo: phone message for session {short} from device {} ({}): {} {}",
         device.id,
         device.name,
         outcome.status(),
@@ -463,7 +463,7 @@ async fn handle_answer(
         Some(a) if a.is_object() => a.clone(),
         _ => {
             eprintln!(
-                "ccnotify: device {} sent a malformed answer for request {request_id}",
+                "mewo: device {} sent a malformed answer for request {request_id}",
                 device.id
             );
             return Ok(());
@@ -471,7 +471,7 @@ async fn handle_answer(
     };
     if state.answer_request(request_id, answer) {
         eprintln!(
-            "ccnotify: request {request_id} answered by device {} ({})",
+            "mewo: request {request_id} answered by device {} ({})",
             device.id, device.name
         );
         return Ok(());

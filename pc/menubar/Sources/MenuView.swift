@@ -68,7 +68,7 @@ struct HeaderView: View {
         .fill(model.status == nil ? Color.red : Color.green)
         .frame(width: 9, height: 9)
       VStack(alignment: .leading, spacing: 1) {
-        Text(model.status?.name ?? "ccnotify").font(.headline).lineLimit(1)
+        Text(model.status?.name ?? "Mewo on Fire").font(.headline).lineLimit(1)
         Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
       }
       Spacer()
@@ -113,7 +113,7 @@ struct NotRunningView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("The ccnotify service is not running, so phones get no notifications.")
+      Text("The Mewo on Fire service is not running, so phones get no notifications.")
         .font(.callout)
         .fixedSize(horizontal: false, vertical: true)
       HStack {
@@ -187,7 +187,7 @@ struct PairingView: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
           let left = Int(pairing.expires.timeIntervalSince(context.date))
           if left > 0, let image = pairing.image {
-            Text("Scan with the ccnotify app").font(.headline)
+            Text("Scan with the Mewo on Fire app").font(.headline)
             Image(nsImage: image)
               .interpolation(.none)
               .resizable()

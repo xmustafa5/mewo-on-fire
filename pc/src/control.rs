@@ -22,7 +22,7 @@ use crate::sessions::{ListenReply, ListenStart, Meta};
 use crate::store::Event;
 
 const MAX_REQUEST_BYTES: u64 = 1 << 20;
-/// `ccnotify chat`: default and maximum number of items.
+/// `mewo chat`: default and maximum number of items.
 const CHAT_DEFAULT_LIMIT: usize = 20;
 const CHAT_MAX_LIMIT: usize = 1000;
 
@@ -36,9 +36,9 @@ pub fn request(req: &Value, timeout: Duration) -> Result<Value> {
     request_with(req, Some(timeout), timeout)
 }
 
-/// Like `request`, but waits for the reply with no read timeout (`ccnotify
-/// ask` / `ccnotify listen` block until a phone answers). `write_timeout`
-/// bounds the send.
+/// Like `request`, but waits for the reply with no read timeout (`mewo ask` /
+/// `mewo listen` block until a phone answers). `write_timeout` bounds the
+/// send.
 pub fn request_blocking(req: &Value, write_timeout: Duration) -> Result<Value> {
     request_with(req, None, write_timeout)
 }
@@ -80,7 +80,7 @@ pub fn bind() -> Result<UnixListener> {
     if fs::symlink_metadata(&path).is_ok() {
         if std::os::unix::net::UnixStream::connect(&path).is_ok() {
             bail!(
-                "another ccnotify daemon is already running (socket {} is live)",
+                "another Mewo on Fire daemon is already running (socket {} is live)",
                 path.display()
             );
         }
@@ -103,12 +103,12 @@ pub async fn serve(state: Arc<AppState>, listener: UnixListener) {
                 let state = state.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_conn(state, stream).await {
-                        eprintln!("ccnotify: control: {e:#}");
+                        eprintln!("mewo: control: {e:#}");
                     }
                 });
             }
             Err(e) => {
-                eprintln!("ccnotify: control accept error: {e}");
+                eprintln!("mewo: control accept error: {e}");
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
         }
@@ -188,11 +188,11 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             let kind = ev.kind.clone();
             match state.emit(ev, &meta) {
                 Some(stored) => eprintln!(
-                    "ccnotify: event #{} {} [{}] {}",
+                    "mewo: event #{} {} [{}] {}",
                     stored.id, stored.kind, stored.project, stored.detail
                 ),
                 None => eprintln!(
-                    "ccnotify: dropped needs_input for session {session} (request pending)"
+                    "mewo: dropped needs_input for session {session} (request pending)"
                 ),
             }
             if matches!(kind.as_str(), "stop" | "session_end") {
@@ -263,7 +263,7 @@ where
         .to_string();
 
     let (id, reply_rx) = state.add_request(request, agent_id);
-    eprintln!("ccnotify: request {id} {log_line}");
+    eprintln!("mewo: request {id} {log_line}");
 
     tokio::select! {
         reply = reply_rx => {
@@ -276,7 +276,7 @@ where
         }
         _ = wait_for_eof(reader) => {
             if state.cancel_request(&id, "pc") {
-                eprintln!("ccnotify: request {id} resolved by pc (hook exited)");
+                eprintln!("mewo: request {id} resolved by pc (hook exited)");
             }
             None
         }
@@ -295,7 +295,7 @@ where
         None => return Some(json!({"ok": false, "error": "bad_request"})),
         Some(ListenStart::Now(text)) => {
             eprintln!(
-                "ccnotify: session {}: delivered queued phone message(s)",
+                "mewo: session {}: delivered queued phone message(s)",
                 short_id(&meta.session_id)
             );
             return Some(json!({"ok": true, "text": text}));
@@ -324,7 +324,7 @@ where
     }
 }
 
-/// `chat` (for `ccnotify chat`): the last items of the session whose id
+/// `chat` (for `mewo chat`): the last items of the session whose id
 /// starts with `session`.
 async fn handle_chat(state: &AppState, req: &Value) -> Value {
     let prefix = req.get("session").and_then(Value::as_str).unwrap_or("");

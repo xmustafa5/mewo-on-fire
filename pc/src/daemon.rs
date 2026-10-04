@@ -1,4 +1,4 @@
-//! `ccnotify daemon`: shared state + startup/shutdown orchestration.
+//! `mewo daemon`: shared state + startup/shutdown orchestration.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -134,7 +134,7 @@ impl AppState {
     // Broadcasts happen under the requests lock so subscribe_since()
     // snapshots are consistent with the live stream.
 
-    /// Register a request from `ccnotify ask` (assigning id/ts) and broadcast
+    /// Register a request from `mewo ask` (assigning id/ts) and broadcast
     /// it to phones. `agent_id` (private) is set for a prompt from a
     /// subagent. Returns its id and the receiver for the reply.
     pub fn add_request(
@@ -200,7 +200,7 @@ impl AppState {
         let ids = lock(&self.requests).main_chain(short);
         for id in ids {
             if self.cancel_request(&id, "pc") {
-                eprintln!("ccnotify: request {id} resolved by pc ({reason})");
+                eprintln!("mewo: request {id} resolved by pc ({reason})");
             }
         }
     }
@@ -219,7 +219,7 @@ impl AppState {
         let expired = lock(&self.requests).expired(requests::MAX_AGE);
         for id in expired {
             if self.cancel_request(&id, "timeout") {
-                eprintln!("ccnotify: request {id} timed out");
+                eprintln!("mewo: request {id} timed out");
             }
         }
     }
@@ -370,7 +370,7 @@ impl AppState {
             match saved {
                 Ok(Ok(saved)) => saved,
                 Ok(Err(e)) => {
-                    eprintln!("ccnotify: saving images from a phone failed: {e}");
+                    eprintln!("mewo: saving images from a phone failed: {e}");
                     return SendOutcome::Rejected("The PC could not save the images");
                 }
                 Err(_) => return SendOutcome::Rejected("The PC could not save the images"),
@@ -573,16 +573,16 @@ async fn run_async() -> Result<()> {
     });
 
     eprintln!(
-        "ccnotify: daemon started: name={} pc_id={} port={} devices={} last_id={}",
+        "mewo: daemon started: name={} pc_id={} port={} devices={} last_id={}",
         config.name,
         config.pc_id,
         config.port,
         lock(&state.devices).len(),
         state.last_id()
     );
-    eprintln!("ccnotify: fp={}", identity.fp);
-    eprintln!("ccnotify: hosts={}", state.hosts().join(", "));
-    eprintln!("ccnotify: control socket {}", paths::socket_path().display());
+    eprintln!("mewo: fp={}", identity.fp);
+    eprintln!("mewo: hosts={}", state.hosts().join(", "));
+    eprintln!("mewo: control socket {}", paths::socket_path().display());
 
     let mdns_daemon = mdns::advertise(&config);
 
@@ -593,7 +593,7 @@ async fn run_async() -> Result<()> {
     tokio::spawn(relay::run(state.clone()));
 
     wait_for_shutdown().await;
-    eprintln!("ccnotify: shutting down");
+    eprintln!("mewo: shutting down");
     mdns::shutdown(mdns_daemon);
     let _ = std::fs::remove_file(paths::socket_path());
     Ok(())

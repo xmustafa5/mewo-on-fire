@@ -1,4 +1,4 @@
-//! `ccnotify tray` (Linux): a system tray icon for the daemon, the
+//! `mewo tray` (Linux): a system tray icon for the daemon, the
 //! counterpart of the macOS menu bar app in `menubar/`. Its menu shows the
 //! service status, a pairing QR code, the paired phones and the Claude Code
 //! sessions. Everything comes from the daemon's control socket.
@@ -36,7 +36,7 @@ const MAX_SESSIONS: usize = 10;
 const REPLY_LINE_CHARS: usize = 60;
 const REPLY_MAX_LINES: usize = 6;
 
-const DESKTOP_ENTRY_NAME: &str = "ccnotify";
+const DESKTOP_ENTRY_NAME: &str = "Mewo on Fire";
 const DESKTOP_ENTRY_COMMENT: &str = "Claude Code notifications: tray icon";
 
 // ---------------------------------------------------------------------------
@@ -276,11 +276,11 @@ impl ksni::Tray for Tray {
     const MENU_ON_ACTIVATE: bool = true;
 
     fn id(&self) -> String {
-        "ccnotify".to_string()
+        "mewo-on-fire".to_string()
     }
 
     fn title(&self) -> String {
-        "ccnotify".to_string()
+        "Mewo on Fire".to_string()
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -296,7 +296,7 @@ impl ksni::Tray for Tray {
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            title: "ccnotify".to_string(),
+            title: "Mewo on Fire".to_string(),
             description: self.summary(),
             ..Default::default()
         }
@@ -308,7 +308,7 @@ impl ksni::Tray for Tray {
 
     fn watcher_offline(&self, reason: ksni::OfflineReason) -> bool {
         eprintln!(
-            "ccnotify: no system tray to show the icon in yet ({reason:?}). \
+            "mewo: no system tray to show the icon in yet ({reason:?}). \
              GNOME needs the \"AppIndicator and KStatusNotifierItem Support\" extension."
         );
         // Keep running: the icon appears when a tray comes up.
@@ -336,7 +336,7 @@ impl ksni::Tray for Tray {
                 }
             }
             None => {
-                menu.push(info("The ccnotify service is not running"));
+                menu.push(info("The Mewo on Fire service is not running"));
                 menu.push(item("Start Service", || Action::Service { restart: false }));
             }
         }
@@ -350,7 +350,7 @@ impl ksni::Tray for Tray {
                 None => menu.push(item("Pair a Phone…", || Action::Pair)),
                 Some(PairingView::Waiting { minutes_left }) => {
                     menu.push(info(&format!(
-                        "Scan the QR code with the ccnotify app ({minutes_left} min left)"
+                        "Scan the QR code with the Mewo on Fire app ({minutes_left} min left)"
                     )));
                     menu.push(item("Show the QR Code Again", || Action::ShowQr));
                     menu.push(item("Cancel Pairing", || Action::CancelPairing));
@@ -511,7 +511,7 @@ const QR_QUIET_ZONE: usize = 4;
 
 /// Next to the control socket (`$XDG_RUNTIME_DIR`), readable by the user only.
 fn qr_file() -> PathBuf {
-    paths::socket_path().with_file_name("ccnotify-pair.png")
+    paths::socket_path().with_file_name("mewo-on-fire-pair.png")
 }
 
 fn qr_png(payload: &str) -> Result<Vec<u8>> {
@@ -638,19 +638,22 @@ fn tray_binary() -> PathBuf {
     }
 }
 
-/// `ccnotify install`: add "ccnotify" to the desktop's application menu,
+/// `mewo install`: add "Mewo on Fire" to the desktop's application menu,
 /// start the icon at login (on the first install only, so unticking "Start
 /// at Login" survives updates) and start it now, restarting a running one
 /// when the binary was replaced.
 pub fn install(bin: &Path, binary_replaced: bool) {
     let path = paths::launcher_entry();
-    let first_install = !path.exists();
+    // The entries from before the rename (ccnotify) are replaced by ours.
+    let legacy_launcher = fs::remove_file(paths::legacy_launcher_entry()).is_ok();
+    let legacy_autostart = fs::remove_file(paths::legacy_autostart_entry()).is_ok();
+    let first_install = !path.exists() && !legacy_launcher;
     if let Err(e) = paths::write_atomic(&path, desktop_entry(bin).as_bytes(), 0o644) {
         println!("Tray:     skipped (writing {}: {e})", path.display());
         return;
     }
-    println!("Tray:     \"ccnotify\" added to the application menu");
-    if first_install {
+    println!("Tray:     \"Mewo on Fire\" added to the application menu");
+    if first_install || legacy_autostart {
         match set_autostart(true) {
             Ok(()) => println!(
                 "Tray:     starts at login (untick \"Start at Login\" in its menu to stop that)"
@@ -663,13 +666,13 @@ pub fn install(bin: &Path, binary_replaced: bool) {
         if autostart_enabled() {
             println!("Tray:     no desktop session here; the icon starts at your next desktop login");
         } else {
-            println!("Tray:     no desktop session here; run `ccnotify tray` from the desktop");
+            println!("Tray:     no desktop session here; run `mewo tray` from the desktop");
         }
         return;
     }
     let running = running_trays();
     if !running.is_empty() {
-        if !binary_replaced {
+        if !binary_replaced && !legacy_launcher {
             println!("Tray:     already running");
             return;
         }
@@ -677,7 +680,7 @@ pub fn install(bin: &Path, binary_replaced: bool) {
     }
     match start_tray(bin) {
         Ok(()) => println!("Tray:     started; look for the bell in the top bar / system tray"),
-        Err(e) => println!("Tray:     could not start it ({e}); run `ccnotify tray`"),
+        Err(e) => println!("Tray:     could not start it ({e}); run `mewo tray`"),
     }
     if !tray_host_available() {
         println!("Tray:     your desktop shows no tray icons. On GNOME, install the");
@@ -685,7 +688,8 @@ pub fn install(bin: &Path, binary_replaced: bool) {
     }
 }
 
-/// This user's running `ccnotify tray` processes.
+/// This user's running `mewo tray` processes (and `ccnotify tray`, the name
+/// before v0.2).
 fn running_trays() -> Vec<i32> {
     use std::os::unix::fs::MetadataExt;
     // SAFETY: getuid() has no preconditions and cannot fail.
@@ -703,12 +707,13 @@ fn running_trays() -> Vec<i32> {
             let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
             let mut args = cmdline.split(|b| *b == 0);
             let exe = args.next()?.rsplit(|b| *b == b'/').next()?;
-            (exe == b"ccnotify" && args.next()? == b"tray").then_some(pid)
+            let ours = exe == b"mewo" || exe == paths::LEGACY_NAME.as_bytes();
+            (ours && args.next()? == b"tray").then_some(pid)
         })
         .collect()
 }
 
-/// Stop a running tray icon (`ccnotify uninstall`). False if none was running.
+/// Stop a running tray icon (`mewo uninstall`). False if none was running.
 pub fn stop() -> bool {
     let running = running_trays();
     stop_trays(&running);
@@ -771,7 +776,7 @@ fn tray_host_available() -> bool {
 }
 
 /// Remove the application menu and start-at-login entries
-/// (`ccnotify uninstall`). Returns the removed files.
+/// (`mewo uninstall`). Returns the removed files.
 pub fn remove_entries() -> Vec<PathBuf> {
     [paths::launcher_entry(), paths::autostart_entry()]
         .into_iter()
@@ -911,7 +916,7 @@ impl App {
                     pairing.paired_at = Some(now);
                 }
                 let _ = fs::remove_file(qr_file());
-                spawn_helper("notify-send", &["ccnotify", &format!("Paired with {}", new.name)]);
+                spawn_helper("notify-send", &["Mewo on Fire", &format!("Paired with {}", new.name)]);
                 self.view.pairing = Some(PairingView::PairedWith(new.name));
                 self.refresh(true).await;
             }
@@ -953,10 +958,10 @@ impl App {
             Action::Test => {
                 let event = json!({
                     "kind": "stop",
-                    "project": "ccnotify",
+                    "project": "mewo-on-fire",
                     "cwd": "",
                     "session": "test",
-                    "message": "Test notification from ccnotify",
+                    "message": "Test notification from Mewo on Fire",
                     "detail": "",
                 });
                 let sent = blocking(move || call(json!({"cmd": "emit", "event": event}), TIMEOUT))
@@ -975,7 +980,7 @@ impl App {
                 let verb = if restart { "restart" } else { "start" };
                 let started = blocking(move || {
                     Command::new("systemctl")
-                        .args(["--user", verb, "ccnotify"])
+                        .args(["--user", verb, "mewo-on-fire"])
                         .stdout(Stdio::null())
                         .stderr(Stdio::null())
                         .status()
@@ -989,9 +994,9 @@ impl App {
                 self.view.notice = if self.view.status.is_some() {
                     String::new()
                 } else if started {
-                    "The service did not start: journalctl --user -u ccnotify".to_string()
+                    "The service did not start: journalctl --user -u mewo-on-fire".to_string()
                 } else {
-                    "The service is not installed: run `ccnotify install`".to_string()
+                    "The service is not installed: run `mewo install`".to_string()
                 };
             }
             Action::ToggleAutostart => {
@@ -1008,13 +1013,13 @@ impl App {
 
 /// Only one tray icon per user: hold a lock file while running.
 fn lock_single_instance() -> Result<File> {
-    let path = paths::socket_path().with_file_name("ccnotify-tray.lock");
+    let path = paths::socket_path().with_file_name("mewo-on-fire-tray.lock");
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
     let file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
     if file.try_lock().is_err() {
-        bail!("the ccnotify tray icon is already running");
+        bail!("the Mewo on Fire tray icon is already running");
     }
     Ok(file)
 }

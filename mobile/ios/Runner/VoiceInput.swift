@@ -5,7 +5,7 @@ import UIKit
 
 /// Voice messages in the phone app (lib/voice_input.dart): records with the
 /// microphone, then turns the recording into text the same way as for the
-/// watch (WatchVoice.swift). Channel `ccnotify/voice`:
+/// watch (WatchVoice.swift). Channel `mewo-on-fire/voice`:
 /// - `start` → recording; fails with `mic_denied`, `speech_denied`, `failed`
 /// - `stop` (language, e.g. "en-US") → the text; fails with `too_short`,
 ///   `speech_unavailable`, `no_speech`…
@@ -23,7 +23,7 @@ final class VoiceInput {
     .appendingPathComponent("voice-message.m4a")
 
   func attach(messenger: FlutterBinaryMessenger) {
-    let channel = FlutterMethodChannel(name: "ccnotify/voice", binaryMessenger: messenger)
+    let channel = FlutterMethodChannel(name: "mewo-on-fire/voice", binaryMessenger: messenger)
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else { return }
       switch call.method {
@@ -61,7 +61,7 @@ final class VoiceInput {
             try self.record()
             result(nil)
           } catch {
-            NSLog("ccnotify: recording could not start: \(error)")
+            NSLog("mewo: recording could not start: \(error)")
             self.finishRecording()
             fail("failed")
           }
@@ -84,7 +84,7 @@ final class VoiceInput {
     ]
     let recorder = try AVAudioRecorder(url: file, settings: settings)
     guard recorder.record(forDuration: Self.maxSeconds) else {
-      throw NSError(domain: "ccnotify.voice", code: 1)
+      throw NSError(domain: "mewo-on-fire.voice", code: 1)
     }
     self.recorder = recorder
   }

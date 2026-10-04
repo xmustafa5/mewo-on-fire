@@ -1,4 +1,4 @@
-//! ccnotify — Claude Code notifications to your phone over the LAN.
+//! Mewo on Fire — Claude Code notifications to your phone over the LAN.
 //! See ../PROTOCOL.md for the wire contract.
 
 mod ask;
@@ -24,9 +24,9 @@ mod uploads;
 mod tray;
 
 const HELP: &str = "\
-ccnotify - Claude Code notifications on your phone (LAN only)
+Mewo on Fire - Claude Code notifications on your phone (LAN only)
 
-Usage: ccnotify <command>
+Usage: mewo <command>
 
 Commands:
   install        Install binary to ~/.local/bin, the background service (systemd user
@@ -63,7 +63,7 @@ fn tray() -> anyhow::Result<()> {
 
 #[cfg(not(target_os = "linux"))]
 fn tray() -> anyhow::Result<()> {
-    anyhow::bail!("`ccnotify tray` is for Linux; on macOS use the menu bar app (pc/menubar/install.sh)")
+    anyhow::bail!("`mewo tray` is for Linux; on macOS use the menu bar app (pc/menubar/install.sh)")
 }
 
 fn main() {
@@ -87,7 +87,7 @@ fn main() {
         "revoke" => match args.get(1) {
             Some(id) => cli::revoke(id),
             None => {
-                eprintln!("usage: ccnotify revoke <device-id>   (see `ccnotify devices`)");
+                eprintln!("usage: mewo revoke <device-id>   (see `mewo devices`)");
                 std::process::exit(2);
             }
         },
@@ -96,7 +96,7 @@ fn main() {
         "chat" => match args.get(1) {
             Some(prefix) => cli::chat(prefix),
             None => {
-                eprintln!("usage: ccnotify chat <session-id-prefix>   (see `ccnotify sessions`)");
+                eprintln!("usage: mewo chat <session-id-prefix>   (see `mewo sessions`)");
                 std::process::exit(2);
             }
         },
@@ -105,7 +105,7 @@ fn main() {
         "relay" => match args.get(1) {
             Some(url) => cli::relay(url),
             None => {
-                eprintln!("usage: ccnotify relay <wss://…>   or   ccnotify relay off");
+                eprintln!("usage: mewo relay <wss://…>   or   mewo relay off");
                 std::process::exit(2);
             }
         },
@@ -117,7 +117,7 @@ fn main() {
             Some("on") => cli::suggestions(true),
             Some("off") => cli::suggestions(false),
             _ => {
-                eprintln!("usage: ccnotify suggestions on|off");
+                eprintln!("usage: mewo suggestions on|off");
                 std::process::exit(2);
             }
         },
@@ -129,7 +129,7 @@ fn main() {
             Ok(())
         }
         "version" | "-V" | "--version" => {
-            println!("ccnotify {}", env!("CARGO_PKG_VERSION"));
+            println!("mewo {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         other => {

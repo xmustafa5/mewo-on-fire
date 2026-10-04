@@ -15,14 +15,14 @@ pub fn advertise(cfg: &Config) -> Option<ServiceDaemon> {
     match try_advertise(cfg) {
         Ok(daemon) => {
             eprintln!(
-                "ccnotify: mDNS advertising \"{}\" as {} on port {}",
+                "mewo: mDNS advertising \"{}\" as {} on port {}",
                 cfg.name, SERVICE_TYPE, cfg.port
             );
             Some(daemon)
         }
         Err(e) => {
             eprintln!(
-                "ccnotify: warning: mDNS advertisement failed ({e:#}); continuing without discovery"
+                "mewo: warning: mDNS advertisement failed ({e:#}); continuing without discovery"
             );
             None
         }

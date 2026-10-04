@@ -18,10 +18,10 @@ const description =
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl()),
-  title: "ccnotify: Claude Code on your phone",
+  title: "Mewo on Fire: Claude Code on your phone",
   description,
   openGraph: {
-    title: "ccnotify: Claude Code on your phone",
+    title: "Mewo on Fire: Claude Code on your phone",
     description,
     type: "website",
   },

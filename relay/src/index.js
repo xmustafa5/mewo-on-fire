@@ -1,4 +1,4 @@
-// ccnotify relay as a Cloudflare Worker (PROTOCOL.md v1.4).
+// Mewo on Fire relay as a Cloudflare Worker (PROTOCOL.md v1.4).
 //
 // A PC behind its provider's NAT cannot be reached from the internet, so the
 // daemon and the phone both connect out to this relay, and it passes bytes
@@ -14,7 +14,7 @@
 // messages with the number in the first four bytes (big endian). To a phone,
 // everything is plain bytes.
 //
-// `ccnotify relay-server` is the same relay for a machine of your own.
+// `mewo relay-server` is the same relay for a machine of your own.
 
 import { DurableObject } from "cloudflare:workers";
 
@@ -25,7 +25,7 @@ export default {
     const url = new URL(request.url);
     const match = PATH.exec(url.pathname);
     if (!match) {
-      return new Response("ccnotify relay\n", { status: url.pathname === "/" ? 200 : 404 });
+      return new Response("Mewo on Fire relay\n", { status: url.pathname === "/" ? 200 : 404 });
     }
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("WebSocket expected\n", { status: 426 });
