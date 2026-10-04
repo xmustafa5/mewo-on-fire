@@ -119,6 +119,25 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     DispatchQueue.main.async { self.watchIsThere() }
   }
 
+  /// A message the watch could not wait for an answer to (Siri on the watch
+  /// in the background): sent now by Dart, or left in the app's queue for
+  /// when the app comes up.
+  func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+    guard let request = userInfo["q"] as? Data else { return }
+    DispatchQueue.main.async {
+      if let channel = self.channel {
+        channel.invokeMethod("command", arguments: FlutterStandardTypedData(bytes: request))
+        return
+      }
+      guard let body = (try? JSONSerialization.jsonObject(with: request)) as? [String: Any],
+        body["cmd"] as? String == "send",
+        let pcId = body["pcId"] as? String, let sessionId = body["sessionId"] as? String,
+        let text = body["text"] as? String
+      else { return }
+      SiriSessions.queue(pcId: pcId, sessionId: sessionId, text: text)
+    }
+  }
+
   func session(
     _ session: WCSession,
     didReceiveMessage message: [String: Any],

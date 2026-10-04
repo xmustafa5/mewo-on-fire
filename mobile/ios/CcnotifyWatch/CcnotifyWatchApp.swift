@@ -5,7 +5,7 @@ import SwiftUI
 /// the iPhone app (see PhoneLink.swift) — the watch never talks to a PC.
 @main
 struct CcnotifyWatchApp: App {
-  @StateObject private var link = PhoneLink()
+  @StateObject private var link = PhoneLink.shared
 
   var body: some Scene {
     WindowGroup {

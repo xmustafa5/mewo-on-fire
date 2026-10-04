@@ -206,6 +206,10 @@ from home, through a relay). When the app is closed, it is put in the app's
 queue and Siri opens the app to send it. Siri hears the message in its own
 language: for Arabic with an English Siri, use the microphone in the chat.
 
+The same phrases work with Siri on the Apple Watch. The watch sends through
+the iPhone; when the iPhone cannot be asked at that moment, the message is
+handed to it and sent as soon as it can (Siri says so).
+
 ## Apple Watch
 
 The iPhone app carries a watch app (`ios/CcnotifyWatch`, SwiftUI, watchOS 10

@@ -13,6 +13,7 @@
 		31710D615865509326856A17 /* PhoneLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95F6FA9A88B4A6AE7B271347 /* PhoneLink.swift */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		360F47173CDAC7B6432878C1 /* RequestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3838A558D3C984D730AAEF44 /* RequestView.swift */; };
+		361D24CA22E612EC029AF7FA /* SiriIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA7015FE0FB79EBE7DBACAB3 /* SiriIntents.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		4E01362944CC5A0FCA84C0C9 /* VoiceRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A54DF1899F2E2F302325896 /* VoiceRecorder.swift */; };
 		53D73E335F5C1E853C52DC0C /* MessageText.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD9FD051324DD60A3325CA50 /* MessageText.swift */; };
@@ -103,6 +104,7 @@
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9B3571293E6263C6712CA919 /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		AA7015FE0FB79EBE7DBACAB3 /* SiriIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SiriIntents.swift; sourceTree = "<group>"; };
 		AEB9C63A225A830147BAE7C5 /* WatchVoice.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchVoice.swift; sourceTree = "<group>"; };
 		C0FFEE012F00000000CC0001 /* BackgroundKeepAlive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundKeepAlive.swift; sourceTree = "<group>"; };
 		C63770517E4CE1C1B54D3F17 /* SiriIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SiriIntents.swift; sourceTree = "<group>"; };
@@ -153,6 +155,7 @@
 				C9CDBDF99238A34768AE862B /* Info.plist */,
 				3A54DF1899F2E2F302325896 /* VoiceRecorder.swift */,
 				D05C29D4EDD019AD7FCFA35E /* VoiceSheet.swift */,
+				AA7015FE0FB79EBE7DBACAB3 /* SiriIntents.swift */,
 			);
 			name = CcnotifyWatch;
 			path = CcnotifyWatch;
@@ -394,6 +397,7 @@
 				53D73E335F5C1E853C52DC0C /* MessageText.swift in Sources */,
 				4E01362944CC5A0FCA84C0C9 /* VoiceRecorder.swift in Sources */,
 				05A17027CFC70A4C72E2F024 /* VoiceSheet.swift in Sources */,
+				361D24CA22E612EC029AF7FA /* SiriIntents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

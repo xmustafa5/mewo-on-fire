@@ -13,16 +13,42 @@ struct LinkError: LocalizedError {
 /// phone has news.
 @MainActor
 final class PhoneLink: NSObject, ObservableObject {
+  /// One for the app and for Siri (SiriIntents.swift).
+  static let shared = PhoneLink()
+
   @Published private(set) var state: WatchState?
   /// Why the lists may be out of date.
   @Published private(set) var problem: String?
   @Published private(set) var refreshing = false
 
-  override init() {
+  private override init() {
     super.init()
     guard WCSession.isSupported() else { return }
     WCSession.default.delegate = self
     WCSession.default.activate()
+  }
+
+  /// For Siri: the sessions a message can go to, the one active last first.
+  /// Waits a moment for the session to come up when Siri just started us.
+  func sessionsForSiri() async -> [Session] {
+    for _ in 0..<50 where state == nil && WCSession.isSupported() {
+      try? await Task.sleep(for: .milliseconds(100))
+    }
+    return (state?.sessions ?? [])
+      .filter { $0.state != "ended" && !$0.readOnly }
+      .sorted { $0.lastTs > $1.lastTs }
+  }
+
+  /// A message for the iPhone to send when it can (Siri in the background,
+  /// where the phone is often not reachable). False when there is no iPhone.
+  func handOver(pcId: String, sessionId: String, text: String) -> Bool {
+    guard WCSession.isSupported(), WCSession.default.activationState == .activated else {
+      return false
+    }
+    let body: [String: Any] = ["cmd": "send", "pcId": pcId, "sessionId": sessionId, "text": text]
+    guard let data = try? JSONSerialization.data(withJSONObject: body) else { return false }
+    WCSession.default.transferUserInfo(["q": data])
+    return true
   }
 
   /// Asks the phone for the lists (it reconnects to the PCs if it has to).
