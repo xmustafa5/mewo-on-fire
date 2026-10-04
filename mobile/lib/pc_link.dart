@@ -7,6 +7,7 @@ import 'package:bonsoir/bonsoir.dart';
 import 'package:crypto/crypto.dart';
 
 import 'models.dart';
+import 'relay_tunnel.dart';
 import 'storage.dart';
 
 /// mDNS service type advertised by the PC daemon.
@@ -106,6 +107,8 @@ class PcLink {
   static const Duration _minBackoff = Duration(seconds: 1);
   static const Duration _maxBackoff = Duration(seconds: 60);
   static const Duration _discoveryTime = Duration(seconds: 5);
+  static const Duration _connectTimeout = Duration(seconds: 10);
+  static const Duration _lanConnectTimeout = Duration(seconds: 4);
 
   /// After `hello` the PC replays events, then re-sends every pending
   /// request. The burst counts as over after this long without a frame;
@@ -123,6 +126,9 @@ class PcLink {
   String get state => _state;
 
   String? _host;
+
+  /// The address of the last connection that got as far as hello.
+  String? _lastGoodHost;
 
   /// Host of the current connection, if connected.
   String? get host => _host;
@@ -173,6 +179,24 @@ class PcLink {
     _probeTimer = Timer(_probeInterval * 3, () {
       if (identical(_ws, ws)) ws.pingInterval = _pingInterval;
     });
+  }
+
+  /// The phone moved to another network while this link was connected.
+  /// - Connected through a relay or VPN address: maybe this is the PC's own
+  ///   network now, so reconnect, LAN address first.
+  /// - Connected on the LAN: the connection may be dead without anyone having
+  ///   noticed; find out now rather than at the next regular ping.
+  void networkChanged() {
+    if (_stopped || _state != PcStatus.connected) return;
+    final host = _host;
+    if (host == null || isLanHost(host)) {
+      probe();
+      return;
+    }
+    _lastGoodHost = null;
+    _backoff = _minBackoff;
+    final ws = _ws;
+    if (ws != null) _closeQuietly(ws);
   }
 
   void _wakeUp() {
@@ -235,12 +259,19 @@ class PcLink {
   Future<void> _loop() async {
     while (!_stopped) {
       _setState(PcStatus.connecting);
-      final hosts = await _hosts();
+      final stored = await _hosts();
+      // The address that worked last first: away from home that is the
+      // remote one, and the LAN address would only cost a timeout.
+      final hosts = orderHosts(stored, _lastGoodHost);
       var gotHello = false;
       var unauthorized = false;
       for (final h in hosts) {
         if (_stopped) break;
-        final r = await _session(h);
+        // An address on the LAN answers at once or not at all.
+        final r = await _session(
+          h,
+          connectTimeout: hosts.length > 1 && isLanHost(h) ? _lanConnectTimeout : _connectTimeout,
+        );
         if (r == _Outcome.unauthorized) {
           unauthorized = true;
           break;
@@ -266,10 +297,12 @@ class PcLink {
           final found = await _discover();
           if (_stopped) break;
           if (found != null && found.isNotEmpty) {
+            // The PC's new LAN address; its remote addresses stay.
+            final merged = mergeDiscovered(found, stored);
             try {
-              await Store.saveHosts(pc.id, found);
+              await Store.saveHosts(pc.id, merged);
             } catch (_) {}
-            if (!_sameList(found, hosts)) {
+            if (!_sameList(merged, stored)) {
               continue; // retry immediately with the new address
             }
           }
@@ -306,14 +339,39 @@ class PcLink {
     } catch (_) {}
   }
 
-  /// One connection attempt to [host]; returns when the socket closes.
-  Future<_Outcome> _session(String host) async {
+  /// One connection attempt to [host] — an address, or a relay
+  /// (`wss://…`) that leads to the PC; returns when the socket closes.
+  Future<_Outcome> _session(String host, {Duration connectTimeout = _connectTimeout}) async {
+    if (!RelayTunnel.isRelay(host)) {
+      return _sessionAt(host, pc.port, host, connectTimeout);
+    }
+    final RelayTunnel tunnel;
+    try {
+      tunnel = await RelayTunnel.open(host, pc.id, timeout: connectTimeout);
+    } catch (_) {
+      return _Outcome.failed; // relay unreachable, or the PC is not on it
+    }
+    try {
+      return await _sessionAt('127.0.0.1', tunnel.port, host, connectTimeout);
+    } finally {
+      tunnel.close();
+    }
+  }
+
+  /// The session with whatever answers at [address]:[port]; [host] is what
+  /// it is remembered by.
+  Future<_Outcome> _sessionAt(
+    String address,
+    int port,
+    String host,
+    Duration connectTimeout,
+  ) async {
     final client = pinnedHttpClient(pc.fp);
     _client = client;
     WebSocket ws;
     try {
-      ws = await WebSocket.connect(wssUrl(host, pc.port), customClient: client)
-          .timeout(const Duration(seconds: 10));
+      ws = await WebSocket.connect(wssUrl(address, port), customClient: client)
+          .timeout(connectTimeout);
     } catch (_) {
       client.close(force: true);
       if (identical(_client, client)) _client = null;
@@ -374,6 +432,18 @@ class PcLink {
           _backoff = _minBackoff;
           _failStreak = 0;
           _host = host;
+          _lastGoodHost = host;
+          // v1.4: where the PC can be reached now (LAN, then remote).
+          final reported = <String>[
+            if (msg['hosts'] is List)
+              for (final h in msg['hosts'] as List)
+                if (h is String && h.isNotEmpty) h,
+          ];
+          if (reported.isNotEmpty && !_sameList(reported, await _hosts())) {
+            try {
+              await Store.saveHosts(pc.id, reported);
+            } catch (_) {}
+          }
           syncIds = <String>{};
           armSyncTimer();
           _setState(PcStatus.connected);
@@ -529,6 +599,34 @@ class PcLink {
     }
   }
 }
+
+/// Whether [host] is an address of a home or office network — as opposed to
+/// a VPN address (Tailscale) or a name, which also work from elsewhere.
+bool isLanHost(String host) {
+  final ip = InternetAddress.tryParse(host);
+  if (ip == null) return false;
+  final b = ip.rawAddress;
+  if (ip.type == InternetAddressType.IPv4) {
+    return b[0] == 10 ||
+        (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+        (b[0] == 192 && b[1] == 168) ||
+        (b[0] == 169 && b[1] == 254);
+  }
+  return ip.isLinkLocal || (b[0] & 0xFE) == 0xFC; // fe80::/10, fc00::/7
+}
+
+/// [hosts] in the order to try them: [lastGood] first when it is one of them.
+List<String> orderHosts(List<String> hosts, String? lastGood) {
+  if (lastGood == null || !hosts.contains(lastGood)) return hosts;
+  return <String>[lastGood, ...hosts.where((h) => h != lastGood)];
+}
+
+/// What to remember once mDNS found the PC at [found]: those addresses, then
+/// the remote ones among [known] (mDNS only sees the LAN).
+List<String> mergeDiscovered(List<String> found, List<String> known) => <String>[
+      ...found,
+      ...known.where((h) => !isLanHost(h) && !found.contains(h)),
+    ];
 
 /// Keeps usable addresses: IPv4 first; routable IPv6 only if no IPv4.
 List<String> pickAddresses(List<String> addrs) {

@@ -104,8 +104,18 @@ run `ccnotify install` again. It adds the `listen` Stop hook and the
 - Long-press a message for its options: **Reply** (quotes the message above
   yours), **Copy** and **Select text**. A message that was rejected can be
   sent again or removed from there.
+- **Suggestions**: with `ccnotify suggestions on` on the PC, Claude's reply
+  comes with up to three suggested next messages, shown as buttons above the
+  box. Tap one to put it in the box, then send or change it. (On the watch
+  they are under the chat; a tap asks before it sends.)
 - While the keyboard is open, the keyboard button left of the box closes it
   (so does dragging the chat).
+- iOS: while the box is empty, the send button is a **microphone**. Tap it,
+  speak (up to two minutes) and tap **Done**: the phone turns the recording
+  into text and puts it in the box, for a look before you send it. The
+  language button switches between English and Arabic, and "It was …" under
+  the result reads the same recording in the other language. Claude Code
+  gets text, not a recording.
 - Type in the box at the bottom to continue the session. Each message shows its
   status: **Sending…**, **Delivered**, **Queued** (Claude gets it when it
   finishes the current reply), or **Rejected** with the reason. The box is
@@ -174,6 +184,27 @@ Everything works as on Android, with these differences:
 - There is no persistent "Listening…" notification and no start on boot: open
   the app once after restarting the phone.
 - The Simulator has no camera: use **Paste code instead**.
+
+## Siri and Shortcuts (iOS 16.4 or later)
+
+"Hey Siri, **tell Claude Code**" (or "message Claude Code"): Siri asks what
+you want to say and sends it to a session. The app also answers to "CC
+Notify".
+
+Which session:
+
+- none named: the one that was active last. When several were active within
+  half an hour of it, Siri asks "Which session?".
+- "tell Claude Code **in mewo-on-fire**": the session of that project
+  (sessions are called by their project, which is short enough to say).
+- In the Shortcuts app, the **Tell Claude Code** action takes a message and a
+  session; a shortcut with a fixed session can get a name or a button of its
+  own.
+
+The message is sent in the background while the app is running (also away
+from home, through a relay). When the app is closed, it is put in the app's
+queue and Siri opens the app to send it. Siri hears the message in its own
+language: for Arabic with an English Siri, use the microphone in the chat.
 
 ## Apple Watch
 

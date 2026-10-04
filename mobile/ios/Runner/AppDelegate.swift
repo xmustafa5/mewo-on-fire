@@ -25,6 +25,8 @@ import flutter_local_notifications
 
     // lib/watch_bridge.dart
     WatchBridge.shared.attach(messenger: engineBridge.applicationRegistrar.messenger())
+    // lib/voice_input.dart
+    VoiceInput.shared.attach(messenger: engineBridge.applicationRegistrar.messenger())
 
     // lib/ios_background.dart
     let channel = FlutterMethodChannel(

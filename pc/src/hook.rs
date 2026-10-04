@@ -1,5 +1,8 @@
 //! `ccnotify hook` — invoked by Claude Code with the hook JSON on stdin.
-//! Always exits 0, prints nothing, never blocks long (daemon down = drop).
+//! Always exits 0 and never blocks long (daemon down = drop). It prints
+//! nothing, except for UserPromptSubmit with `suggestions` on: then the
+//! request for a suggestion line (suggest.rs), which Claude Code adds to the
+//! prompt.
 
 use std::io::Read;
 use std::path::Path;
@@ -8,6 +11,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::control;
+use crate::suggest;
 
 pub const MAX_MESSAGE_CHARS: usize = 200;
 
@@ -24,6 +28,19 @@ fn try_run() -> Option<()> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).ok()?;
     let v: Value = serde_json::from_str(&input).ok()?;
+    if v.get("hook_event_name").and_then(Value::as_str) == Some("UserPromptSubmit")
+        && crate::config::suggestions_enabled()
+    {
+        println!(
+            "{}",
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": suggest::INSTRUCTION,
+                }
+            })
+        );
+    }
     let req = map_request(&v)?;
     control::request(&req, Duration::from_secs(1)).ok()?;
     Some(())
@@ -90,7 +107,12 @@ fn hook_cwd(v: &Value) -> String {
 pub fn map_event(v: &Value) -> Option<Value> {
     let name = v.get("hook_event_name")?.as_str()?;
     let (kind, message, detail) = match name {
-        "Stop" => ("stop", field(v, "last_assistant_message"), String::new()),
+        // Without the suggestion line: this is the notification's text.
+        "Stop" => (
+            "stop",
+            suggest::split(&field(v, "last_assistant_message")).0,
+            String::new(),
+        ),
         "Notification" => (
             "needs_input",
             field(v, "message"),

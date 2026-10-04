@@ -26,6 +26,12 @@ pub fn run() -> ! {
             let mut stderr = std::io::stderr().lock();
             let _ = stderr.write_all(MESSAGE_PREFIX.as_bytes());
             let _ = stderr.write_all(text.as_bytes());
+            // No UserPromptSubmit hook runs for a message from the phone.
+            if crate::config::suggestions_enabled() {
+                let _ = stderr.write_all(b"\n\n(");
+                let _ = stderr.write_all(crate::suggest::INSTRUCTION.as_bytes());
+                let _ = stderr.write_all(b")");
+            }
             let _ = stderr.flush();
             2
         }

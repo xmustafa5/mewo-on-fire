@@ -574,6 +574,7 @@ impl Sessions {
             role: "phone".to_string(),
             text: text.to_string(),
             tool: None,
+            suggestions: Vec::new(),
             images: images
                 .iter()
                 .map(|image| ImageRef {

@@ -19,6 +19,10 @@ struct ChatView: View {
   @State private var error: String?
   @State private var sending = false
   @State private var notice: String?
+  /// What Claude suggests to say next, and the one tapped (asked about
+  /// before it is sent: a tap on a watch is easily a slip).
+  @State private var suggestions: [String] = []
+  @State private var picked: String?
 
   /// A chat line with its text already parsed.
   struct Row: Identifiable {
@@ -96,6 +100,16 @@ struct ChatView: View {
       .defaultScrollAnchor(.bottom)
     }
     .navigationTitle(session?.title ?? "Chat")
+    .confirmationDialog(
+      picked ?? "", isPresented: Binding(get: { picked != nil }, set: { if !$0 { picked = nil } }),
+      titleVisibility: .visible
+    ) {
+      Button("Send") {
+        if let picked { send(picked) }
+        picked = nil
+      }
+      Button("Cancel", role: .cancel) { picked = nil }
+    }
     .task { await poll() }
     .onChange(of: session?.lastTs) { Task { await load() } }
     .onChange(of: session?.state) { Task { await load() } }
@@ -108,6 +122,16 @@ struct ChatView: View {
         .font(.caption2)
         .foregroundStyle(.secondary)
     } else {
+      ForEach(suggestions, id: \.self) { suggestion in
+        Button {
+          picked = suggestion
+        } label: {
+          Label(suggestion, systemImage: "sparkles")
+            .font(.footnote)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .disabled(sending)
+      }
       VoiceButton(prompt: "Message to Claude") {
         Label(sending ? "Sending…" : "Reply by voice", systemImage: "mic.fill")
           .frame(maxWidth: .infinity)
@@ -176,6 +200,7 @@ struct ChatView: View {
         more = page.more ?? false
       }
       sig = page.sig
+      suggestions = page.suggestions ?? []
     } catch {
       self.error = error.localizedDescription
     }
@@ -207,6 +232,7 @@ struct ChatView: View {
     guard !message.isEmpty, !sending else { return }
     sending = true
     notice = nil
+    suggestions = []
     Task {
       do {
         let reply = try await link.send(pcId: pcId, sessionId: sessionId, text: message)

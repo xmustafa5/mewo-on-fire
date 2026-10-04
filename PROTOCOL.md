@@ -363,3 +363,102 @@ An `up/…` id is only served for its own session. For a `tr/…` id the daemon 
   <the reply>
   ```
 
+# v1.4 — reaching the PC from outside the LAN
+
+The transport does not change: the phone connects to one of the PC's
+addresses with the pinned certificate. What changes is which addresses there
+are and how the phone picks one.
+
+## Addresses
+
+`hosts` (QR payload, `status`, `hello`) lists, in this order:
+
+1. the LAN addresses (as before);
+2. the PC's Tailscale addresses: IPv4 in `100.64.0.0/10` on any interface;
+3. `extra_hosts` of `config.json` (`["mac.example.ts.net", "10.8.0.2"]`):
+   other VPN addresses, or DNS names;
+4. the relay of `config.json` (`relay`, set with `ccnotify relay <url>`), as
+   its URL: `wss://relay.example`. See "Relay" below.
+
+mDNS still advertises LAN addresses only.
+
+## hello
+
+```json
+{"type":"hello","pc_id":"...","name":"...","last_id":N,"hosts":["192.168.0.64","100.101.102.103"]}
+```
+
+`hosts` is optional (absent from older daemons). A phone that gets it stores
+the list in place of the one from pairing, so a paired phone learns a new
+remote address the next time it connects at home.
+
+## Phone
+
+- A host that starts with `wss://` (or `ws://`) is a relay: the phone
+  connects to `<relay>/pc/<pc_id>/connect` and runs the usual connection
+  (TLS with the pinned certificate, `auth`, …) through it.
+- A host is *LAN* when it is an address in `10/8`, `172.16/12`, `192.168/16`,
+  `169.254/16` (or IPv6 link-local / `fc00::/7`), and *remote* otherwise
+  (VPN addresses, names).
+- Each round tries the stored hosts with the one that last got a `hello`
+  first, then the others in stored order. With more than one host, a LAN host
+  gets 4 s to connect (10 s otherwise): away from home it cannot answer.
+- After mDNS discovery, the stored hosts become the discovered addresses
+  followed by the remote hosts known before.
+
+## Relay
+
+For a PC that the internet cannot reach (provider NAT). The daemon and the
+phone both connect out to the relay with WebSockets; it passes bytes between
+them and understands none of them. `relay/` is one for Cloudflare Workers,
+`ccnotify relay-server [port]` one for a machine of your own.
+
+- Daemon: `GET <relay>/pc/<pc_id>/listen?key=<relay_key>`. The first daemon
+  for a `pc_id` sets the key (48 hex characters, `relay_key` in
+  `config.json`); another key is refused afterwards. A new connection of the
+  daemon replaces the old one and closes its phones.
+- Phone: `GET <relay>/pc/<pc_id>/connect`; refused (HTTP 503, or closed) when
+  the daemon is not connected.
+- Relay → daemon, text: `{"open": N}` when a phone connected (N: unsigned 32
+  bit), `{"close": N}` when it left. Daemon → relay, text: `{"close": N}`.
+- Daemon ↔ relay, binary: 4 bytes N (big endian), then the bytes of that
+  phone's connection. Phone ↔ relay, binary: the bytes.
+- The daemon opens a TCP connection to its own port on `127.0.0.1` for every
+  `open` and pipes it; it pings the relay every 30 s and reconnects (1 s … 60 s
+  backoff) when it hears nothing for 75 s.
+- The phone opens a listening socket on `127.0.0.1`, pipes it to the relay,
+  and connects to it as to any other address of the PC.
+
+# v1.5 — suggested next messages
+
+Claude Code's own prompt suggestion exists only inside the app that shows it
+(it is not in the transcript, and no hook gets it). So the phone's comes from
+Claude itself:
+
+- `suggestions: true` in `config.json` (`ccnotify suggestions on|off`; read by
+  the hooks on every prompt, no restart).
+- With it on, `ccnotify hook` answers `UserPromptSubmit` with
+  `hookSpecificOutput.additionalContext`: a request to end the final reply
+  with one more line, after an empty line:
+
+  ```text
+  [next]: # "first suggestion | second suggestion"
+  ```
+
+  One to three short messages the user would plausibly send next. It is a
+  Markdown link reference definition, which no renderer displays. `listen`
+  appends the same request to a message from the phone (no
+  `UserPromptSubmit` runs for those).
+- The daemon takes the last line that starts with `[next]: #` out of an
+  assistant text (transcript items, and the `stop` event's message), splits
+  what is between the quotes (or parentheses) at `|`, and keeps up to three
+  entries of up to 120 characters as the ChatItem's `suggestions`:
+
+  ```json
+  {"id":"…","ts":1790000000000,"role":"assistant","text":"All tests pass.","suggestions":["commit it","push"]}
+  ```
+
+- Phone: offers the `suggestions` of the last chat item while it is Claude's,
+  the session is not `working` or `ended`, and nothing was sent after it. A
+  tap puts the text in the message box (the watch asks, then sends).
+

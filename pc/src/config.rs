@@ -20,6 +20,26 @@ pub struct Config {
     pub name: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// More addresses for the phones to try, after the ones found on the
+    /// network interfaces: a VPN address or a DNS name that reaches this PC
+    /// from outside the LAN.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_hosts: Vec<String>,
+    /// Relay for phones outside the LAN (`wss://…`, set with
+    /// `ccnotify relay <url>`); empty = none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub relay: String,
+    /// Secret that keeps this PC's place on the relay.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub relay_key: String,
+    /// Ask Claude for suggested next messages (`ccnotify suggestions on`,
+    /// see suggest.rs).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub suggestions: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn default_port() -> u16 {
@@ -97,6 +117,34 @@ fn is_hex(s: &str, len: usize) -> bool {
     s.len() == len && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Sets (or with an empty `url` removes) the relay; the daemon reads it when
+/// it starts. The key is made once and kept, so the place on a relay stays
+/// this PC's.
+pub fn set_relay(url: &str) -> Result<Config> {
+    let mut cfg = load_or_create()?;
+    cfg.relay = url.trim().trim_end_matches('/').to_string();
+    if !cfg.relay.is_empty() && cfg.relay_key.is_empty() {
+        cfg.relay_key = random_hex(24);
+    }
+    save_config(&cfg)?;
+    Ok(cfg)
+}
+
+/// Whether the hooks should ask Claude for suggestions. Read by the hooks on
+/// every prompt, so it only looks at the file (never creates it).
+pub fn suggestions_enabled() -> bool {
+    fs::read_to_string(paths::config_file())
+        .ok()
+        .and_then(|text| serde_json::from_str::<Config>(&text).ok())
+        .is_some_and(|cfg| cfg.suggestions)
+}
+
+pub fn set_suggestions(on: bool) -> Result<()> {
+    let mut cfg = load_or_create()?;
+    cfg.suggestions = on;
+    save_config(&cfg)
+}
+
 fn save_config(cfg: &Config) -> Result<()> {
     let text = serde_json::to_string_pretty(cfg)?;
     let path = paths::config_file();
@@ -134,6 +182,10 @@ pub fn load_or_create() -> Result<Config> {
                 pc_id: random_hex(8),
                 name: hostname(),
                 port: DEFAULT_PORT,
+                extra_hosts: Vec::new(),
+                relay: String::new(),
+                relay_key: String::new(),
+                suggestions: false,
             };
             save_config(&cfg)?;
             Ok(cfg)

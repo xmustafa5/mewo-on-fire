@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -6,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import '../app_state.dart';
 import '../models.dart';
 import '../requests.dart' show Answers;
+import '../voice_input.dart';
 import 'answer_screen.dart';
 import 'keyboard_hide_button.dart';
 import 'sessions_tab.dart' show SessionStateChip;
@@ -70,6 +73,15 @@ class _ChatScreenState extends State<ChatScreen> {
   /// The message being replied to (quoted above the next message).
   _ReplyTarget? _replyTo;
 
+  /// Voice message: being recorded, or being turned into text.
+  _Voice _voice = _Voice.idle;
+  DateTime _voiceStart = DateTime.now();
+  Timer? _voiceTimer;
+
+  /// What the last voice message put into the box, to replace it when it is
+  /// heard again in the other language.
+  String _voiceText = '';
+
   @override
   void initState() {
     super.initState();
@@ -84,6 +96,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _state.removeListener(_onStateChanged);
     _state.unwatchChat(widget.pcId, widget.sessionId);
+    _voiceTimer?.cancel();
+    if (_voice == _Voice.recording) unawaited(VoiceInput.cancel());
     _input.dispose();
     _scroll.dispose();
     _cardsScroll.dispose();
@@ -217,6 +231,104 @@ class _ChatScreenState extends State<ChatScreen> {
   void _toast(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  // ---- voice messages ----
+
+  String get _voiceLanguage => VoiceInput.languageFor(_state.settings.voiceLanguage);
+
+  Future<void> _voiceRecord() async {
+    if (_voice != _Voice.idle) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    try {
+      await VoiceInput.start();
+    } catch (e) {
+      _toast(VoiceInput.errorText(e));
+      return;
+    }
+    if (!mounted) {
+      unawaited(VoiceInput.cancel());
+      return;
+    }
+    setState(() {
+      _voice = _Voice.recording;
+      _voiceStart = DateTime.now();
+    });
+    _voiceTimer?.cancel();
+    _voiceTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted || _voice != _Voice.recording) return;
+      if (DateTime.now().difference(_voiceStart) >= VoiceInput.maxLength) {
+        unawaited(_voiceDone()); // the recorder stopped by itself
+      } else {
+        setState(() {});
+      }
+    });
+  }
+
+  void _voiceCancel() {
+    _voiceTimer?.cancel();
+    unawaited(VoiceInput.cancel());
+    setState(() => _voice = _Voice.idle);
+  }
+
+  void _voiceSwitchLanguage() {
+    unawaited(_state.updateSettings(
+        _state.settings.copyWith(voiceLanguage: VoiceInput.other(_voiceLanguage))));
+  }
+
+  /// Stops the recording and puts what was said into the box, for a look
+  /// before it is sent.
+  Future<void> _voiceDone() async {
+    if (_voice != _Voice.recording) return;
+    _voiceTimer?.cancel();
+    final language = _voiceLanguage;
+    setState(() => _voice = _Voice.working);
+    try {
+      _voiceInsert(await VoiceInput.stop(language), language, replaceLast: false);
+    } catch (e) {
+      _toast(VoiceInput.errorText(e));
+    }
+    if (mounted) setState(() => _voice = _Voice.idle);
+  }
+
+  /// The last recording again, as [language].
+  Future<void> _voiceAgain(String language) async {
+    if (_voice != _Voice.idle) return;
+    setState(() => _voice = _Voice.working);
+    try {
+      final text = await VoiceInput.again(language);
+      unawaited(_state.updateSettings(_state.settings.copyWith(voiceLanguage: language)));
+      _voiceInsert(text, language, replaceLast: true);
+    } catch (e) {
+      _toast(VoiceInput.errorText(e));
+    }
+    if (mounted) setState(() => _voice = _Voice.idle);
+  }
+
+  void _voiceInsert(String text, String language, {required bool replaceLast}) {
+    if (!mounted || text.isEmpty) return;
+    var before = _input.text;
+    if (replaceLast && _voiceText.isNotEmpty && before.endsWith(_voiceText)) {
+      before = before.substring(0, before.length - _voiceText.length);
+    }
+    final joined = before.isEmpty || before.endsWith(' ') || before.endsWith('\n')
+        ? '$before$text'
+        : '$before $text';
+    _voiceText = text;
+    _input.value = TextEditingValue(
+      text: joined,
+      selection: TextSelection.collapsed(offset: joined.length),
+    );
+    final other = VoiceInput.other(language);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('Heard as ${VoiceInput.languages[language]}. Check it, then send.'),
+        action: SnackBarAction(
+          label: 'It was ${VoiceInput.languages[other]}',
+          onPressed: () => _voiceAgain(other),
+        ),
+      ));
   }
 
   // ---- pictures ----
@@ -686,9 +798,18 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// A suggested message goes into the box, to be changed or sent.
+  void _useSuggestion(String text) {
+    _input.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
   /// [waiting]: a request card of this session is not answered yet.
   Widget _inputBar(BuildContext context, CcSession? s, String pcName, {bool waiting = false}) {
     final cs = Theme.of(context).colorScheme;
+    final suggestions = _state.suggestionsOf(widget.pcId, widget.sessionId);
     final t = Theme.of(context).textTheme;
     String? blocked;
     if (s != null && s.ended) {
@@ -740,47 +861,171 @@ class _ChatScreenState extends State<ChatScreen> {
                         onOpen: _viewImage,
                         onRemove: _removeAttachment,
                       ),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        const KeyboardHideButton(),
-                        IconButton(
-                          tooltip: 'Attach pictures',
-                          onPressed: _attachments.length >= _maxImages ? null : _attach,
-                          icon: const Icon(Icons.add_photo_alternate_outlined),
-                        ),
-                        Expanded(
-                          child: TextField(
-                            controller: _input,
-                            minLines: 1,
-                            maxLines: 5,
-                            textCapitalization: TextCapitalization.sentences,
-                            decoration: InputDecoration(
-                              hintText: 'Message Claude…',
-                              isDense: true,
-                              filled: true,
-                              fillColor: cs.surface,
-                              contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(24),
-                                borderSide: BorderSide.none,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton.filled(
-                          tooltip: 'Send',
-                          onPressed: _canSend ? _send : null,
-                          icon: const Icon(Icons.send),
-                        ),
-                      ],
-                    ),
+                    if (suggestions.isNotEmpty && !_canSend && _voice == _Voice.idle)
+                      _Suggestions(suggestions: suggestions, onPick: _useSuggestion),
+                    if (_voice != _Voice.idle)
+                      _VoiceBar(
+                        working: _voice == _Voice.working,
+                        elapsed: DateTime.now().difference(_voiceStart),
+                        language: VoiceInput.languages[_voiceLanguage] ?? '',
+                        onLanguage: _voiceSwitchLanguage,
+                        onCancel: _voiceCancel,
+                        onDone: _voiceDone,
+                      )
+                    else
+                      _inputRow(cs),
                   ],
                 ),
         ),
       ),
+    );
+  }
+
+  /// Hide keyboard, attach, the message box, and send — or the microphone
+  /// while the box is empty.
+  Widget _inputRow(ColorScheme cs) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        const KeyboardHideButton(),
+        IconButton(
+          tooltip: 'Attach pictures',
+          onPressed: _attachments.length >= _maxImages ? null : _attach,
+          icon: const Icon(Icons.add_photo_alternate_outlined),
+        ),
+        Expanded(
+          child: TextField(
+            controller: _input,
+            minLines: 1,
+            maxLines: 5,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(
+              hintText: 'Message Claude…',
+              isDense: true,
+              filled: true,
+              fillColor: cs.surface,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // Nothing typed: the button records a voice message.
+        if (!_canSend && VoiceInput.supported)
+          IconButton.filledTonal(
+            tooltip: 'Voice message',
+            onPressed: _voiceRecord,
+            icon: const Icon(Icons.mic),
+          )
+        else
+          IconButton.filled(
+            tooltip: 'Send',
+            onPressed: _canSend ? _send : null,
+            icon: const Icon(Icons.send),
+          ),
+      ],
+    );
+  }
+}
+
+enum _Voice { idle, recording, working }
+
+/// What Claude suggests to say next, above the message box: tap one to put
+/// it in the box.
+class _Suggestions extends StatelessWidget {
+  const _Suggestions({required this.suggestions, required this.onPick});
+
+  final List<String> suggestions;
+  final ValueChanged<String> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+      child: Row(
+        children: [
+          for (final s in suggestions)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ActionChip(
+                avatar: const Icon(Icons.auto_awesome, size: 16),
+                label: Text(s),
+                onPressed: () => onPick(s),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Takes the place of the input row while a voice message is recorded (time,
+/// language, discard, done) or turned into text.
+class _VoiceBar extends StatelessWidget {
+  const _VoiceBar({
+    required this.working,
+    required this.elapsed,
+    required this.language,
+    required this.onLanguage,
+    required this.onCancel,
+    required this.onDone,
+  });
+
+  final bool working;
+  final Duration elapsed;
+  final String language;
+  final VoidCallback onLanguage;
+  final VoidCallback onCancel;
+  final VoidCallback onDone;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    if (working) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+            const SizedBox(width: 12),
+            Text('Turning it into text…', style: t.bodyMedium),
+          ],
+        ),
+      );
+    }
+    final s = elapsed.inSeconds;
+    return Row(
+      children: [
+        IconButton(
+          tooltip: 'Discard',
+          onPressed: onCancel,
+          icon: const Icon(Icons.delete_outline),
+        ),
+        Icon(Icons.fiber_manual_record, size: 14, color: cs.error),
+        const SizedBox(width: 6),
+        Text(
+          '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}',
+          style: t.titleMedium?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+        ),
+        const SizedBox(width: 8),
+        ActionChip(
+          avatar: const Icon(Icons.language, size: 18),
+          label: Text(language),
+          tooltip: 'Language you are speaking',
+          onPressed: onLanguage,
+        ),
+        const Spacer(),
+        FilledButton.icon(
+          onPressed: onDone,
+          icon: const Icon(Icons.stop),
+          label: const Text('Done'),
+        ),
+      ],
     );
   }
 }

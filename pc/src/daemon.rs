@@ -1,7 +1,7 @@
 //! `ccnotify daemon`: shared state + startup/shutdown orchestration.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -16,7 +16,7 @@ use crate::requests::{self, AskReply, Request, Requests};
 use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session, Sessions};
 use crate::store::{Event, Store};
 use crate::transcript::{self, ChatItem};
-use crate::{control, mdns, net, paths, server, uploads};
+use crate::{control, mdns, net, paths, relay, server, uploads};
 
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
 const BROADCAST_CAPACITY: usize = 256;
@@ -55,6 +55,8 @@ pub struct AppState {
     tx: broadcast::Sender<Push>,
     pair_codes: Mutex<HashMap<String, Instant>>,
     pub connected: AtomicUsize,
+    /// Connected to the relay right now (see relay.rs).
+    pub relay_up: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -431,12 +433,23 @@ impl AppState {
         codes.remove(code).is_some()
     }
 
+    /// What a phone may try: LAN addresses first, then Tailscale and the
+    /// configured extras, then the relay (`wss://…`).
+    pub fn hosts(&self) -> Vec<String> {
+        let mut hosts = net::all_hosts(&self.config.extra_hosts);
+        let relay = relay::base_url(&self.config.relay);
+        if !relay.is_empty() {
+            hosts.push(relay);
+        }
+        hosts
+    }
+
     pub fn pair_payload(&self, code: &str) -> String {
         let payload = json!({
             "v": 1,
             "id": self.config.pc_id,
             "name": self.config.name,
-            "hosts": net::hosts(),
+            "hosts": self.hosts(),
             "port": self.config.port,
             "fp": self.fp,
             "code": code,
@@ -511,10 +524,12 @@ impl AppState {
             "name": self.config.name,
             "port": self.config.port,
             "fp": self.fp,
-            "hosts": net::hosts(),
+            "hosts": self.hosts(),
             "devices": device_count,
             "last_id": self.last_id(),
             "connected": self.connected.load(Ordering::SeqCst),
+            "relay": relay::base_url(&self.config.relay),
+            "relay_up": self.relay_up.load(Ordering::SeqCst),
             "pending": self.pending_count(),
             "sessions": session_count,
             "listening": listening,
@@ -554,6 +569,7 @@ async fn run_async() -> Result<()> {
         tx,
         pair_codes: Mutex::new(HashMap::new()),
         connected: AtomicUsize::new(0),
+        relay_up: AtomicBool::new(false),
     });
 
     eprintln!(
@@ -565,7 +581,7 @@ async fn run_async() -> Result<()> {
         state.last_id()
     );
     eprintln!("ccnotify: fp={}", identity.fp);
-    eprintln!("ccnotify: hosts={}", net::hosts().join(", "));
+    eprintln!("ccnotify: hosts={}", state.hosts().join(", "));
     eprintln!("ccnotify: control socket {}", paths::socket_path().display());
 
     let mdns_daemon = mdns::advertise(&config);
@@ -574,6 +590,7 @@ async fn run_async() -> Result<()> {
     tokio::spawn(server::serve(state.clone(), tcp_listener, acceptor));
     tokio::spawn(expire_loop(state.clone()));
     tokio::spawn(sessions_loop(state.clone()));
+    tokio::spawn(relay::run(state.clone()));
 
     wait_for_shutdown().await;
     eprintln!("ccnotify: shutting down");

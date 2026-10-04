@@ -515,6 +515,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   ChatState? chatOf(String pcId, String sessionId) => _chats[sessionKey(pcId, sessionId)];
 
+  /// What to offer as the next message (v1.5): the suggestions of Claude's
+  /// reply while it is the last thing in the chat and Claude is not working.
+  List<String> suggestionsOf(String pcId, String sessionId) {
+    final items = chatOf(pcId, sessionId)?.items ?? const <ChatItem>[];
+    if (items.isEmpty || items.last.role != ChatRole.assistant) return const <String>[];
+    final session = findSession(pcId, sessionId)?.session;
+    if (session != null && (session.state == SessionState.working || session.ended)) {
+      return const <String>[];
+    }
+    if (outgoingOf(pcId, sessionId).any((m) => m.status != SendStatus.rejected)) {
+      return const <String>[]; // something was sent after it
+    }
+    return items.last.suggestions;
+  }
+
   List<OutgoingMessage> outgoingOf(String pcId, String sessionId) =>
       _outgoing[sessionKey(pcId, sessionId)] ?? const <OutgoingMessage>[];
 

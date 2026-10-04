@@ -168,8 +168,9 @@ class WatchBridge {
           m,
     ];
     final last = items.isEmpty ? null : items.last;
+    final suggestions = _state.suggestionsOf(pcId, sessionId);
     final sig = '${items.length}:${last?.ts ?? 0}:${last?.text.length ?? 0}:'
-        '${waiting.map((m) => '${m.clientId}=${m.status}').join(',')}';
+        '${waiting.map((m) => '${m.clientId}=${m.status}').join(',')}:${suggestions.length}';
     if (sig == have) return {'same': true, 'warning': chat.error};
     final lines = page['items'] as List<Map<String, dynamic>>;
     for (final m in waiting) {
@@ -186,7 +187,7 @@ class WatchBridge {
         },
       });
     }
-    return {...page, 'sig': sig, 'warning': chat.error};
+    return {...page, 'sig': sig, 'suggestions': suggestions, 'warning': chat.error};
   }
 
   /// Makes sure [pcId] (every PC when null) is connected before a command

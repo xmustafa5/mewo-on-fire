@@ -238,6 +238,7 @@ async fn handle_auth(
             "pc_id": state.config.pc_id,
             "name": state.config.name,
             "last_id": sub.last_id,
+            "hosts": state.hosts(),
         }),
     )
     .await?;

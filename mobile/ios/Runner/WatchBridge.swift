@@ -47,6 +47,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         if let data = (call.arguments as? FlutterStandardTypedData)?.data {
           self?.snapshot = data
           self?.pushSnapshot()
+          SiriSessions.store(snapshot: data)  // Siri offers the same sessions
         }
         result(nil)
       default:
@@ -54,6 +55,34 @@ final class WatchBridge: NSObject, WCSessionDelegate {
       }
     }
     self.channel = channel
+  }
+
+  /// A command for Dart from this side of the app (Siri): the same ones the
+  /// watch sends. Nil when Dart is not running.
+  @MainActor
+  func run(_ body: [String: Any]) async -> [String: Any]? {
+    guard let channel, let request = try? JSONSerialization.data(withJSONObject: body) else {
+      return nil
+    }
+    let app = UIApplication.shared
+    var task = UIBackgroundTaskIdentifier.invalid
+    task = app.beginBackgroundTask(withName: "ccnotify.siri") {
+      app.endBackgroundTask(task)
+      task = .invalid
+    }
+    defer {
+      // Whatever Dart still has to write to the PC.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+        if task != .invalid { app.endBackgroundTask(task) }
+      }
+    }
+    let result: Any? = await withCheckedContinuation { continuation in
+      channel.invokeMethod("command", arguments: FlutterStandardTypedData(bytes: request)) {
+        continuation.resume(returning: $0)
+      }
+    }
+    guard let data = (result as? FlutterStandardTypedData)?.data else { return nil }
+    return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
   }
 
   private func pushSnapshot() {

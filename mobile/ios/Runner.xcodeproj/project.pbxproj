@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		05A17027CFC70A4C72E2F024 /* VoiceSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D05C29D4EDD019AD7FCFA35E /* VoiceSheet.swift */; };
+		0779D025E77094A865993E8A /* SiriIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C63770517E4CE1C1B54D3F17 /* SiriIntents.swift */; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
 		31710D615865509326856A17 /* PhoneLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95F6FA9A88B4A6AE7B271347 /* PhoneLink.swift */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
@@ -24,6 +25,7 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		B7A4B7E140AF342DBBD65B40 /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 976890BF98D9F733137DDA84 /* VoiceInput.swift */; };
 		B7F7B6B627C86B7110C8D667 /* WatchVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEB9C63A225A830147BAE7C5 /* WatchVoice.swift */; };
 		C0FFEE012F00000000CC0002 /* BackgroundKeepAlive.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE012F00000000CC0001 /* BackgroundKeepAlive.swift */; };
 		C5589517A2E2B32F55DD1137 /* CcnotifyWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AEBD24E27616DC70CADF715 /* CcnotifyWatchApp.swift */; };
@@ -94,6 +96,7 @@
 		95F6FA9A88B4A6AE7B271347 /* PhoneLink.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneLink.swift; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
 		9740EEB31CF90195004384FC /* Generated.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Generated.xcconfig; path = Flutter/Generated.xcconfig; sourceTree = "<group>"; };
+		976890BF98D9F733137DDA84 /* VoiceInput.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VoiceInput.swift; sourceTree = "<group>"; };
 		97C146EE1CF9000F007C117D /* Runner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Runner.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		97C146FB1CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -102,6 +105,7 @@
 		9B3571293E6263C6712CA919 /* RootView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		AEB9C63A225A830147BAE7C5 /* WatchVoice.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchVoice.swift; sourceTree = "<group>"; };
 		C0FFEE012F00000000CC0001 /* BackgroundKeepAlive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundKeepAlive.swift; sourceTree = "<group>"; };
+		C63770517E4CE1C1B54D3F17 /* SiriIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SiriIntents.swift; sourceTree = "<group>"; };
 		C6C4088E4DB938CCE3685C1C /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C9CDBDF99238A34768AE862B /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		D05C29D4EDD019AD7FCFA35E /* VoiceSheet.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VoiceSheet.swift; sourceTree = "<group>"; };
@@ -202,6 +206,8 @@
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 				0281B408652C9B0140EA394B /* WatchBridge.swift */,
 				AEB9C63A225A830147BAE7C5 /* WatchVoice.swift */,
+				976890BF98D9F733137DDA84 /* VoiceInput.swift */,
+				C63770517E4CE1C1B54D3F17 /* SiriIntents.swift */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
@@ -409,6 +415,8 @@
 				C0FFEE012F00000000CC0002 /* BackgroundKeepAlive.swift in Sources */,
 				88B838F9D7BD626F6E840FB7 /* WatchBridge.swift in Sources */,
 				B7F7B6B627C86B7110C8D667 /* WatchVoice.swift in Sources */,
+				B7A4B7E140AF342DBBD65B40 /* VoiceInput.swift in Sources */,
+				0779D025E77094A865993E8A /* SiriIntents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -86,6 +86,8 @@ struct ChatReply: Decodable {
   var sig: String?
   var more: Bool?
   var items: [ChatLine]?
+  /// What Claude suggests to say next (newest page only).
+  var suggestions: [String]?
   var warning: String?
 }
 

@@ -213,6 +213,9 @@ pub fn status() -> Result<()> {
                 .collect()
         })
         .unwrap_or_default();
+    // The relay is listed with the addresses for the phones; here it gets a
+    // line of its own.
+    let hosts: Vec<String> = hosts.into_iter().filter(|h| !h.contains("://")).collect();
     println!("ccnotify daemon: running");
     println!(
         "  PC name:      {} (id {})",
@@ -228,6 +231,14 @@ pub fn status() -> Result<()> {
             hosts.join(", ")
         }
     );
+    let relay = str_field(&resp, "relay");
+    if !relay.is_empty() {
+        let up = resp.get("relay_up").and_then(Value::as_bool).unwrap_or(false);
+        println!(
+            "  Relay:        {relay} ({})",
+            if up { "connected" } else { "not connected" }
+        );
+    }
     println!("  Cert SHA-256: {}", str_field(&resp, "fp"));
     println!(
         "  Devices:      {} paired, {} connected",
@@ -245,6 +256,48 @@ pub fn status() -> Result<()> {
         u64_field(&resp, "listening")
     );
     println!("  Socket:       {}", paths::socket_path().display());
+    Ok(())
+}
+
+/// `ccnotify relay <url>` / `ccnotify relay off`: where phones outside the
+/// LAN connect through. Paired phones learn it the next time they connect.
+pub fn relay(url: &str) -> Result<()> {
+    let off = matches!(url, "off" | "none" | "");
+    if !off && !(url.starts_with("wss://") || url.starts_with("ws://")) {
+        bail!("a relay address starts with wss:// (got {url})");
+    }
+    let cfg = crate::config::set_relay(if off { "" } else { url })?;
+    if off {
+        println!("Relay removed: phones connect on the local network only.");
+    } else {
+        println!("Relay set to {}.", cfg.relay);
+    }
+    // The daemon reads its config when it starts.
+    let restart = install::restart_command();
+    let restarted = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&restart)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if restarted {
+        println!("Daemon restarted. `ccnotify status` shows the relay.");
+    } else {
+        println!("Restart the daemon to apply it: {restart}");
+    }
+    Ok(())
+}
+
+/// `ccnotify suggestions on|off`. The hooks read the setting on every
+/// prompt, so it applies from the next one.
+pub fn suggestions(on: bool) -> Result<()> {
+    crate::config::set_suggestions(on)?;
+    if on {
+        println!("Suggestions on: Claude ends its replies with suggested next messages,");
+        println!("which the app shows as buttons. It applies from your next prompt.");
+    } else {
+        println!("Suggestions off.");
+    }
     Ok(())
 }
 

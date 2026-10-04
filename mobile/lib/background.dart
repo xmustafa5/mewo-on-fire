@@ -806,7 +806,12 @@ class CcTaskHandler extends TaskHandler {
     final sig = await _networkSignature();
     if (sig == _netSig) return;
     _netSig = sig;
-    if (sig.isNotEmpty) _kickDisconnected();
+    if (sig.isEmpty) return;
+    _kickDisconnected();
+    // Home Wi-Fi joined or left: back to the LAN address, or on to the relay.
+    for (final l in _links.values) {
+      l.networkChanged();
+    }
   }
 
   static Future<String> _networkSignature() async {

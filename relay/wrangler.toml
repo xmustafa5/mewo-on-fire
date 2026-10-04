@@ -1,0 +1,12 @@
+name = "ccnotify-relay"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# One Durable Object per PC (SQLite-backed: available on the free plan).
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]

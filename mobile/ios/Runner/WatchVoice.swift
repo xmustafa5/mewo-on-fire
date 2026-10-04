@@ -41,8 +41,9 @@ final class WatchVoice {
     transcribe(data, language: message["lang"] as? String ?? "en-US", reply: reply)
   }
 
-  private func transcribe(_ audio: Data, language: String, reply: @escaping ([String: Any]) -> Void)
-  {
+  /// The text of a recording: `["text": …]` or `["e": <reason>]`. Also used
+  /// for voice messages recorded on the phone (VoiceInput.swift).
+  func transcribe(_ audio: Data, language: String, reply: @escaping ([String: Any]) -> Void) {
     let app = UIApplication.shared
     var background = UIBackgroundTaskIdentifier.invalid
     var answered = false

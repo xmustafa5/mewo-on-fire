@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ask::truncate_chars;
+use crate::suggest;
 
 /// Only the tail of the transcript is read.
 const MAX_READ_BYTES: u64 = 4 * 1024 * 1024;
@@ -32,6 +33,10 @@ pub struct ChatItem {
     pub tool: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageRef>,
+    /// Messages the user may want to send next (v1.5), from the line Claude
+    /// ends a reply with when `suggestions` is on; role `assistant` only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<String>,
 }
 
 /// An image of a chat item; phones fetch it with `get_image` (v1.3).
@@ -178,6 +183,15 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
             } else {
                 format!("{base_id}:{i}")
             };
+            // The suggestion line is for the phone's buttons, not the text.
+            let (text, suggestions) = if role == "assistant" {
+                suggest::split(&text)
+            } else {
+                (text, Vec::new())
+            };
+            if text.is_empty() && suggestions.is_empty() && role == "assistant" {
+                continue;
+            }
             items.push_back(ChatItem {
                 id,
                 ts: last_ts,
@@ -185,6 +199,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
                 text: truncate_chars(&text, MAX_ITEM_CHARS),
                 tool,
                 images: std::mem::take(&mut images),
+                suggestions,
             });
             while items.len() > limit {
                 items.pop_front();
