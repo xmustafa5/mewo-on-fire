@@ -427,7 +427,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 title: const Text('Reply'),
                 onTap: () {
                   Navigator.pop(ctx);
-                  setState(() => _replyTo = _ReplyTarget(role: role, text: text));
+                  _startReply(role, text);
                 },
               ),
             if (text.isNotEmpty)
@@ -521,6 +521,13 @@ class _ChatScreenState extends State<ChatScreen> {
         blockquotePadding: const EdgeInsets.fromLTRB(10, 2, 4, 2),
       );
     });
+  }
+
+  /// Quotes [text] above the next message (long-press → Reply, or a swipe
+  /// on the bubble).
+  void _startReply(String role, String text) {
+    HapticFeedback.selectionClick();
+    setState(() => _replyTo = _ReplyTarget(role: role, text: text));
   }
 
   void _copyLink(String? href) {
@@ -740,7 +747,11 @@ class _ChatScreenState extends State<ChatScreen> {
       // Pictures we sent ourselves are already here; others come from the PC.
       final local = m != null && m.images.length == it.images.length;
       final text = it.images.isEmpty ? it.text : _withoutImageMarks(it.text);
-      rows.add(_Bubble(
+      final replyable = canReply && text.isNotEmpty;
+      rows.add(_SwipeToReply(
+        enabled: replyable,
+        onReply: () => _startReply(it.role, text),
+        child: _Bubble(
         role: it.role,
         text: text,
         ts: it.ts,
@@ -756,6 +767,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     onOpen: _viewImage),
         ],
         onLongPress: () => _showOptions(role: it.role, text: text, canReply: canReply),
+      ),
       ));
       i++;
     }
@@ -1147,6 +1159,89 @@ class _Bubble extends StatelessWidget {
 }
 
 /// The message a reply quotes.
+/// Drag a bubble sideways to reply to it: it follows the finger a little,
+/// a reply arrow appears, and letting go past the threshold starts the reply.
+class _SwipeToReply extends StatefulWidget {
+  const _SwipeToReply({required this.enabled, required this.onReply, required this.child});
+
+  final bool enabled;
+  final VoidCallback onReply;
+  final Widget child;
+
+  @override
+  State<_SwipeToReply> createState() => _SwipeToReplyState();
+}
+
+class _SwipeToReplyState extends State<_SwipeToReply> with SingleTickerProviderStateMixin {
+  static const double _maxShift = 72;
+  static const double _threshold = 48;
+
+  late final AnimationController _back = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 180),
+  )..addListener(() => setState(() => _shift = _release * (1 - _back.value)));
+
+  double _shift = 0; // current horizontal offset of the bubble
+  double _release = 0; // offset when the finger let go
+  bool _armed = false; // past the threshold: the arrow is lit
+
+  @override
+  void dispose() {
+    _back.dispose();
+    super.dispose();
+  }
+
+  void _update(DragUpdateDetails d) {
+    if (!widget.enabled) return;
+    // Right-to-left for own messages (right-aligned), left-to-right for Claude's:
+    // either way towards the middle, so any horizontal drag counts.
+    final next = (_shift + d.delta.dx).clamp(-_maxShift, _maxShift);
+    final armed = next.abs() >= _threshold;
+    if (armed && !_armed) HapticFeedback.lightImpact();
+    setState(() {
+      _shift = next.toDouble();
+      _armed = armed;
+    });
+  }
+
+  void _end(DragEndDetails d) {
+    if (_armed) widget.onReply();
+    _release = _shift;
+    _armed = false;
+    _back.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return widget.child;
+    final cs = Theme.of(context).colorScheme;
+    final progress = (_shift.abs() / _threshold).clamp(0.0, 1.0);
+    return GestureDetector(
+      behavior: HitTestBehavior.deferToChild,
+      onHorizontalDragUpdate: _update,
+      onHorizontalDragEnd: _end,
+      onHorizontalDragCancel: () => _end(DragEndDetails()),
+      child: Stack(
+        alignment: _shift >= 0 ? Alignment.centerLeft : Alignment.centerRight,
+        children: [
+          if (progress > 0)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Opacity(
+                opacity: progress,
+                child: Transform.scale(
+                  scale: 0.6 + 0.4 * progress,
+                  child: Icon(Icons.reply, color: _armed ? cs.primary : cs.outline),
+                ),
+              ),
+            ),
+          Transform.translate(offset: Offset(_shift, 0), child: widget.child),
+        ],
+      ),
+    );
+  }
+}
+
 class _ReplyTarget {
   const _ReplyTarget({required this.role, required this.text});
   final String role;
