@@ -146,15 +146,15 @@ final class PhoneLink: NSObject, ObservableObject {
     do {
       return try JSONDecoder().decode(T.self, from: reply)
     } catch {
-      throw LinkError(text: "Update ccnotify on the iPhone")
+      throw LinkError(text: "Update Mewo on Fire on the iPhone")
     }
   }
 
   private nonisolated static func text(code: String?) -> String {
     switch code {
-    case "open_app": return "Open ccnotify on the iPhone once"
+    case "open_app": return "Open Mewo on Fire on the iPhone once"
     case "speech_denied":
-      return "Open ccnotify on the iPhone once and allow Speech Recognition"
+      return "Open Mewo on Fire on the iPhone once and allow Speech Recognition"
     case "speech_unavailable": return "The iPhone cannot recognize this language right now"
     case "no_speech": return "Could not make out any words"
     default: return "The iPhone app could not answer"
@@ -165,7 +165,7 @@ final class PhoneLink: NSObject, ObservableObject {
     switch (error as? WCError)?.code {
     case .notReachable?: return "iPhone not reachable"
     case .messageReplyTimedOut?: return "The iPhone did not answer"
-    case .companionAppNotInstalled?: return "Install ccnotify on the iPhone"
+    case .companionAppNotInstalled?: return "Install Mewo on Fire on the iPhone"
     case .payloadTooLarge?: return "Too much to send at once"
     default: return error.localizedDescription
     }

@@ -97,7 +97,7 @@ struct TellClaudeWatchIntent: AppIntent {
     } else {
       guard let newest = sessions.first else {
         return .result(
-          dialog: "I don't know of a Claude Code session yet. Open ccnotify on the watch once.")
+          dialog: "I don't know of a Claude Code session yet. Open Mewo on Fire on the watch once.")
       }
       let current = sessions.filter { newest.lastTs - $0.lastTs <= Self.recentMs }
       target =
@@ -131,7 +131,7 @@ struct TellClaudeWatchIntent: AppIntent {
 /// Works without setting anything up; the app answers to "Claude Code" too
 /// (`INAlternativeAppNames` in Info.plist).
 @available(watchOS 10.0, *)
-struct CcnotifyWatchShortcuts: AppShortcutsProvider {
+struct MewoWatchShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     AppShortcut(
       intent: TellClaudeWatchIntent(),

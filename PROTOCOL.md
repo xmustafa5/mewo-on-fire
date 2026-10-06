@@ -1,7 +1,7 @@
-# ccnotify protocol (v1)
+# Mewo on Fire protocol (v1)
 
 Two parts:
-- `pc/` — Rust binary `ccnotify` (daemon + CLI + Claude Code hook) for Linux and macOS.
+- `pc/` — Rust binary `mewo` (daemon + CLI + Claude Code hook) for Linux and macOS.
 - `mobile/` — Flutter app (Android, iOS) that pairs with one or more PCs and shows notifications.
 
 All traffic is LAN only. The phone connects to the PC.
@@ -10,12 +10,12 @@ All traffic is LAN only. The phone connects to the PC.
 
 | Path | Content |
 |---|---|
-| `~/.config/ccnotify/config.json` | `{"pc_id": "<16 hex>", "name": "<hostname>", "port": 47821}` |
-| `~/.config/ccnotify/cert.der`, `key.der` | self-signed cert + PKCS#8 key (DER), generated on first run |
-| `~/.config/ccnotify/devices.json` | `[{"id": "<8 hex>", "name": "Pixel 8", "token": "<64 hex>", "created": <ms>}]` (mode 600) |
-| `~/.local/state/ccnotify/events.json` | `{"next_id": N, "events": [Event, ...]}` — last 500 events |
-| `$XDG_RUNTIME_DIR/ccnotify.sock` | local control socket on Linux (fallback `/tmp/ccnotify-$USER.sock`) |
-| `~/.local/state/ccnotify/ccnotify.sock` | local control socket on macOS (fallback `/tmp/ccnotify-$USER.sock` if the path is longer than 103 bytes). It does not depend on the environment: the daemon (launchd), the CLI (terminal) and the hooks (terminal or the Claude desktop app) run with different ones. |
+| `~/.config/mewo-on-fire/config.json` | `{"pc_id": "<16 hex>", "name": "<hostname>", "port": 47821}` |
+| `~/.config/mewo-on-fire/cert.der`, `key.der` | self-signed cert + PKCS#8 key (DER), generated on first run |
+| `~/.config/mewo-on-fire/devices.json` | `[{"id": "<8 hex>", "name": "Pixel 8", "token": "<64 hex>", "created": <ms>}]` (mode 600) |
+| `~/.local/state/mewo-on-fire/events.json` | `{"next_id": N, "events": [Event, ...]}` — last 500 events |
+| `$XDG_RUNTIME_DIR/mewo-on-fire.sock` | local control socket on Linux (fallback `/tmp/mewo-on-fire-$USER.sock`) |
+| `~/.local/state/mewo-on-fire/mewo-on-fire.sock` | local control socket on macOS (fallback `/tmp/mewo-on-fire-$USER.sock` if the path is longer than 103 bytes). It does not depend on the environment: the daemon (launchd), the CLI (terminal) and the hooks (terminal or the Claude desktop app) run with different ones. |
 
 `name` defaults to the hostname; on macOS to the computer name (`scutil --get ComputerName`).
 
@@ -47,7 +47,7 @@ Fingerprint `fp` = lowercase hex SHA-256 of the cert DER bytes.
 ```
 
 Hook stdin fields used: `hook_event_name`, `session_id`, `cwd`, `last_assistant_message`, `message`, `notification_type`, `reason`.
-`ccnotify hook` always exits 0 and never blocks > 1 s (daemon down = silently drop).
+`mewo hook` always exits 0 and never blocks > 1 s (daemon down = silently drop).
 
 ## Local control socket (Unix, newline-delimited JSON, one request per connection)
 
@@ -109,24 +109,24 @@ Claude Code runs a `PermissionRequest` hook right before it shows a permission p
 `AskUserQuestion` question, or an `ExitPlanMode` plan approval (verified: it fires for all three).
 In VS Code / Desktop sessions the on-screen prompt and the hook race — whichever answers first
 wins. If the PC answers first, Claude Code does **not** kill the hook: it keeps running (stdout open)
-until its timeout. So `ccnotify ask` watches the transcript itself, and the daemon has a safety net.
+until its timeout. So `mewo ask` watches the transcript itself, and the daemon has a safety net.
 
 ## Hook
 
-Added by `ccnotify install` (not async, long timeout):
+Added by `mewo install` (not async, long timeout):
 
 ```json
 "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command", "command": "<bin> ask", "timeout": 86400}]}]
 ```
 
-`ccnotify ask`:
+`mewo ask`:
 1. Reads the hook JSON (`tool_name`, `tool_input`, `permission_suggestions`, `session_id`, `cwd`, `transcript_path`, `agent_id` — set when the prompt comes from a subagent).
 2. Starts the transcript watcher (below), sends `{"cmd":"ask","request":{Request without id/ts},"agent_id":"<agent_id or empty>"}` on the control socket and **blocks** reading the reply line (no read timeout). `agent_id` is private (never forwarded to phones).
 3. Reply `{"ok":false,"error":"no_devices"}` (sent immediately when no phone is connected), `cancelled`, `timeout`, or any error / daemon down → print nothing, exit 0 (normal prompt flow).
 4. Reply `{"ok":true,"answer":{Answer}}` → print the hook output below, exit 0.
 5. Answered on the PC → the watcher exits the process (code 0, no output); the socket closes, the daemon notices EOF and resolves the request (`by: "pc"`).
 
-### Transcript watcher (thread in `ccnotify ask`)
+### Transcript watcher (thread in `mewo ask`)
 
 - Subagent prompt (`agent_id` set): watch `agent_transcript_path` if the input has one different from `transcript_path` (all its lines count, sidechain or not), else no watcher.
 - Start: read the last 2 MB of `transcript_path` (drop the first partial line). Target = the most recent main-chain (`isSidechain` not true) `assistant` `tool_use` block with `name == tool_name` and no `tool_result` in the tail, preferring one whose `input` equals `tool_input`. Remember the file length as the offset.
@@ -168,10 +168,10 @@ Added by `ccnotify install` (not async, long timeout):
 |---|---|---|
 | permission | `{"action":"allow"}` | `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` |
 | permission | `{"action":"allow_always"}` | same + `"updatedPermissions": <permission_suggestions>` |
-| permission | `{"action":"deny","message":"..."}` | `decision: {"behavior":"deny","message": message or "Denied from phone (ccnotify)"}` |
+| permission | `{"action":"deny","message":"..."}` | `decision: {"behavior":"deny","message": message or "Denied from phone (Mewo on Fire)"}` |
 | question | `{"answers":{"<question text>":"<label>"}}` | `decision: {"behavior":"allow","updatedInput": {...tool_input, "answers": answers}}` |
 | plan | `{"action":"approve"}` | `decision: {"behavior":"allow","updatedInput": tool_input}` |
-| plan | `{"action":"reject","message":"..."}` | `decision: {"behavior":"deny","message": message or "Plan rejected from phone (ccnotify)"}` |
+| plan | `{"action":"reject","message":"..."}` | `decision: {"behavior":"deny","message": message or "Plan rejected from phone (Mewo on Fire)"}` |
 
 Multi-select answers join labels with ", ". A typed custom answer is sent as the value text.
 
@@ -211,7 +211,7 @@ Multi-select answers join labels with ", ". A typed custom answer is sent as the
 
 # v1.2 — session chat on the phone, continue from the phone
 
-## New hooks (added by `ccnotify install`)
+## New hooks (added by `mewo install`)
 
 ```json
 "Stop":             [..., {"hooks": [{"type": "command", "command": "<bin> listen", "async": true, "asyncRewake": true, "timeout": 86400}]}],
@@ -221,19 +221,19 @@ Multi-select answers join labels with ", ". A typed custom answer is sent as the
 `asyncRewake`: the hook runs in the background; when it exits with code 2, Claude Code wakes the
 session immediately (even if idle) and shows the hook's stderr to Claude as a system reminder.
 
-## `ccnotify hook` changes
+## `mewo hook` changes
 
 `emit` now also sends private fields (never forwarded to phones): `session_id` (full), `transcript_path`,
 `effort` (`effort.level` from the hook input, may be empty). `UserPromptSubmit` → `{"cmd":"session_state","session_id","cwd","transcript_path","effort","state":"working"}` (no event, no notification).
 
 Events sent to phones gain one field: `"session_id": "<full session id>"` (used to open the chat).
 
-## `ccnotify listen` (Stop hook, asyncRewake)
+## `mewo listen` (Stop hook, asyncRewake)
 
 1. Read stdin (`session_id`, `cwd`, `transcript_path`).
 2. Send `{"cmd":"listen","session_id","cwd","transcript_path"}` on the control socket; block with no read timeout.
 3. Reply `{"ok":true,"text":"..."}` → write to **stderr**:
-   `The user sent this message from their phone (via ccnotify). Treat it exactly as if they had typed it in this session:\n\n<text>`
+   `The user sent this message from their phone (via Mewo on Fire). Treat it exactly as if they had typed it in this session:\n\n<text>`
    and exit **2** (wakes Claude).
 4. Any other reply (`superseded`, `cancelled`, error, daemon down) → exit 0 silently.
 
@@ -245,7 +245,7 @@ Daemon side:
 
 ## Session registry (daemon)
 
-Kept in memory and persisted to `~/.local/state/ccnotify/sessions.json` (last 50 by activity; ended sessions older than 7 days dropped).
+Kept in memory and persisted to `~/.local/state/mewo-on-fire/sessions.json` (last 50 by activity; ended sessions older than 7 days dropped).
 
 ```json
 {"id": "<full session_id>", "short": "44155e15", "project": "business-os", "cwd": "...",
@@ -291,7 +291,7 @@ ChatItem: `{"id": "<line uuid or generated>", "ts": <ms>, "role": "user|assistan
 - `read_only` → `rejected` ("Claude is running agents at high effort — read-only until it finishes").
 - a listener is registered → deliver now → `delivered`; state becomes `working`.
 - no listener and state `working` or `waiting` → queue → `queued` (delivered by the next `listen`).
-- no listener and state `idle` → `rejected` ("This session is not listening — run `ccnotify install` on the PC and send a message from the PC once").
+- no listener and state `idle` → `rejected` ("This session is not listening — run `mewo install` on the PC and send a message from the PC once").
 - After `delivered`, the phone refreshes the chat when the next `stop` event for the session arrives.
 
 ## Phone
@@ -321,15 +321,15 @@ iOS has no foreground service. The connections live in the app process: always w
 
 - `text` may be empty when there are images.
 - An image is at most 2.5 MB (decoded) and must be a JPEG, PNG, GIF or WebP; the daemon tells the type by the content, not by `mime`. Otherwise the message is `rejected` ("Too many images (4 at most)", "An image is too large", "Only JPEG, PNG, GIF and WebP images can be sent").
-- The daemon saves them as `~/.local/state/ccnotify/uploads/<session short>/<client_id>-<n>.<ext>` (mode 600, directory 700) and deletes them again when the message is rejected. Uploads older than 7 days are removed.
+- The daemon saves them as `~/.local/state/mewo-on-fire/uploads/<session short>/<client_id>-<n>.<ext>` (mode 600, directory 700) and deletes them again when the message is rejected. Uploads older than 7 days are removed.
 - What Claude Code gets (through `listen`) is the text followed by the files, which it looks at with its Read tool:
 
   ```
   <text>
 
   The user attached images from their phone. Look at them with the Read tool:
-  /home/u/.local/state/ccnotify/uploads/44155e15/9f2c…-1.jpg
-  /home/u/.local/state/ccnotify/uploads/44155e15/9f2c…-2.jpg
+  /home/u/.local/state/mewo-on-fire/uploads/44155e15/9f2c…-1.jpg
+  /home/u/.local/state/mewo-on-fire/uploads/44155e15/9f2c…-2.jpg
   ```
 
 ## ChatItem
@@ -377,7 +377,7 @@ are and how the phone picks one.
 2. the PC's Tailscale addresses: IPv4 in `100.64.0.0/10` on any interface;
 3. `extra_hosts` of `config.json` (`["mac.example.ts.net", "10.8.0.2"]`):
    other VPN addresses, or DNS names;
-4. the relay of `config.json` (`relay`, set with `ccnotify relay <url>`), as
+4. the relay of `config.json` (`relay`, set with `mewo relay <url>`), as
    its URL: `wss://relay.example`. See "Relay" below.
 
 mDNS still advertises LAN addresses only.
@@ -411,7 +411,7 @@ remote address the next time it connects at home.
 For a PC that the internet cannot reach (provider NAT). The daemon and the
 phone both connect out to the relay with WebSockets; it passes bytes between
 them and understands none of them. `relay/` is one for Cloudflare Workers,
-`ccnotify relay-server [port]` one for a machine of your own.
+`mewo relay-server [port]` one for a machine of your own.
 
 - Daemon: `GET <relay>/pc/<pc_id>/listen?key=<relay_key>`. The first daemon
   for a `pc_id` sets the key (48 hex characters, `relay_key` in
@@ -435,9 +435,9 @@ Claude Code's own prompt suggestion exists only inside the app that shows it
 (it is not in the transcript, and no hook gets it). So the phone's comes from
 Claude itself:
 
-- `suggestions: true` in `config.json` (`ccnotify suggestions on|off`; read by
+- `suggestions: true` in `config.json` (`mewo suggestions on|off`; read by
   the hooks on every prompt, no restart).
-- With it on, `ccnotify hook` answers `UserPromptSubmit` with
+- With it on, `mewo hook` answers `UserPromptSubmit` with
   `hookSpecificOutput.additionalContext`: a request to end the final reply
   with one more line, after an empty line:
 

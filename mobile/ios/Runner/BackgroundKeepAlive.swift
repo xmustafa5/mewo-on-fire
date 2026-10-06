@@ -2,7 +2,7 @@ import AVFoundation
 import Flutter
 import UIKit
 
-/// Keeps ccnotify running while it is not on screen.
+/// Keeps Mewo on Fire running while it is not on screen.
 ///
 /// iOS suspends an app a few seconds after it leaves the foreground, which
 /// closes the connections to the PCs. Two things are done about that:
@@ -86,7 +86,7 @@ final class BackgroundKeepAlive: NSObject, FlutterApplicationLifeCycleDelegate {
 
   private func beginGrace() {
     guard graceTask == .invalid else { return }
-    graceTask = UIApplication.shared.beginBackgroundTask(withName: "ccnotify.grace") {
+    graceTask = UIApplication.shared.beginBackgroundTask(withName: "mewo-on-fire.grace") {
       [weak self] in self?.endGrace()
     }
     let task = graceTask
@@ -119,7 +119,7 @@ final class BackgroundKeepAlive: NSObject, FlutterApplicationLifeCycleDelegate {
       }
       player?.play()
     } catch {
-      NSLog("ccnotify: keep-alive audio could not start: \(error)")
+      NSLog("mewo: keep-alive audio could not start: \(error)")
     }
   }
 

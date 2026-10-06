@@ -1,4 +1,4 @@
-//! `ccnotify hook` — invoked by Claude Code with the hook JSON on stdin.
+//! `mewo hook` — invoked by Claude Code with the hook JSON on stdin.
 //! Always exits 0 and never blocks long (daemon down = drop). It prints
 //! nothing, except for UserPromptSubmit with `suggestions` on: then the
 //! request for a suggestion line (suggest.rs), which Claude Code adds to the

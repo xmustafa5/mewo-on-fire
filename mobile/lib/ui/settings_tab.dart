@@ -160,7 +160,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                   subtitle: Text(_batteryExempt == null
                       ? 'Checking…'
                       : _batteryExempt!
-                          ? 'Unrestricted — ccnotify can stay connected'
+                          ? 'Unrestricted — Mewo on Fire can stay connected'
                           : 'Optimized — Android may cut the connection. Tap to exempt.'),
                   onTap: _batteryTap,
                 ),
@@ -170,7 +170,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                     'Some phones (Xiaomi, Samsung, Huawei, OnePlus, Oppo…) kill background apps '
                     'even with this setting. If notifications stop arriving, follow the steps for '
                     'your phone on dontkillmyapp.com (allow autostart, set battery to '
-                    '"No restrictions", lock ccnotify in recent apps).',
+                    '"No restrictions", lock Mewo on Fire in recent apps).',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -181,7 +181,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                   secondary: const Icon(Icons.all_inclusive),
                   title: const Text('Stay connected in the background'),
                   subtitle: const Text(
-                      'iOS pauses ccnotify shortly after you leave the app, and notifications '
+                      'iOS pauses Mewo on Fire shortly after you leave the app, and notifications '
                       'stop until you open it again. Turn this on to keep it running: it plays '
                       'silent audio in the background, which uses more battery.'),
                   isThreeLine: true,
@@ -191,7 +191,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
                   child: Text(
-                    'Swiping ccnotify away in the app switcher stops it either way. '
+                    'Swiping Mewo on Fire away in the app switcher stops it either way. '
                     'Events you missed are listed in History when you open the app again.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),

@@ -1,7 +1,7 @@
-# ccnotify (mobile)
+# Mewo on Fire (mobile)
 
 Android and iOS app that pairs with one or more PCs (Linux or macOS) running
-the `ccnotify` daemon and shows a notification when Claude Code finishes, needs your input, or a session
+the `mewo` daemon and shows a notification when Claude Code finishes, needs your input, or a session
 closes. You can also answer Claude Code's permission prompts, questions and
 plan approvals from the phone, read each session's chat, and continue a
 session by sending it a message. LAN only; the phone connects to the PC over `wss://` and accepts the
@@ -34,14 +34,14 @@ in `android/app/build.gradle.kts` before you distribute it.
 
 ## Pairing
 
-1. On the PC, run `ccnotify install` once, then `ccnotify pair`.
+1. On the PC, run `mewo install` once, then `mewo pair`.
 2. In the app, tap **Pair PC** and scan the QR code. You can also tap **Paste code
-   instead** and paste the JSON line that `ccnotify pair` prints.
+   instead** and paste the JSON line that `mewo pair` prints.
 3. The phone and the PC must be on the same network. Codes can be used once and
    are valid for 5 minutes.
 
 To pair several PCs, repeat the steps on each PC. Removing a PC in the app stops
-notifications from it. To revoke a phone from the PC side, run `ccnotify revoke`.
+notifications from it. To revoke a phone from the PC side, run `mewo revoke`.
 The app then shows that PC as "Unpaired".
 
 ## Behaviour
@@ -57,7 +57,7 @@ The app then shows that PC as "Unpaired".
 
 ## Answering prompts from the phone
 
-This needs a PC daemon with protocol v1.1 (`ccnotify install` adds the
+This needs a PC daemon with protocol v1.1 (`mewo install` adds the
 `PermissionRequest` hook). When Claude Code shows a permission prompt, asks a
 question, or wants a plan approved, the phone shows a notification that stays
 until the prompt is answered:
@@ -81,8 +81,8 @@ a notification, turn off **Settings → Answer prompts from phone**.
 
 ## Session chat and continuing from the phone
 
-This needs a PC daemon with protocol v1.2. After updating ccnotify on the PC,
-run `ccnotify install` again. It adds the `listen` Stop hook and the
+This needs a PC daemon with protocol v1.2. After updating Mewo on Fire on the PC,
+run `mewo install` again. It adds the `listen` Stop hook and the
 `UserPromptSubmit` hook.
 
 - The **Sessions** tab lists the Claude Code sessions of all paired PCs,
@@ -104,7 +104,7 @@ run `ccnotify install` again. It adds the `listen` Stop hook and the
 - Long-press a message for its options: **Reply** (quotes the message above
   yours), **Copy** and **Select text**. A message that was rejected can be
   sent again or removed from there.
-- **Suggestions**: with `ccnotify suggestions on` on the PC, Claude's reply
+- **Suggestions**: with `mewo suggestions on` on the PC, Claude's reply
   comes with up to three suggested next messages, shown as buttons above the
   box. Tap one to put it in the box, then send or change it. (On the watch
   they are under the chat; a tap asks before it sends.)
@@ -162,7 +162,7 @@ change it under Settings → Privacy & Security → Local Network.
 Everything works as on Android, with these differences:
 
 - **Background.** iOS has no foreground service and suspends an app shortly
-  after you leave it. By default ccnotify stays connected while it is open and
+  after you leave it. By default Mewo on Fire stays connected while it is open and
   for about 25 seconds after; what you missed is fetched when you open it
   again (History, and a notification for events of the last 30 minutes). To
   get notifications with the phone in your pocket, turn on **Settings → Stay
@@ -212,9 +212,9 @@ handed to it and sent as soon as it can (Siri says so).
 
 ## Apple Watch
 
-The iPhone app carries a watch app (`ios/CcnotifyWatch`, SwiftUI, watchOS 10
+The iPhone app carries a watch app (`ios/MewoWatch`, SwiftUI, watchOS 10
 or later). It installs with the iPhone app: if it does not show up on the
-watch, open the **Watch** app on the iPhone and install **ccnotify** under
+watch, open the **Watch** app on the iPhone and install **Mewo on Fire** under
 "Available Apps".
 
 - The first screen lists what Claude is **waiting for** and the **sessions**
@@ -255,5 +255,5 @@ development like the phone: with the iPhone connected to the Mac, turn on
 prepare it (Window → Devices and Simulators), then build the `Runner` scheme
 for the iPhone. The watch target uses the bundle id
 `<app bundle id>.watchkitapp`; if you change the app's bundle id, change it
-there and in `ios/CcnotifyWatch/Info.plist` (`WKCompanionAppBundleIdentifier`).
+there and in `ios/MewoWatch/Info.plist` (`WKCompanionAppBundleIdentifier`).
 

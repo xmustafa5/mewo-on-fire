@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-  name: "ccnotify-menubar",
+  name: "mewo-menubar",
   platforms: [.macOS(.v13)],
   targets: [
-    .executableTarget(name: "ccnotify-menubar", path: "Sources")
+    .executableTarget(name: "mewo-menubar", path: "Sources")
   ]
 )

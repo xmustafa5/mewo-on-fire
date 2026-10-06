@@ -2,7 +2,7 @@ import Flutter
 import UIKit
 import WatchConnectivity
 
-/// Relays between the Apple Watch app (ios/CcnotifyWatch) and Dart
+/// Relays between the Apple Watch app (ios/MewoWatch) and Dart
 /// (lib/watch_bridge.dart). The watch has no connection to a PC of its own:
 /// its commands arrive here as WatchConnectivity messages (which also wake
 /// this app up when it is suspended) and are answered by Dart; Dart pushes
@@ -40,7 +40,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
   }
 
   func attach(messenger: FlutterBinaryMessenger) {
-    let channel = FlutterMethodChannel(name: "ccnotify/watch", binaryMessenger: messenger)
+    let channel = FlutterMethodChannel(name: "mewo-on-fire/watch", binaryMessenger: messenger)
     channel.setMethodCallHandler { [weak self] call, result in
       switch call.method {
       case "context":
@@ -66,7 +66,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     }
     let app = UIApplication.shared
     var task = UIBackgroundTaskIdentifier.invalid
-    task = app.beginBackgroundTask(withName: "ccnotify.siri") {
+    task = app.beginBackgroundTask(withName: "mewo-on-fire.siri") {
       app.endBackgroundTask(task)
       task = .invalid
     }
@@ -93,7 +93,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     do {
       try session.updateApplicationContext(["state": snapshot])
     } catch {
-      NSLog("ccnotify: watch context not sent: \(error.localizedDescription)")
+      NSLog("mewo: watch context not sent: \(error.localizedDescription)")
     }
   }
 
@@ -169,7 +169,7 @@ final class WatchBridge: NSObject, WCSessionDelegate {
           task = .invalid
         }
       }
-      task = app.beginBackgroundTask(withName: "ccnotify.watch", expirationHandler: finish)
+      task = app.beginBackgroundTask(withName: "mewo-on-fire.watch", expirationHandler: finish)
       channel.invokeMethod("command", arguments: FlutterStandardTypedData(bytes: request)) {
         result in
         if let reply = (result as? FlutterStandardTypedData)?.data {

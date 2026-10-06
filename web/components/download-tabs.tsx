@@ -117,12 +117,12 @@ export function DownloadTabs({
               </Step>
               <Step n={3}>
                 Click the bell, choose <strong className="text-white">Pair a Phone…</strong> and
-                scan the code with the ccnotify app.
+                scan the code with the Mewo on Fire app.
               </Step>
             </ol>
             <Manual>
               <div>
-                <FileLink href="/download/macos" name="ccnotify-macos.tar.gz" size={sizes["ccnotify-macos.tar.gz"]} />
+                <FileLink href="/download/macos" name="mewo-on-fire-macos.tar.gz" size={sizes["mewo-on-fire-macos.tar.gz"]} />
               </div>
               <p>
                 The build is not notarized by Apple, so clear the quarantine flag before you run
@@ -130,7 +130,7 @@ export function DownloadTabs({
               </p>
               <CopyCommand
                 compact
-                command="tar -xzf ccnotify-macos.tar.gz && xattr -dr com.apple.quarantine ccnotify ccnotify.app && ./ccnotify install"
+                command="tar -xzf mewo-on-fire-macos.tar.gz && xattr -dr com.apple.quarantine mewo mewo-on-fire.app && ./mewo install"
               />
             </Manual>
           </>
@@ -157,18 +157,18 @@ export function DownloadTabs({
               <Step n={3}>
                 Open the bell&apos;s menu, choose{" "}
                 <strong className="text-white">Pair a Phone…</strong> and scan the code with the
-                ccnotify app.
+                Mewo on Fire app.
               </Step>
             </ol>
             <Manual>
               <div>
                 <FileLink
                   href="/download/linux"
-                  name="ccnotify-linux-x86_64.tar.gz"
-                  size={sizes["ccnotify-linux-x86_64.tar.gz"]}
+                  name="mewo-on-fire-linux-x86_64.tar.gz"
+                  size={sizes["mewo-on-fire-linux-x86_64.tar.gz"]}
                 />
               </div>
-              <CopyCommand compact command="tar -xzf ccnotify-linux-x86_64.tar.gz && ./ccnotify install" />
+              <CopyCommand compact command="tar -xzf mewo-on-fire-linux-x86_64.tar.gz && ./mewo install" />
             </Manual>
           </>
         )}
@@ -179,8 +179,8 @@ export function DownloadTabs({
             <div className="mb-8">
               <FileLink
                 href="/download/android"
-                name="ccnotify-android.apk"
-                size={sizes["ccnotify-android.apk"]}
+                name="mewo-on-fire-android.apk"
+                size={sizes["mewo-on-fire-android.apk"]}
               />
             </div>
             <ol className="flex flex-col gap-5">

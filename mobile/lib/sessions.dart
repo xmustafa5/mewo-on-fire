@@ -260,10 +260,10 @@ Future<bool> routeActionReply(fln.NotificationResponse response) async {
   try {
     await Store.queueSend(msg);
   } catch (e) {
-    debugPrint('ccnotify: queueing message failed: $e');
+    debugPrint('mewo: queueing message failed: $e');
   }
   if (notif != null) {
-    final when = Platform.isIOS ? 'you open ccnotify' : 'ccnotify reconnects';
+    final when = Platform.isIOS ? 'you open Mewo on Fire' : 'Mewo on Fire reconnects';
     await _tryShowReplyStatus(p, notif, 'Waiting to send: $text\n(sent when $when)', false);
   }
   return true;
@@ -280,6 +280,6 @@ Future<void> _tryShowReplyStatus(EventPayload p, ReplyNotif notif, String body, 
       allowReply: allowReply,
     );
   } catch (e) {
-    debugPrint('ccnotify: updating the reply notification failed: $e');
+    debugPrint('mewo: updating the reply notification failed: $e');
   }
 }

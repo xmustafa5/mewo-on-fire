@@ -1,5 +1,5 @@
 //! Pending phone requests (PROTOCOL.md v1.1): prompts forwarded by
-//! `ccnotify ask`, each waiting for the first answer from a phone.
+//! `mewo ask`, each waiting for the first answer from a phone.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};

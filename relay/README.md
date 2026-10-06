@@ -1,4 +1,4 @@
-# ccnotify relay
+# Mewo on Fire relay
 
 Lets a paired phone reach its PC when it is not on the PC's network and the
 PC cannot be reached from the internet (most home connections: the provider
@@ -17,24 +17,24 @@ Needs a Cloudflare account and Node.js.
 ```sh
 cd relay
 npx wrangler login      # opens the browser once
-npx wrangler deploy     # prints https://ccnotify-relay.<you>.workers.dev
+npx wrangler deploy     # prints https://mewo-on-fire-relay.<you>.workers.dev
 ```
 
 Then, on the PC:
 
 ```sh
-ccnotify relay wss://ccnotify-relay.<you>.workers.dev
-ccnotify status         # "Relay: … (connected)"
+mewo relay wss://mewo-on-fire-relay.<you>.workers.dev
+mewo status         # "Relay: … (connected)"
 ```
 
 Open the app on the phone once while it is on the PC's network: it learns the
 relay from the PC. From then on it uses the local network at home and the
-relay elsewhere. `ccnotify relay off` stops using it.
+relay elsewhere. `mewo relay off` stops using it.
 
 ## On a machine of your own
 
 ```sh
-ccnotify relay-server 8787
+mewo relay-server 8787
 ```
 
 It speaks plain `ws://`: put a TLS proxy (Caddy, nginx) in front of it and

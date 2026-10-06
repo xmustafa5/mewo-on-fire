@@ -9,14 +9,14 @@ pub fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
-/// `~/.config/ccnotify`
+/// `~/.config/mewo-on-fire`
 pub fn config_dir() -> PathBuf {
-    home().join(".config").join("ccnotify")
+    home().join(".config").join("mewo-on-fire")
 }
 
-/// `~/.local/state/ccnotify`
+/// `~/.local/state/mewo-on-fire`
 pub fn state_dir() -> PathBuf {
-    home().join(".local").join("state").join("ccnotify")
+    home().join(".local").join("state").join("mewo-on-fire")
 }
 
 pub fn config_file() -> PathBuf {
@@ -43,33 +43,33 @@ pub fn sessions_file() -> PathBuf {
     state_dir().join("sessions.json")
 }
 
-/// `/tmp/ccnotify-$USER.sock`
+/// `/tmp/mewo-on-fire-$USER.sock`
 fn tmp_socket_path() -> PathBuf {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "user".to_string());
-    PathBuf::from(format!("/tmp/ccnotify-{user}.sock"))
+    PathBuf::from(format!("/tmp/mewo-on-fire-{user}.sock"))
 }
 
-/// `$XDG_RUNTIME_DIR/ccnotify.sock`, fallback `/tmp/ccnotify-$USER.sock`.
+/// `$XDG_RUNTIME_DIR/mewo-on-fire.sock`, fallback `/tmp/mewo-on-fire-$USER.sock`.
 #[cfg(not(target_os = "macos"))]
 pub fn socket_path() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("ccnotify.sock"),
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("mewo-on-fire.sock"),
         _ => tmp_socket_path(),
     }
 }
 
-/// macOS: `~/.local/state/ccnotify/ccnotify.sock`. The daemon (launchd), the
+/// macOS: `~/.local/state/mewo-on-fire/mewo-on-fire.sock`. The daemon (launchd), the
 /// CLI (a terminal) and the hooks (Claude Code in a terminal, or the Claude
 /// desktop app) all run with different environments, so the path depends on
-/// the home directory only. Fallback `/tmp/ccnotify-$USER.sock` when the home
+/// the home directory only. Fallback `/tmp/mewo-on-fire-$USER.sock` when the home
 /// path does not fit a socket address.
 #[cfg(target_os = "macos")]
 pub fn socket_path() -> PathBuf {
     /// `sockaddr_un.sun_path` holds 104 bytes including the NUL.
     const MAX_SOCKET_PATH_BYTES: usize = 103;
-    let path = state_dir().join("ccnotify.sock");
+    let path = state_dir().join("mewo-on-fire.sock");
     if path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES {
         path
     } else {
@@ -77,16 +77,16 @@ pub fn socket_path() -> PathBuf {
     }
 }
 
-/// `~/.local/bin/ccnotify`
+/// `~/.local/bin/mewo`
 pub fn installed_bin() -> PathBuf {
-    home().join(".local").join("bin").join("ccnotify")
+    home().join(".local").join("bin").join("mewo")
 }
 
 /// launchd label of the daemon's LaunchAgent.
 #[cfg(target_os = "macos")]
-pub const LAUNCHD_LABEL: &str = "com.torchcorp.ccnotify";
+pub const LAUNCHD_LABEL: &str = "com.torchcorp.mewo-on-fire";
 
-/// `~/Library/LaunchAgents/com.torchcorp.ccnotify.plist`
+/// `~/Library/LaunchAgents/com.torchcorp.mewo-on-fire.plist`
 #[cfg(target_os = "macos")]
 pub fn launch_agent() -> PathBuf {
     home()
@@ -95,23 +95,23 @@ pub fn launch_agent() -> PathBuf {
         .join(format!("{LAUNCHD_LABEL}.plist"))
 }
 
-/// `~/Library/Logs/ccnotify.log` (the daemon's output under launchd).
+/// `~/Library/Logs/mewo-on-fire.log` (the daemon's output under launchd).
 #[cfg(target_os = "macos")]
 pub fn log_file() -> PathBuf {
-    home().join("Library").join("Logs").join("ccnotify.log")
+    home().join("Library").join("Logs").join("mewo-on-fire.log")
 }
 
-/// `~/.config/systemd/user/ccnotify.service`
+/// `~/.config/systemd/user/mewo-on-fire.service`
 #[cfg(not(target_os = "macos"))]
 pub fn systemd_unit() -> PathBuf {
     home()
         .join(".config")
         .join("systemd")
         .join("user")
-        .join("ccnotify.service")
+        .join("mewo-on-fire.service")
 }
 
-/// `~/.local/share/applications/ccnotify-tray.desktop`: the tray icon in the
+/// `~/.local/share/applications/mewo-on-fire-tray.desktop`: the tray icon in the
 /// desktop's application menu.
 #[cfg(target_os = "linux")]
 pub fn launcher_entry() -> PathBuf {
@@ -119,21 +119,71 @@ pub fn launcher_entry() -> PathBuf {
         .join(".local")
         .join("share")
         .join("applications")
-        .join("ccnotify-tray.desktop")
+        .join("mewo-on-fire-tray.desktop")
 }
 
-/// `~/.config/autostart/ccnotify-tray.desktop`: starts the tray icon at login.
+/// `~/.config/autostart/mewo-on-fire-tray.desktop`: starts the tray icon at login.
 #[cfg(target_os = "linux")]
 pub fn autostart_entry() -> PathBuf {
     home()
         .join(".config")
         .join("autostart")
-        .join("ccnotify-tray.desktop")
+        .join("mewo-on-fire-tray.desktop")
 }
 
 /// `~/.claude/settings.json`
 pub fn claude_settings() -> PathBuf {
     home().join(".claude").join("settings.json")
+}
+
+// ---------------------------------------------------------------------------
+// Before v0.2 the program was called ccnotify: where `mewo install` finds such
+// an installation to move it over.
+// ---------------------------------------------------------------------------
+
+/// The old name of the command, the service and the folders.
+pub const LEGACY_NAME: &str = "ccnotify";
+
+/// `~/.config/ccnotify`
+pub fn legacy_config_dir() -> PathBuf {
+    home().join(".config").join(LEGACY_NAME)
+}
+
+/// `~/.local/state/ccnotify`
+pub fn legacy_state_dir() -> PathBuf {
+    home().join(".local").join("state").join(LEGACY_NAME)
+}
+
+/// `~/.local/bin/ccnotify`
+pub fn legacy_installed_bin() -> PathBuf {
+    home().join(".local").join("bin").join(LEGACY_NAME)
+}
+
+/// `~/.config/systemd/user/ccnotify.service`
+#[cfg(not(target_os = "macos"))]
+pub fn legacy_systemd_unit() -> PathBuf {
+    systemd_unit().with_file_name(format!("{LEGACY_NAME}.service"))
+}
+
+#[cfg(target_os = "macos")]
+pub const LEGACY_LAUNCHD_LABEL: &str = "com.torchcorp.ccnotify";
+
+/// `~/Library/LaunchAgents/com.torchcorp.ccnotify.plist`
+#[cfg(target_os = "macos")]
+pub fn legacy_launch_agent() -> PathBuf {
+    launch_agent().with_file_name(format!("{LEGACY_LAUNCHD_LABEL}.plist"))
+}
+
+/// `~/.local/share/applications/ccnotify-tray.desktop`
+#[cfg(target_os = "linux")]
+pub fn legacy_launcher_entry() -> PathBuf {
+    launcher_entry().with_file_name(format!("{LEGACY_NAME}-tray.desktop"))
+}
+
+/// `~/.config/autostart/ccnotify-tray.desktop`
+#[cfg(target_os = "linux")]
+pub fn legacy_autostart_entry() -> PathBuf {
+    autostart_entry().with_file_name(format!("{LEGACY_NAME}-tray.desktop"))
 }
 
 /// Write `data` to `path` atomically (temp file + rename) with the given mode.

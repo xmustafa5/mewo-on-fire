@@ -1,11 +1,11 @@
 [package]
-name = "ccnotify"
-version = "0.1.0"
+name = "mewo-on-fire"
+version = "0.2.0"
 edition = "2021"
 description = "LAN notifications for Claude Code (PC daemon + CLI + hook)"
 
 [[bin]]
-name = "ccnotify"
+name = "mewo"
 path = "src/main.rs"
 
 [dependencies]

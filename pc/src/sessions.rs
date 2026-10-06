@@ -35,7 +35,7 @@ const FLUSH_GRACE: Duration = Duration::from_secs(2);
 const REASON_CLOSED: &str = "Session is closed";
 const REASON_READ_ONLY: &str =
     "Claude is running agents at high effort — read-only until it finishes";
-const REASON_NOT_LISTENING: &str = "This session is not listening — run `ccnotify install` on the PC and send a message from the PC once";
+const REASON_NOT_LISTENING: &str = "This session is not listening — run `mewo install` on the PC and send a message from the PC once";
 const REASON_EMPTY: &str = "Empty message";
 const REASON_TOO_LONG: &str = "Message is too long";
 
@@ -336,7 +336,7 @@ impl Sessions {
                     }
                 }
                 Err(e) => eprintln!(
-                    "ccnotify: warning: ignoring unreadable {}: {e}",
+                    "mewo: warning: ignoring unreadable {}: {e}",
                     path.display()
                 ),
             }
@@ -744,7 +744,7 @@ impl Sessions {
             .and_then(|bytes| paths::write_atomic(&self.path, &bytes, 0o600));
         if let Err(e) = result {
             eprintln!(
-                "ccnotify: warning: could not write {}: {e}",
+                "mewo: warning: could not write {}: {e}",
                 self.path.display()
             );
         }

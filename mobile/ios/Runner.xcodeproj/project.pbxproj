@@ -29,8 +29,8 @@
 		B7A4B7E140AF342DBBD65B40 /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 976890BF98D9F733137DDA84 /* VoiceInput.swift */; };
 		B7F7B6B627C86B7110C8D667 /* WatchVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEB9C63A225A830147BAE7C5 /* WatchVoice.swift */; };
 		C0FFEE012F00000000CC0002 /* BackgroundKeepAlive.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE012F00000000CC0001 /* BackgroundKeepAlive.swift */; };
-		C5589517A2E2B32F55DD1137 /* CcnotifyWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AEBD24E27616DC70CADF715 /* CcnotifyWatchApp.swift */; };
-		CFEFA15294E5468130C86968 /* CcnotifyWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 037908B6C4C9F37FA4F3AB40 /* CcnotifyWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C5589517A2E2B32F55DD1137 /* MewoWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AEBD24E27616DC70CADF715 /* MewoWatchApp.swift */; };
+		CFEFA15294E5468130C86968 /* MewoWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 037908B6C4C9F37FA4F3AB40 /* MewoWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DADC0E59C3B4C31FC639ACB5 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B3571293E6263C6712CA919 /* RootView.swift */; };
 		F103203F66AE16F78E7F40E4 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E0E0F0882CA45F44A2069B /* Models.swift */; };
 /* End PBXBuildFile section */
@@ -48,7 +48,7 @@
 			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = B0FEB935C070F4AFC3F524AA;
-			remoteInfo = CcnotifyWatch;
+			remoteInfo = MewoWatch;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -69,7 +69,7 @@
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
 			dstSubfolderSpec = 16;
 			files = (
-				CFEFA15294E5468130C86968 /* CcnotifyWatch.app in Embed Watch Content */,
+				CFEFA15294E5468130C86968 /* MewoWatch.app in Embed Watch Content */,
 			);
 			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -78,7 +78,7 @@
 
 /* Begin PBXFileReference section */
 		0281B408652C9B0140EA394B /* WatchBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchBridge.swift; sourceTree = "<group>"; };
-		037908B6C4C9F37FA4F3AB40 /* CcnotifyWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CcnotifyWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		037908B6C4C9F37FA4F3AB40 /* MewoWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MewoWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
 		16E0E0F0882CA45F44A2069B /* Models.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -87,7 +87,7 @@
 		3838A558D3C984D730AAEF44 /* RequestView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RequestView.swift; sourceTree = "<group>"; };
 		3A54DF1899F2E2F302325896 /* VoiceRecorder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VoiceRecorder.swift; sourceTree = "<group>"; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
-		6AEBD24E27616DC70CADF715 /* CcnotifyWatchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CcnotifyWatchApp.swift; sourceTree = "<group>"; };
+		6AEBD24E27616DC70CADF715 /* MewoWatchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MewoWatchApp.swift; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
@@ -141,10 +141,10 @@
 			path = RunnerTests;
 			sourceTree = "<group>";
 		};
-		7B927D8E4A15002B9520E592 /* CcnotifyWatch */ = {
+		7B927D8E4A15002B9520E592 /* MewoWatch */ = {
 			isa = PBXGroup;
 			children = (
-				6AEBD24E27616DC70CADF715 /* CcnotifyWatchApp.swift */,
+				6AEBD24E27616DC70CADF715 /* MewoWatchApp.swift */,
 				16E0E0F0882CA45F44A2069B /* Models.swift */,
 				95F6FA9A88B4A6AE7B271347 /* PhoneLink.swift */,
 				9B3571293E6263C6712CA919 /* RootView.swift */,
@@ -157,8 +157,8 @@
 				D05C29D4EDD019AD7FCFA35E /* VoiceSheet.swift */,
 				AA7015FE0FB79EBE7DBACAB3 /* SiriIntents.swift */,
 			);
-			name = CcnotifyWatch;
-			path = CcnotifyWatch;
+			name = MewoWatch;
+			path = MewoWatch;
 			sourceTree = "<group>";
 		};
 		9740EEB11CF90186004384FC /* Flutter */ = {
@@ -180,7 +180,7 @@
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
 				331C8082294A63A400263BE5 /* RunnerTests */,
-				7B927D8E4A15002B9520E592 /* CcnotifyWatch */,
+				7B927D8E4A15002B9520E592 /* MewoWatch */,
 			);
 			sourceTree = "<group>";
 		};
@@ -189,7 +189,7 @@
 			children = (
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
-				037908B6C4C9F37FA4F3AB40 /* CcnotifyWatch.app */,
+				037908B6C4C9F37FA4F3AB40 /* MewoWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -260,9 +260,9 @@
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
 			productType = "com.apple.product-type.application";
 		};
-		B0FEB935C070F4AFC3F524AA /* CcnotifyWatch */ = {
+		B0FEB935C070F4AFC3F524AA /* MewoWatch */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 7324904DC312F4F551B42631 /* Build configuration list for PBXNativeTarget "CcnotifyWatch" */;
+			buildConfigurationList = 7324904DC312F4F551B42631 /* Build configuration list for PBXNativeTarget "MewoWatch" */;
 			buildPhases = (
 				0B11A8EE701736B0CCD42080 /* Sources */,
 				5D35C2BCA0FCA79139EFC83F /* Frameworks */,
@@ -272,9 +272,9 @@
 			);
 			dependencies = (
 			);
-			name = CcnotifyWatch;
-			productName = CcnotifyWatch;
-			productReference = 037908B6C4C9F37FA4F3AB40 /* CcnotifyWatch.app */;
+			name = MewoWatch;
+			productName = MewoWatch;
+			productReference = 037908B6C4C9F37FA4F3AB40 /* MewoWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -315,7 +315,7 @@
 			targets = (
 				97C146ED1CF9000F007C117D /* Runner */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
-				B0FEB935C070F4AFC3F524AA /* CcnotifyWatch */,
+				B0FEB935C070F4AFC3F524AA /* MewoWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -388,7 +388,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C5589517A2E2B32F55DD1137 /* CcnotifyWatchApp.swift in Sources */,
+				C5589517A2E2B32F55DD1137 /* MewoWatchApp.swift in Sources */,
 				F103203F66AE16F78E7F40E4 /* Models.swift in Sources */,
 				31710D615865509326856A17 /* PhoneLink.swift in Sources */,
 				DADC0E59C3B4C31FC639ACB5 /* RootView.swift in Sources */,
@@ -434,8 +434,8 @@
 		};
 		994CDD0441C47D904EF596DE /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			name = CcnotifyWatch;
-			target = B0FEB935C070F4AFC3F524AA /* CcnotifyWatch */;
+			name = MewoWatch;
+			target = B0FEB935C070F4AFC3F524AA /* MewoWatch */;
 			targetProxy = 33D7FAC39813DC7699C65B3E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -591,7 +591,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = CcnotifyWatch/Info.plist;
+				INFOPLIST_FILE = MewoWatch/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -620,7 +620,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = CcnotifyWatch/Info.plist;
+				INFOPLIST_FILE = MewoWatch/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -648,7 +648,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = CcnotifyWatch/Info.plist;
+				INFOPLIST_FILE = MewoWatch/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -833,7 +833,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		7324904DC312F4F551B42631 /* Build configuration list for PBXNativeTarget "CcnotifyWatch" */ = {
+		7324904DC312F4F551B42631 /* Build configuration list for PBXNativeTarget "MewoWatch" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				78C322448DA2718EA88C51E4 /* Release */,

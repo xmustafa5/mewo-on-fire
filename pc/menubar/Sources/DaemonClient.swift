@@ -8,17 +8,17 @@ enum DaemonClient {
   struct NotRunning: Error {}
   struct BadReply: Error {}
 
-  static let launchdLabel = "com.torchcorp.ccnotify"
+  static let launchdLabel = "com.torchcorp.mewo-on-fire"
 
   /// Same rule as `paths::socket_path()` in the daemon (macOS).
   static var socketPath: String {
-    let path = NSHomeDirectory() + "/.local/state/ccnotify/ccnotify.sock"
+    let path = NSHomeDirectory() + "/.local/state/mewo-on-fire/mewo-on-fire.sock"
     if path.utf8.count <= 103 { return path }
     let env = ProcessInfo.processInfo.environment
-    return "/tmp/ccnotify-\(env["USER"] ?? env["LOGNAME"] ?? "user").sock"
+    return "/tmp/mewo-on-fire-\(env["USER"] ?? env["LOGNAME"] ?? "user").sock"
   }
 
-  static var logPath: String { NSHomeDirectory() + "/Library/Logs/ccnotify.log" }
+  static var logPath: String { NSHomeDirectory() + "/Library/Logs/mewo-on-fire.log" }
 
   static func request(_ request: [String: Any], timeout: Int = 3) throws -> [String: Any] {
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)

@@ -40,14 +40,14 @@ Future<String> deviceName() async {
 /// iOS asks once whether the app may use the local network; when that was
 /// declined, every connection to the PC fails.
 String get _localNetworkHint => Platform.isIOS
-    ? ' On the iPhone, also check Settings → Privacy & Security → Local Network → ccnotify.'
+    ? ' On the iPhone, also check Settings → Privacy & Security → Local Network → Mewo on Fire.'
     : '';
 
 String _errorText(Object? code) {
   switch (code) {
     case 'invalid_code':
       return 'The pairing code is invalid or has expired (codes are single-use and '
-          'valid for 5 minutes). Run `ccnotify pair` on the PC again.';
+          'valid for 5 minutes). Run `mewo pair` on the PC again.';
     case 'unauthorized':
       return 'The PC rejected this phone.';
     default:
@@ -102,14 +102,14 @@ Future<PairedPc> pairWithPc(QrPayload qr) async {
       rethrow;
     } on TlsException {
       lastError = "The PC's certificate does not match the QR code. "
-          'Run `ccnotify pair` again and scan the new code.';
+          'Run `mewo pair` again and scan the new code.';
     } on TimeoutException {
       lastError = 'Timed out talking to $host:${qr.port}. Make sure the phone is on the '
-          'same network as the PC and the ccnotify daemon is running.$_localNetworkHint';
+          'same network as the PC and the Mewo on Fire daemon is running.$_localNetworkHint';
     } on SocketException catch (e) {
       final reason = e.osError?.message ?? e.message;
       lastError = "Can't reach $host:${qr.port} ($reason). Make sure the phone is on the "
-          'same network as the PC and the ccnotify daemon is running.$_localNetworkHint';
+          'same network as the PC and the Mewo on Fire daemon is running.$_localNetworkHint';
     } on WebSocketException catch (e) {
       lastError = 'Connection to the PC failed: ${e.message}';
     } on StateError {

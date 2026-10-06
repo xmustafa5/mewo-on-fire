@@ -64,7 +64,7 @@ class _SessionsTabState extends State<SessionsTab> {
                           state.pcs.isEmpty
                               ? 'Pair a PC to see its Claude Code sessions.'
                               : 'No sessions yet.\nThey appear here once Claude Code runs on a paired PC '
-                                  '(needs ccnotify on the PC with session support — run `ccnotify install` again after updating).',
+                                  '(needs Mewo on Fire on the PC with session support — run `mewo install` again after updating).',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: cs.outline),
                         ),

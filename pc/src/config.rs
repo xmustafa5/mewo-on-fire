@@ -26,13 +26,13 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_hosts: Vec<String>,
     /// Relay for phones outside the LAN (`wss://…`, set with
-    /// `ccnotify relay <url>`); empty = none.
+    /// `mewo relay <url>`); empty = none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub relay: String,
     /// Secret that keeps this PC's place on the relay.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub relay_key: String,
-    /// Ask Claude for suggested next messages (`ccnotify suggestions on`,
+    /// Ask Claude for suggested next messages (`mewo suggestions on`,
     /// see suggest.rs).
     #[serde(default, skip_serializing_if = "is_false")]
     pub suggestions: bool,
@@ -221,7 +221,7 @@ pub fn load_or_create_identity() -> Result<Identity> {
     }
 
     let certified = rcgen::generate_simple_self_signed(vec![
-        "ccnotify".to_string(),
+        "mewo-on-fire".to_string(),
         "localhost".to_string(),
     ])
     .map_err(|e| anyhow!("generating self-signed certificate: {e}"))?;
@@ -234,7 +234,7 @@ pub fn load_or_create_identity() -> Result<Identity> {
         .with_context(|| format!("writing {}", cert_path.display()))?;
 
     let fp = fingerprint(&cert_der);
-    eprintln!("ccnotify: generated new TLS certificate (fp {fp})");
+    eprintln!("mewo: generated new TLS certificate (fp {fp})");
     Ok(Identity {
         cert_der,
         key_der,
@@ -258,7 +258,7 @@ pub fn load_devices() -> Vec<Device> {
         Err(e) => {
             let aside = path.with_file_name("devices.json.corrupt");
             eprintln!(
-                "ccnotify: warning: {} is invalid ({e}); moved to {}",
+                "mewo: warning: {} is invalid ({e}); moved to {}",
                 path.display(),
                 aside.display()
             );

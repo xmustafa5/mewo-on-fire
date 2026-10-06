@@ -58,7 +58,7 @@ final class WatchVoice {
         background = .invalid
       }
     }
-    background = app.beginBackgroundTask(withName: "ccnotify.voice") { finish(["e": "no_speech"]) }
+    background = app.beginBackgroundTask(withName: "mewo-on-fire.voice") { finish(["e": "no_speech"]) }
 
     let status = SFSpeechRecognizer.authorizationStatus()
     if status == .notDetermined && app.applicationState != .active {

@@ -29,7 +29,7 @@ void initForegroundTask() {
     androidNotificationOptions: AndroidNotificationOptions(
       channelId: kServiceChannelId,
       channelName: 'Background connection',
-      channelDescription: 'Shown while ccnotify keeps the connection to your PCs open.',
+      channelDescription: 'Shown while Mewo on Fire keeps the connection to your PCs open.',
       channelImportance: NotificationChannelImportance.LOW,
       priority: NotificationPriority.LOW,
       onlyAlertOnce: true,
@@ -66,7 +66,7 @@ Future<bool> startForegroundService() async {
     callback: startCallback,
   );
   if (result is ServiceRequestFailure) {
-    debugPrint('ccnotify: startService failed: ${result.error}');
+    debugPrint('mewo: startService failed: ${result.error}');
   }
   return FlutterForegroundTask.isRunningService;
 }
@@ -279,7 +279,7 @@ class CcTaskHandler extends TaskHandler {
     try {
       await _initNotifications();
     } catch (e) {
-      debugPrint('ccnotify: notifications init failed: $e');
+      debugPrint('mewo: notifications init failed: $e');
     }
     try {
       _events = await Store.loadEvents();
@@ -437,7 +437,7 @@ class CcTaskHandler extends TaskHandler {
         await _handleSend(m);
       }
     } catch (e) {
-      debugPrint('ccnotify: draining queued answers failed: $e');
+      debugPrint('mewo: draining queued answers failed: $e');
     } finally {
       _draining = false;
     }
@@ -520,7 +520,7 @@ class CcTaskHandler extends TaskHandler {
     o.timer?.cancel();
     o.timer = Timer(_sendResultTimeout, () {
       unawaited(_finishSend(o, SendStatus.rejected,
-          'No answer from ${link.pc.name} — is ccnotify up to date on the PC?'));
+          'No answer from ${link.pc.name} — is Mewo on Fire up to date on the PC?'));
     });
   }
 
@@ -574,7 +574,7 @@ class CcTaskHandler extends TaskHandler {
         failed: status == SendStatus.rejected,
       );
     } catch (e) {
-      debugPrint('ccnotify: updating reply notification failed: $e');
+      debugPrint('mewo: updating reply notification failed: $e');
     }
   }
 
@@ -708,7 +708,7 @@ class CcTaskHandler extends TaskHandler {
     _sessionsSaveChain = _sessionsSaveChain
         .then((_) => Store.saveSessions(snapshot))
         .catchError((Object e) {
-      debugPrint('ccnotify: saving sessions failed: $e');
+      debugPrint('mewo: saving sessions failed: $e');
     });
     return _sessionsSaveChain;
   }
@@ -719,7 +719,7 @@ class CcTaskHandler extends TaskHandler {
     _reloadChain = _reloadChain
         .then((_) => _reload(cleanOrphans: cleanOrphans))
         .catchError((Object e) {
-      debugPrint('ccnotify: reload failed: $e');
+      debugPrint('mewo: reload failed: $e');
     });
     return _reloadChain;
   }
@@ -877,7 +877,7 @@ class CcTaskHandler extends TaskHandler {
       try {
         await _notify(pc, ev);
       } catch (e) {
-        debugPrint('ccnotify: notify failed: $e');
+        debugPrint('mewo: notify failed: $e');
       }
     }
   }
@@ -896,7 +896,7 @@ class CcTaskHandler extends TaskHandler {
     _saveChain = _saveChain
         .then((_) => Store.saveEvents(snapshot))
         .catchError((Object e) {
-      debugPrint('ccnotify: saving events failed: $e');
+      debugPrint('mewo: saving events failed: $e');
     });
     return _saveChain;
   }
@@ -927,7 +927,7 @@ class CcTaskHandler extends TaskHandler {
     try {
       await _notifyRequest(pc, req);
     } catch (e) {
-      debugPrint('ccnotify: request notify failed: $e');
+      debugPrint('mewo: request notify failed: $e');
     }
   }
 
@@ -1000,7 +1000,7 @@ class CcTaskHandler extends TaskHandler {
     _requestsSaveChain = _requestsSaveChain
         .then((_) => Store.savePendingRequests(snapshot))
         .catchError((Object e) {
-      debugPrint('ccnotify: saving requests failed: $e');
+      debugPrint('mewo: saving requests failed: $e');
     });
   }
 

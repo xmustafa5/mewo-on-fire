@@ -1,4 +1,4 @@
-# ccnotify (PC side)
+# Mewo on Fire (PC side)
 
 Single Rust binary: daemon + CLI + Claude Code hooks. Sends Claude Code
 "finished", "needs input" and "session ended" events to paired phones over the
@@ -12,22 +12,22 @@ See `../PROTOCOL.md`.
 On Linux (x86_64) or macOS, without building anything:
 
 ```sh
-curl -fsSL https://github.com/xmustafa5/mewo-on-fire/releases/latest/download/install.sh | sh
+curl -fsSL https://www.mewo-on-fire.com/install.sh | sh
 ```
 
-It downloads the build for this computer and runs `ccnotify install`. The
+It downloads the build for this computer and runs `mewo install`. The
 bell then shows in the top bar / system tray (Linux) or the menu bar (macOS)
 and starts at every login. Pair a phone from the bell's menu.
 
 On a Mac, prefer this command over downloading the archive in a browser: the
 builds are not notarized, so Gatekeeper refuses a binary that a browser
-downloaded until you run `xattr -dr com.apple.quarantine ccnotify ccnotify.app`.
+downloaded until you run `xattr -dr com.apple.quarantine mewo mewo-on-fire.app`.
 
 ## Publish a release
 
 `.github/workflows/release.yml` builds a static Linux binary
-(`ccnotify-linux-x86_64.tar.gz`) and a universal macOS binary with the menu
-bar app (`ccnotify-macos.tar.gz`). Pushing a tag publishes them and
+(`mewo-on-fire-linux-x86_64.tar.gz`) and a universal macOS binary with the menu
+bar app (`mewo-on-fire-macos.tar.gz`). Pushing a tag publishes them and
 `install.sh` as a GitHub release:
 
 ```sh
@@ -36,7 +36,7 @@ git push origin v0.1.0
 ```
 
 `install.sh` downloads from public release URLs, so the repository (or a
-separate repository that holds the releases, see `CCNOTIFY_REPO` in
+separate repository that holds the releases, see `MEWO_REPO` in
 `install.sh`) must be public.
 
 ## Build
@@ -59,38 +59,43 @@ Macs:
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --release --target aarch64-apple-darwin --target x86_64-apple-darwin
-lipo -create -output ccnotify target/{aarch64,x86_64}-apple-darwin/release/ccnotify
+lipo -create -output mewo target/{aarch64,x86_64}-apple-darwin/release/mewo
 ```
 
 ## Install and pair
 
 ```sh
-./target/release/ccnotify install        # or ./target/x86_64-unknown-linux-musl/release/ccnotify install
-ccnotify pair                            # scan the QR code with the app
+./target/release/mewo install        # or ./target/x86_64-unknown-linux-musl/release/mewo install
+mewo pair                            # scan the QR code with the app
 ```
 
 `install`:
-- copies the binary to `~/.local/bin/ccnotify`
-- Linux: writes `~/.config/systemd/user/ccnotify.service` and runs
-  `systemctl --user enable --now ccnotify`
-- macOS: writes `~/Library/LaunchAgents/com.torchcorp.ccnotify.plist` and
+- copies the binary to `~/.local/bin/mewo`
+- Linux: writes `~/.config/systemd/user/mewo-on-fire.service` and runs
+  `systemctl --user enable --now mewo-on-fire`
+- macOS: writes `~/Library/LaunchAgents/com.torchcorp.mewo-on-fire.plist` and
   loads it with `launchctl bootstrap gui/<uid>`. The daemon starts at login
   and is restarted if it crashes.
 - adds `Stop`, `Notification`, `SessionEnd` and `UserPromptSubmit` hooks
-  (`ccnotify hook`, async), a `PermissionRequest` hook (`ccnotify ask`, timeout
-  24 h) and a second `Stop` hook (`ccnotify listen`, async + `asyncRewake`,
+  (`mewo hook`, async), a `PermissionRequest` hook (`mewo ask`, timeout
+  24 h) and a second `Stop` hook (`mewo listen`, async + `asyncRewake`,
   timeout 24 h) to `~/.claude/settings.json` (existing hooks are kept; a backup
-  is written to `settings.json.bak-ccnotify`). Re-running `install` only adds
-  what is missing, so a machine with older ccnotify hooks just gets the new ones.
+  is written to `settings.json.bak-mewo-on-fire`). Re-running `install` only adds
+  what is missing, so a machine with older Mewo on Fire hooks just gets the new ones.
+- on a machine that still has ccnotify (the name before v0.2): stops its
+  service, moves `~/.config/ccnotify` and `~/.local/state/ccnotify` to the new
+  folders (paired phones stay paired), points its hooks in `settings.json` at
+  `mewo` and makes `~/.local/bin/ccnotify` a link to it, so Claude Code
+  sessions that are already open keep working.
 
-`ccnotify ask` forwards each permission prompt / `AskUserQuestion` question /
+`mewo ask` forwards each permission prompt / `AskUserQuestion` question /
 plan approval to the connected phones and waits. The first answer wins: if you
 answer on the phone, Claude Code gets that decision; if you answer on the PC
 first, Claude Code stops the hook and the phone notification is withdrawn.
 With no phone connected (or the daemon down) it returns immediately and the
 normal prompt is shown.
 
-`ccnotify listen` runs in the background after every Claude reply and waits
+`mewo listen` runs in the background after every Claude reply and waits
 for a message from the phone. A message sent from the phone's chat screen (or
 the Reply action of a "finished" notification) is handed to it; it exits with
 code 2 and Claude Code wakes the session with the text, as if you had typed it.
@@ -104,7 +109,7 @@ The daemon keeps a small session registry (`sessions.json`) and reads the
 chat from Claude Code's transcript files (last 4 MB) on demand.
 
 Without systemd (or, on macOS, without a desktop login, e.g. over SSH), run
-`~/.local/bin/ccnotify daemon` yourself (e.g. from your session autostart).
+`~/.local/bin/mewo daemon` yourself (e.g. from your session autostart).
 
 ## Claude desktop app
 
@@ -112,7 +117,7 @@ The hooks are in `~/.claude/settings.json`, which the Code tab of the Claude
 desktop app reads too: its local sessions notify the phone, show up under
 **Sessions** with the title the app gave them, and can be answered and
 continued from the phone like terminal sessions. A session that was already
-open before `ccnotify install` may need a restart to pick the hooks up. Cloud
+open before `mewo install` may need a restart to pick the hooks up. Cloud
 sessions and Cowork sessions do not run on your machine and are not covered.
 
 ## Menu bar app (macOS)
@@ -128,22 +133,22 @@ waiting for an answer). Click it for:
 - the Claude Code sessions with their state; click one to read Claude's last reply
 - **⋯**: send a test notification, restart the service, open the log, open at login
 
-A release ships it next to the binary, and `ccnotify install` copies it to
-`~/Applications/ccnotify.app` and opens it. From source:
+A release ships it next to the binary, and `mewo install` copies it to
+`~/Applications/mewo-on-fire.app` and opens it. From source:
 
 ```sh
 ./menubar/install.sh
 ```
 
 builds it (needs Xcode or its command line tools, macOS 13 or later), installs
-it as `~/Applications/ccnotify.app` and opens it. Either way it opens at login
+it as `~/Applications/mewo-on-fire.app` and opens it. Either way it opens at login
 from its first launch on (turn that off with **Open at Login** in its **⋯**
 menu). It only talks to the daemon's local control socket; the daemon itself
-is still installed with `ccnotify install`.
+is still installed with `mewo install`.
 
 ## Tray icon (Linux)
 
-`ccnotify tray` is the same thing for Linux desktops: a bell in the system
+`mewo tray` is the same thing for Linux desktops: a bell in the system
 tray (grey and crossed out when the service is not running, with a red dot when
 a prompt is waiting for an answer). Its menu has:
 
@@ -154,11 +159,11 @@ a prompt is waiting for an answer). Its menu has:
 - the Claude Code sessions with their state; open one to read Claude's last reply
 - **Send Test Notification**, **Restart Service**, **Start at Login**, **Quit**
 
-`ccnotify install` adds "ccnotify" to the desktop's application menu and
+`mewo install` adds "Mewo on Fire" to the desktop's application menu and
 starts the icon. A first install also turns on **Start at Login**; untick it to
 keep the icon from starting at login (updates keep that choice). Updating
 restarts a running icon with the new binary. Without a desktop session (over
-SSH) the icon is not started; run `ccnotify tray` from the desktop.
+SSH) the icon is not started; run `mewo tray` from the desktop.
 
 The icon uses the StatusNotifierItem protocol: KDE Plasma, Xfce, Cinnamon,
 MATE, LXQt and most panels show it out of the box; GNOME needs the
@@ -168,22 +173,22 @@ MATE, LXQt and most panels show it out of the box; GNOME needs the
 
 | Command | What it does |
 |---|---|
-| `ccnotify pair` | Show a QR code (and the raw payload) and wait until a phone pairs |
-| `ccnotify devices` | List paired phones |
-| `ccnotify revoke <id>` | Unpair a phone |
-| `ccnotify status` | Daemon status: addresses, port, cert fingerprint, connected phones, pending requests, sessions |
-| `ccnotify sessions` | List Claude Code sessions: state, listening, queued phone messages, last activity |
-| `ccnotify chat <session>` | Print the last 20 chat items of a session (id prefix from `sessions`) |
-| `ccnotify test` | Send a test notification |
-| `ccnotify test-ask` | Send a test permission request (`echo hello from ccnotify`) and print the phone's answer |
-| `ccnotify tray` | Linux: show the tray icon (status, pairing QR code, phones, sessions) |
-| `ccnotify daemon` | Run the daemon in the foreground |
-| `ccnotify uninstall` | Remove hooks and the systemd service / launchd agent |
+| `mewo pair` | Show a QR code (and the raw payload) and wait until a phone pairs |
+| `mewo devices` | List paired phones |
+| `mewo revoke <id>` | Unpair a phone |
+| `mewo status` | Daemon status: addresses, port, cert fingerprint, connected phones, pending requests, sessions |
+| `mewo sessions` | List Claude Code sessions: state, listening, queued phone messages, last activity |
+| `mewo chat <session>` | Print the last 20 chat items of a session (id prefix from `sessions`) |
+| `mewo test` | Send a test notification |
+| `mewo test-ask` | Send a test permission request (`echo hello from Mewo on Fire`) and print the phone's answer |
+| `mewo tray` | Linux: show the tray icon (status, pairing QR code, phones, sessions) |
+| `mewo daemon` | Run the daemon in the foreground |
+| `mewo uninstall` | Remove hooks and the systemd service / launchd agent |
 
-Logs: `journalctl --user -u ccnotify -f` on Linux, `tail -f ~/Library/Logs/ccnotify.log` on macOS.
+Logs: `journalctl --user -u mewo-on-fire -f` on Linux, `tail -f ~/Library/Logs/mewo-on-fire.log` on macOS.
 
-Restart the daemon: `systemctl --user restart ccnotify` on Linux,
-`launchctl kickstart -k gui/$(id -u)/com.torchcorp.ccnotify` on macOS.
+Restart the daemon: `systemctl --user restart mewo-on-fire` on Linux,
+`launchctl kickstart -k gui/$(id -u)/com.torchcorp.mewo-on-fire` on macOS.
 
 ## Firewall
 
@@ -199,25 +204,25 @@ On macOS the firewall is per application. If it is on (System Settings →
 Network → Firewall) and the phone cannot connect:
 
 ```sh
-sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add ~/.local/bin/ccnotify
-sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp ~/.local/bin/ccnotify
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add ~/.local/bin/mewo
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp ~/.local/bin/mewo
 ```
 
-If macOS asks whether ccnotify may find devices on your local network, allow
+If macOS asks whether `mewo` may find devices on your local network, allow
 it (System Settings → Privacy & Security → Local Network).
 
 If another program already uses port `47821` (the log says "Address already in
-use"), set another `"port"` in `~/.config/ccnotify/config.json`, restart the
+use"), set another `"port"` in `~/.config/mewo-on-fire/config.json`, restart the
 daemon and pair again.
 
 ## Suggested next messages
 
 ```sh
-ccnotify suggestions on     # or: off
+mewo suggestions on     # or: off
 ```
 
 Claude Code suggests a next prompt in its own window, but keeps it there. With
-this on, ccnotify asks Claude (through the UserPromptSubmit hook) to end each
+this on, Mewo on Fire asks Claude (through the UserPromptSubmit hook) to end each
 reply with a line that Markdown does not display, holding one to three
 suggested next messages; the app shows them as buttons. It costs a few dozen
 tokens per reply and applies to every Claude Code session on this PC, from
@@ -227,7 +232,7 @@ the next prompt on. In a plain terminal the line is visible as
 ## Away from the local network
 
 The phone reaches the PC at any of the addresses the daemon tells it about
-(`ccnotify status` lists them). It uses the local network when it is there
+(`mewo status` lists them). It uses the local network when it is there
 and falls back to the others elsewhere. There are two ways to give it one
 that works from outside:
 
@@ -239,12 +244,12 @@ reached from the internet at all, which is the usual case at home.
 your own) and how to deploy it; then:
 
 ```sh
-ccnotify relay wss://ccnotify-relay.<you>.workers.dev
+mewo relay wss://mewo-on-fire-relay.<you>.workers.dev
 ```
 
 **A VPN** — with [Tailscale](https://tailscale.com) on the PC and the phone,
 the daemon finds its Tailscale address by itself. For another VPN or a DNS
-name, list it in `~/.config/ccnotify/config.json` and restart the daemon:
+name, list it in `~/.config/mewo-on-fire/config.json` and restart the daemon:
 
 ```json
 { "extra_hosts": ["mac.example.ts.net"] }
@@ -256,24 +261,24 @@ notifications (see the mobile README).
 
 ## Files
 
-- `~/.config/ccnotify/` — `config.json`, `cert.der`, `key.der`, `devices.json`
-- `~/.local/state/ccnotify/events.json` — last 500 events
-- `~/.local/state/ccnotify/sessions.json` — last 50 sessions (state, queued
+- `~/.config/mewo-on-fire/` — `config.json`, `cert.der`, `key.der`, `devices.json`
+- `~/.local/state/mewo-on-fire/events.json` — last 500 events
+- `~/.local/state/mewo-on-fire/sessions.json` — last 50 sessions (state, queued
   and recorded phone messages)
-- `~/.local/state/ccnotify/uploads/` — pictures sent from a phone with a
+- `~/.local/state/mewo-on-fire/uploads/` — pictures sent from a phone with a
   message, per session; deleted after 7 days
-- `$XDG_RUNTIME_DIR/ccnotify.sock` — local control socket (Linux)
-- `~/.local/state/ccnotify/ccnotify.sock` — local control socket (macOS)
+- `$XDG_RUNTIME_DIR/mewo-on-fire.sock` — local control socket (Linux)
+- `~/.local/state/mewo-on-fire/mewo-on-fire.sock` — local control socket (macOS)
 
 ## Uninstall
 
 ```sh
-ccnotify uninstall
+mewo uninstall
 ```
 
-Removes only the ccnotify hook entries, the systemd service / launchd agent,
+Removes only the mewo hook entries, the systemd service / launchd agent,
 the tray icon (Linux: stops it and removes its application-menu and
 start-at-login entries) and the menu bar app (macOS:
-`~/Applications/ccnotify.app`). Config,
-pairings and history are kept; delete `~/.config/ccnotify`,
-`~/.local/state/ccnotify` and `~/.local/bin/ccnotify` for a full removal.
+`~/Applications/mewo-on-fire.app`). Config,
+pairings and history are kept; delete `~/.config/mewo-on-fire`,
+`~/.local/state/mewo-on-fire` and `~/.local/bin/mewo` for a full removal.

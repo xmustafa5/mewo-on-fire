@@ -125,7 +125,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         onDidReceiveBackgroundNotificationResponse: onNotificationResponseBackground,
       );
     } catch (e) {
-      debugPrint('ccnotify: notifications init failed: $e');
+      debugPrint('mewo: notifications init failed: $e');
     }
     try {
       pcs = await Store.loadPcs();
@@ -134,7 +134,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       requests = await Store.loadPendingRequests();
       sessions = await Store.loadSessions();
     } catch (e) {
-      debugPrint('ccnotify: loading state failed: $e');
+      debugPrint('mewo: loading state failed: $e');
     }
     serviceRunning = await _isRunning();
     loaded = true;
@@ -217,7 +217,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       }
       if (first) await Store.setFirstLaunchDone();
     } catch (e) {
-      debugPrint('ccnotify: permission request failed: $e');
+      debugPrint('mewo: permission request failed: $e');
     }
   }
 
@@ -261,7 +261,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     try {
       sendToTask(jsonEncode({'cmd': cmd}));
     } catch (e) {
-      debugPrint('ccnotify: sendDataToTask($cmd) failed: $e');
+      debugPrint('mewo: sendDataToTask($cmd) failed: $e');
     }
   }
 
@@ -574,7 +574,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     (_chatWaiters[key] ??= <Completer<void>>[]).add(c);
     _chatTimeouts[key]?.cancel();
     _chatTimeouts[key] = Timer(const Duration(seconds: 20), () {
-      _finishChat(key, error: 'No answer from ${pcNameFor(pcId)} — is ccnotify up to date on the PC?');
+      _finishChat(key, error: 'No answer from ${pcNameFor(pcId)} — is Mewo on Fire up to date on the PC?');
     });
     if (!await _isRunning()) {
       _finishChat(key, error: 'The background service is stopped. Start it on the PCs tab.');
@@ -629,7 +629,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         sendToTask(jsonEncode(msg));
         return m;
       } catch (e) {
-        debugPrint('ccnotify: sending message failed: $e');
+        debugPrint('mewo: sending message failed: $e');
       }
     }
     if (images.isNotEmpty) {
@@ -683,14 +683,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         sendToTask(jsonEncode(answerMessage(pcId, requestId, answer)));
         return;
       } catch (e) {
-        debugPrint('ccnotify: sending answer failed: $e');
+        debugPrint('mewo: sending answer failed: $e');
       }
     }
     try {
       await Store.queueAnswer(pcId, requestId, answer);
       await _cancelRequestNotification(pcId, requestId);
     } catch (e) {
-      debugPrint('ccnotify: queueing answer failed: $e');
+      debugPrint('mewo: queueing answer failed: $e');
     }
     if (pcs.isNotEmpty) await startService();
   }

@@ -1,4 +1,4 @@
-//! `ccnotify install` / `ccnotify uninstall`: binary, background service
+//! `mewo install` / `mewo uninstall`: binary, background service
 //! (systemd user unit on Linux, launchd LaunchAgent on macOS) and Claude Code
 //! hooks in ~/.claude/settings.json.
 
@@ -16,23 +16,23 @@ use crate::paths;
 
 const NOTIFICATION_MATCHER: &str =
     "permission_prompt|idle_prompt|agent_needs_input|elicitation_dialog";
-/// `ccnotify hook` (async). UserPromptSubmit: PROTOCOL.md v1.2 session state.
+/// `mewo hook` (async). UserPromptSubmit: PROTOCOL.md v1.2 session state.
 const HOOK_EVENTS: [&str; 4] = ["Stop", "Notification", "SessionEnd", "UserPromptSubmit"];
-/// PROTOCOL.md v1.1: answer prompts from the phone (`ccnotify ask`, blocking).
+/// PROTOCOL.md v1.1: answer prompts from the phone (`mewo ask`, blocking).
 const ASK_EVENT: &str = "PermissionRequest";
 const ASK_TIMEOUT_SECS: u64 = 86_400;
-/// PROTOCOL.md v1.2: continue the session from the phone (`ccnotify listen`,
+/// PROTOCOL.md v1.2: continue the session from the phone (`mewo listen`,
 /// async + asyncRewake Stop hook).
 const LISTEN_EVENT: &str = "Stop";
 const LISTEN_TIMEOUT_SECS: u64 = 86_400;
 
 #[cfg(not(target_os = "macos"))]
 const UNIT_FILE: &str = "[Unit]
-Description=ccnotify - Claude Code notifications to your phone over LAN
+Description=Mewo on Fire - Claude Code notifications to your phone over LAN
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/ccnotify daemon
+ExecStart=%h/.local/bin/mewo daemon
 Restart=on-failure
 RestartSec=3
 
@@ -46,6 +46,7 @@ WantedBy=default.target
 
 pub fn install() -> Result<()> {
     let (bin, replaced) = install_binary()?;
+    migrate_legacy(&bin);
     install_service(replaced)?;
     install_hooks(&bin)?;
     #[cfg(target_os = "linux")]
@@ -56,25 +57,25 @@ pub fn install() -> Result<()> {
     println!();
     print_firewall_hint(config::configured_port());
     println!();
-    println!("Next: pair a phone with \"Pair a Phone…\" in the bell's menu, or run `ccnotify pair`");
+    println!("Next: pair a phone with \"Pair a Phone…\" in the bell's menu, or run `mewo pair`");
     Ok(())
 }
 
-/// `~/Applications/ccnotify.app`
+/// `~/Applications/mewo-on-fire.app`
 #[cfg(target_os = "macos")]
 fn menubar_app() -> PathBuf {
-    paths::home().join("Applications").join("ccnotify.app")
+    paths::home().join("Applications").join("mewo-on-fire.app")
 }
 
-/// A release ships the menu bar app next to the binary (`ccnotify.app`
-/// beside `ccnotify`): copy it to ~/Applications, replacing a running copy,
+/// A release ships the menu bar app next to the binary (`mewo-on-fire.app`
+/// beside `mewo`): copy it to ~/Applications, replacing a running copy,
 /// and open it. On its first launch it turns on "Open at Login" itself.
 #[cfg(target_os = "macos")]
 fn install_menubar_app() {
     let dst = menubar_app();
     let src = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("ccnotify.app")))
+        .and_then(|exe| exe.parent().map(|dir| dir.join("mewo-on-fire.app")))
         .filter(|src| src.is_dir());
     let Some(src) = src else {
         if !dst.exists() {
@@ -84,7 +85,7 @@ fn install_menubar_app() {
     };
 
     let _ = Command::new("/usr/bin/pkill")
-        .args(["-x", "ccnotify-menubar"])
+        .args(["-x", "mewo-menubar"])
         .status();
     std::thread::sleep(std::time::Duration::from_millis(300));
     let _ = fs::remove_dir_all(&dst);
@@ -114,7 +115,7 @@ fn install_menubar_app() {
     }
 }
 
-/// Quit and remove ~/Applications/ccnotify.app (macOS drops its login item
+/// Quit and remove ~/Applications/mewo-on-fire.app (macOS drops its login item
 /// with it).
 #[cfg(target_os = "macos")]
 fn uninstall_menubar_app() {
@@ -123,7 +124,7 @@ fn uninstall_menubar_app() {
         return;
     }
     let _ = Command::new("/usr/bin/pkill")
-        .args(["-x", "ccnotify-menubar"])
+        .args(["-x", "mewo-menubar"])
         .status();
     match fs::remove_dir_all(&app) {
         Ok(()) => println!("Menu bar: removed {}", app.display()),
@@ -148,10 +149,10 @@ fn print_firewall_hint(port: u16) {
     println!("  (System Settings > Network > Firewall), allow incoming connections:");
     println!("  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add {bin}");
     println!("  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp {bin}");
-    println!("If macOS asks whether ccnotify may find devices on your local network, allow it.");
+    println!("If macOS asks whether mewo may find devices on your local network, allow it.");
 }
 
-/// Copy the running executable to ~/.local/bin/ccnotify (skipped when it is
+/// Copy the running executable to ~/.local/bin/mewo (skipped when it is
 /// already that file). Returns (installed path, whether it was replaced).
 fn install_binary() -> Result<(PathBuf, bool)> {
     let dst = paths::installed_bin();
@@ -171,7 +172,7 @@ fn install_binary() -> Result<(PathBuf, bool)> {
         .ok_or_else(|| anyhow!("invalid install path {}", dst.display()))?;
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     // Copy to a temp file then rename, so replacing a running binary works.
-    let tmp = dir.join(".ccnotify.install.tmp");
+    let tmp = dir.join(".mewo.install.tmp");
     fs::copy(&src, &tmp)
         .with_context(|| format!("copying {} to {}", src.display(), tmp.display()))?;
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))?;
@@ -191,19 +192,111 @@ fn install_binary() -> Result<(PathBuf, bool)> {
 }
 
 // ---------------------------------------------------------------------------
+// ccnotify: the name before v0.2
+// ---------------------------------------------------------------------------
+
+/// Move an installation from before the rename over, so the paired phones and
+/// the history stay: stop the old service, move the config and state folders
+/// and make the old command a link to this binary (the hooks of Claude Code
+/// sessions that are already open still call it). The hooks in settings.json
+/// are renamed by `install_hooks`, the tray entries by `tray::install`.
+fn migrate_legacy(bin: &Path) {
+    remove_legacy_service();
+    #[cfg(target_os = "macos")]
+    remove_legacy_menubar_app();
+    move_legacy_dir(&paths::legacy_config_dir(), &paths::config_dir());
+    move_legacy_dir(&paths::legacy_state_dir(), &paths::state_dir());
+    // macOS kept the control socket in the state folder.
+    let _ = fs::remove_file(paths::state_dir().join(format!("{}.sock", paths::LEGACY_NAME)));
+    link_legacy_bin(bin);
+}
+
+fn move_legacy_dir(old: &Path, new: &Path) {
+    if !old.is_dir() {
+        return;
+    }
+    if new.exists() {
+        println!("Migrate:  kept {} ({} already exists)", old.display(), new.display());
+        return;
+    }
+    match fs::rename(old, new) {
+        Ok(()) => println!("Migrate:  moved {} to {}", old.display(), new.display()),
+        Err(e) => println!("Migrate:  could not move {} to {} ({e})", old.display(), new.display()),
+    }
+}
+
+/// Replace the old binary with a link to the new one. Nothing to do when
+/// there is no old binary, or it is that link already.
+fn link_legacy_bin(bin: &Path) {
+    let old = paths::legacy_installed_bin();
+    match fs::symlink_metadata(&old) {
+        Ok(meta) if !meta.file_type().is_symlink() => {}
+        _ => return,
+    }
+    let _ = fs::remove_file(&old);
+    match std::os::unix::fs::symlink(bin, &old) {
+        Ok(()) => println!("Migrate:  {} is now a link to {}", old.display(), bin.display()),
+        Err(e) => println!("Migrate:  removed {} (could not link it: {e})", old.display()),
+    }
+}
+
+/// Stop and remove the old systemd unit, so the new service gets the port.
+#[cfg(not(target_os = "macos"))]
+fn remove_legacy_service() {
+    let unit = paths::legacy_systemd_unit();
+    if !unit.exists() {
+        return;
+    }
+    let _ = systemctl(&["disable", "--now", paths::LEGACY_NAME]);
+    let _ = fs::remove_file(&unit);
+    println!("Migrate:  stopped and removed the {} service", paths::LEGACY_NAME);
+}
+
+/// Stop and remove the old LaunchAgent, so the new service gets the port.
+#[cfg(target_os = "macos")]
+fn remove_legacy_service() {
+    let plist = paths::legacy_launch_agent();
+    if !plist.exists() {
+        return;
+    }
+    let target = format!("{}/{}", launchd_domain(), paths::LEGACY_LAUNCHD_LABEL);
+    if launchd_loaded(&target) {
+        let _ = launchctl(&["bootout", &target]);
+        wait_unloaded(&target);
+    }
+    let _ = fs::remove_file(&plist);
+    println!("Migrate:  stopped and removed the {} service", paths::LEGACY_NAME);
+}
+
+/// Quit and remove ~/Applications/ccnotify.app: it only knows the old service.
+#[cfg(target_os = "macos")]
+fn remove_legacy_menubar_app() {
+    let app = menubar_app().with_file_name(format!("{}.app", paths::LEGACY_NAME));
+    if !app.exists() {
+        return;
+    }
+    let _ = Command::new("/usr/bin/pkill")
+        .args(["-x", "ccnotify-menubar"])
+        .status();
+    if fs::remove_dir_all(&app).is_ok() {
+        println!("Migrate:  removed {}", app.display());
+    }
+}
+
+// ---------------------------------------------------------------------------
 // service: systemd (Linux)
 // ---------------------------------------------------------------------------
 
 /// Shell command that starts the installed service (for hints).
 #[cfg(not(target_os = "macos"))]
 pub fn start_command() -> String {
-    "systemctl --user start ccnotify".to_string()
+    "systemctl --user start mewo-on-fire".to_string()
 }
 
 /// Shell command that restarts the installed service (for hints).
 #[cfg(not(target_os = "macos"))]
 pub fn restart_command() -> String {
-    "systemctl --user restart ccnotify".to_string()
+    "systemctl --user restart mewo-on-fire".to_string()
 }
 
 /// Run `systemctl --user <args>`. Err(NotFound) if systemctl is missing.
@@ -220,7 +313,7 @@ fn print_manual_daemon_hint() {
 }
 
 /// Starting the service returns before the daemon binds its socket, so poll
-/// `status` for up to 3 s; otherwise an immediate `ccnotify pair` races it.
+/// `status` for up to 3 s; otherwise an immediate `mewo pair` races it.
 fn wait_for_daemon() -> bool {
     let timeout = std::time::Duration::from_millis(300);
     for _ in 0..30 {
@@ -258,22 +351,22 @@ fn install_service(binary_replaced: bool) -> Result<()> {
         Ok(true) => {}
     }
 
-    match systemctl(&["enable", "--now", "ccnotify"]) {
+    match systemctl(&["enable", "--now", "mewo-on-fire"]) {
         Ok(true) => {
             if binary_replaced {
                 // Make an already-running daemon pick up the new binary.
-                let _ = systemctl(&["restart", "ccnotify"]);
+                let _ = systemctl(&["restart", "mewo-on-fire"]);
             }
             if wait_for_daemon() {
-                println!("Service:  enabled and started (systemctl --user status ccnotify)");
+                println!("Service:  enabled and started (systemctl --user status mewo-on-fire)");
             } else {
                 println!("Service:  enabled, but the daemon is not answering yet.");
-                println!("          Check: journalctl --user -u ccnotify");
+                println!("          Check: journalctl --user -u mewo-on-fire");
             }
         }
         _ => {
-            println!("Service:  `systemctl --user enable --now ccnotify` failed.");
-            println!("          Check: journalctl --user -u ccnotify");
+            println!("Service:  `systemctl --user enable --now mewo-on-fire` failed.");
+            println!("          Check: journalctl --user -u mewo-on-fire");
             print_manual_daemon_hint();
         }
     }
@@ -283,11 +376,11 @@ fn install_service(binary_replaced: bool) -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn uninstall_service() -> Result<()> {
     let unit = paths::systemd_unit();
-    match systemctl(&["disable", "--now", "ccnotify"]) {
+    match systemctl(&["disable", "--now", "mewo-on-fire"]) {
         Ok(true) => println!("Service:  stopped and disabled"),
         Ok(false) => println!("Service:  was not enabled/running (nothing to stop)"),
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            println!("Service:  systemctl not found; stop any `ccnotify daemon` you started manually.")
+            println!("Service:  systemctl not found; stop any `mewo daemon` you started manually.")
         }
         Err(e) => println!("Service:  could not run systemctl ({e})"),
     }
@@ -310,7 +403,7 @@ fn launchd_domain() -> String {
     format!("gui/{}", unsafe { libc::getuid() })
 }
 
-/// `gui/<uid>/com.torchcorp.ccnotify`
+/// `gui/<uid>/com.torchcorp.mewo-on-fire`
 #[cfg(target_os = "macos")]
 fn launchd_target() -> String {
     format!("{}/{}", launchd_domain(), paths::LAUNCHD_LABEL)
@@ -334,7 +427,7 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// The LaunchAgent: start at login, restart after a crash (not after a clean
-/// exit), output appended to ~/Library/Logs/ccnotify.log.
+/// exit), output appended to ~/Library/Logs/mewo-on-fire.log.
 #[cfg(target_os = "macos")]
 fn launch_agent_plist() -> String {
     let bin = xml_escape(&paths::installed_bin().to_string_lossy());
@@ -492,25 +585,40 @@ pub(crate) fn bin_command(bin: &Path, subcommand: &str) -> String {
     }
 }
 
-/// True if `cmd` runs `ccnotify <subcommand>`.
-fn command_runs(cmd: &str, subcommand: &str) -> bool {
-    cmd.contains(&format!("ccnotify {subcommand}"))
-        || cmd.contains(&format!("ccnotify\" {subcommand}"))
+const BIN_NAME: &str = "mewo";
+const HOOK_SUBCOMMANDS: [&str; 3] = ["hook", "ask", "listen"];
+
+/// True if `cmd` runs `<name> <subcommand>`.
+fn runs(cmd: &str, name: &str, subcommand: &str) -> bool {
+    cmd.contains(&format!("{name} {subcommand}"))
+        || cmd.contains(&format!("{name}\" {subcommand}"))
 }
 
-fn is_ccnotify_command(cmd: &str) -> bool {
-    command_runs(cmd, "hook") || command_runs(cmd, "ask") || command_runs(cmd, "listen")
+/// True if `cmd` runs `mewo <subcommand>`.
+fn command_runs(cmd: &str, subcommand: &str) -> bool {
+    runs(cmd, BIN_NAME, subcommand)
+}
+
+/// The subcommand `cmd` runs under the old name (`ccnotify <subcommand>`).
+fn legacy_subcommand(cmd: &str) -> Option<&'static str> {
+    HOOK_SUBCOMMANDS
+        .into_iter()
+        .find(|sub| runs(cmd, paths::LEGACY_NAME, sub))
+}
+
+fn is_mewo_command(cmd: &str) -> bool {
+    HOOK_SUBCOMMANDS.iter().any(|sub| command_runs(cmd, sub)) || legacy_subcommand(cmd).is_some()
 }
 
 fn hook_command_str(hook: &Value) -> &str {
     hook.get("command").and_then(Value::as_str).unwrap_or("")
 }
 
-fn hook_is_ccnotify(hook: &Value) -> bool {
-    is_ccnotify_command(hook_command_str(hook))
+fn hook_is_mewo(hook: &Value) -> bool {
+    is_mewo_command(hook_command_str(hook))
 }
 
-/// True if the group has a hook running `ccnotify <subcommand>`.
+/// True if the group has a hook running `mewo <subcommand>`.
 fn group_runs(group: &Value, subcommand: &str) -> bool {
     group
         .get("hooks")
@@ -546,7 +654,7 @@ fn read_settings(path: &Path) -> Result<(Value, bool)> {
 fn write_settings(path: &Path, settings: &Value, existed: bool) -> Result<()> {
     let mut mode = 0o644;
     if existed {
-        let backup = path.with_file_name("settings.json.bak-ccnotify");
+        let backup = path.with_file_name("settings.json.bak-mewo-on-fire");
         fs::copy(path, &backup)
             .with_context(|| format!("backing up {} to {}", path.display(), backup.display()))?;
         println!("Hooks:    backup saved to {}", backup.display());
@@ -639,8 +747,34 @@ fn merge_hooks(settings: &mut Value, bin: &Path) -> Result<Vec<&'static str>> {
     Ok(added)
 }
 
-/// Remove every hook whose command runs `ccnotify hook`, `ccnotify ask` or
-/// `ccnotify listen`.
+/// Hooks from before the rename run `ccnotify <subcommand>`: point them at
+/// this binary, where they are. Returns how many were changed.
+fn rename_legacy_hooks(settings: &mut Value, bin: &Path) -> usize {
+    let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return 0;
+    };
+    let mut renamed = 0usize;
+    for groups in hooks.values_mut() {
+        let Some(groups) = groups.as_array_mut() else {
+            continue;
+        };
+        for group in groups {
+            let Some(inner) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for hook in inner {
+                if let Some(subcommand) = legacy_subcommand(hook_command_str(hook)) {
+                    hook["command"] = json!(bin_command(bin, subcommand));
+                    renamed += 1;
+                }
+            }
+        }
+    }
+    renamed
+}
+
+/// Remove every hook whose command runs `mewo hook`, `mewo ask` or
+/// `mewo listen` (or the same under the old name).
 /// Groups that become empty are dropped, then event keys that become empty
 /// arrays.
 fn remove_hooks(settings: &mut Value) -> usize {
@@ -660,7 +794,7 @@ fn remove_hooks(settings: &mut Value) -> usize {
                     None => return true,
                 };
                 let before = inner.len();
-                inner.retain(|h| !hook_is_ccnotify(h));
+                inner.retain(|h| !hook_is_mewo(h));
                 let removed = before - inner.len();
                 if removed == 0 {
                     return true;
@@ -691,20 +825,31 @@ fn settings_path() -> PathBuf {
 fn install_hooks(bin: &Path) -> Result<()> {
     let path = settings_path();
     let (mut settings, existed) = read_settings(&path)?;
+    let renamed = rename_legacy_hooks(&mut settings, bin);
     let added = merge_hooks(&mut settings, bin)?;
-    if added.is_empty() {
+    if added.is_empty() && renamed == 0 {
         println!("Hooks:    already present in {}", path.display());
         return Ok(());
     }
     write_settings(&path, &settings, existed)?;
-    println!(
-        "Hooks:    added {} to {} (commands: {} / {} / {})",
-        added.join(", "),
-        path.display(),
-        bin_command(bin, "hook"),
-        bin_command(bin, "ask"),
-        bin_command(bin, "listen")
-    );
+    if renamed > 0 {
+        println!(
+            "Hooks:    {renamed} {} hook(s) in {} now run {}",
+            paths::LEGACY_NAME,
+            path.display(),
+            bin.display()
+        );
+    }
+    if !added.is_empty() {
+        println!(
+            "Hooks:    added {} to {} (commands: {} / {} / {})",
+            added.join(", "),
+            path.display(),
+            bin_command(bin, "hook"),
+            bin_command(bin, "ask"),
+            bin_command(bin, "listen")
+        );
+    }
     Ok(())
 }
 
@@ -720,7 +865,7 @@ pub fn uninstall() -> Result<()> {
             let removed = remove_hooks(&mut settings);
             if removed > 0 {
                 write_settings(&path, &settings, true)?;
-                println!("Hooks:    removed {removed} ccnotify hook(s) from {}", path.display());
+                println!("Hooks:    removed {removed} Mewo on Fire hook(s) from {}", path.display());
             } else {
                 println!("Hooks:    none found in {}", path.display());
             }
@@ -741,6 +886,11 @@ pub fn uninstall() -> Result<()> {
     }
     #[cfg(target_os = "macos")]
     uninstall_menubar_app();
+    // The link the migration from ccnotify left for the old hooks.
+    let legacy_bin = paths::legacy_installed_bin();
+    if fs::symlink_metadata(&legacy_bin).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        let _ = fs::remove_file(&legacy_bin);
+    }
 
     println!();
     println!("Kept (delete manually for a full removal):");

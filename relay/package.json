@@ -1,5 +1,5 @@
 {
-  "name": "ccnotify-relay",
+  "name": "mewo-on-fire-relay",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",

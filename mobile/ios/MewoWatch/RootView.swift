@@ -67,7 +67,7 @@ struct RootView: View {
         }
         .disabled(link.refreshing)
       }
-      .navigationTitle("ccnotify")
+      .navigationTitle("Mewo on Fire")
       .navigationDestination(for: Route.self) { route in
         switch route {
         case .request(let pcId, let id):

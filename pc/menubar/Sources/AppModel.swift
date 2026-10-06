@@ -180,8 +180,8 @@ final class AppModel: ObservableObject {
     Task {
       let connected = await Task.detached { () -> Int? in
         let event: [String: Any] = [
-          "kind": "stop", "project": "ccnotify", "cwd": "", "session": "test",
-          "message": "Test notification from ccnotify", "detail": "",
+          "kind": "stop", "project": "mewo-on-fire", "cwd": "", "session": "test",
+          "message": "Test notification from Mewo on Fire", "detail": "",
         ]
         guard DaemonClient.ok(["cmd": "emit", "event": event]) != nil else { return nil }
         return DaemonClient.ok(["cmd": "status"])?["connected"] as? Int ?? 0
@@ -210,7 +210,7 @@ final class AppModel: ObservableObject {
         return process.terminationStatus == 0
       }.value
       if !started {
-        notice = "The service is not installed. Run `ccnotify install` in a terminal."
+        notice = "The service is not installed. Run `mewo install` in a terminal."
         return
       }
       // The daemon needs a moment to bind its socket.

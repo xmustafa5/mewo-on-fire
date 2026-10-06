@@ -63,7 +63,7 @@ impl Store {
                     }
                 }
                 Err(e) => eprintln!(
-                    "ccnotify: warning: ignoring unreadable {}: {e}",
+                    "mewo: warning: ignoring unreadable {}: {e}",
                     path.display()
                 ),
             }
@@ -86,7 +86,7 @@ impl Store {
         }
         if let Err(e) = self.persist() {
             eprintln!(
-                "ccnotify: warning: could not write {}: {e}",
+                "mewo: warning: could not write {}: {e}",
                 self.path.display()
             );
         }

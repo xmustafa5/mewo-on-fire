@@ -1,4 +1,4 @@
-//! `ccnotify ask` — Claude Code PermissionRequest hook (PROTOCOL.md v1.1).
+//! `mewo ask` — Claude Code PermissionRequest hook (PROTOCOL.md v1.1).
 //! Forwards the prompt to the daemon, blocks until a phone answers and prints
 //! the hook decision. Always exits 0; prints nothing (normal prompt flow)
 //! unless a phone answered. The original `tool_input` and
@@ -27,8 +27,8 @@ pub const MAX_DETAIL_CHARS: usize = 4000;
 const MAX_SNIPPET_CHARS: usize = 1500;
 /// Bounds sending the request; the reply itself is awaited without a timeout.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
-const DEFAULT_DENY_MESSAGE: &str = "Denied from phone (ccnotify)";
-const DEFAULT_REJECT_MESSAGE: &str = "Plan rejected from phone (ccnotify)";
+const DEFAULT_DENY_MESSAGE: &str = "Denied from phone (Mewo on Fire)";
+const DEFAULT_REJECT_MESSAGE: &str = "Plan rejected from phone (Mewo on Fire)";
 /// Transcript watcher: how much of the transcript tail is searched for the
 /// prompt's tool_use, and how often the file is re-checked.
 const WATCH_TAIL_BYTES: u64 = 2 * 1024 * 1024;
