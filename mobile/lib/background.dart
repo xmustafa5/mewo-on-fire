@@ -389,6 +389,12 @@ class CcTaskHandler extends TaskHandler {
       _handleGetImage(msg);
     } else if (cmd == 'refresh_sessions') {
       _handleRefreshSessions();
+    } else if (cmd == 'clear_sessions') {
+      // Settings → "Clear cached chats": forget the list, ask the PCs again.
+      _sessions.clear();
+      _scheduleSessionsSave();
+      _sendSessions();
+      _handleRefreshSessions();
     }
   }
 

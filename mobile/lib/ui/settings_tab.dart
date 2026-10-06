@@ -41,6 +41,27 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+  Future<void> _clearChats(BuildContext context, AppState state) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear cached chats?'),
+        content: const Text(
+            'The session list, the chats and pictures fetched so far, and the status of '
+            'messages sent from this phone are removed from the phone. Nothing on the PCs '
+            'is touched; the sessions are fetched again.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Clear')),
+        ],
+      ),
+    );
+    if (yes != true || !context.mounted) return;
+    await state.clearChats();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cached chats cleared')));
+  }
+
   Future<void> _batteryTap() async {
     try {
       if (_batteryExempt == true) {
@@ -176,13 +197,22 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                   ),
                 ),
               ],
+              _header(context, 'Data'),
+              ListTile(
+                leading: const Icon(Icons.cleaning_services_outlined),
+                title: const Text('Clear cached chats'),
+                subtitle: const Text(
+                    'Forgets the sessions and chats stored on this phone. They are fetched '
+                    'again from your PCs.'),
+                onTap: () => _clearChats(context, state),
+              ),
               _header(context, 'About'),
               const ListTile(
                 leading: Icon(Icons.lock_outline),
-                title: Text('LAN only'),
+                title: Text('Private'),
                 subtitle: Text(
-                    'The phone connects directly to your PCs over TLS with a pinned certificate. '
-                    'Nothing goes through the internet.'),
+                    'The phone talks to your PCs over TLS with a pinned certificate — directly on '
+                    'your network, or through a relay that only passes the encrypted connection.'),
               ),
             ],
           ),

@@ -791,6 +791,29 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         mutedProjects: settings.mutedProjects.where((p) => p != project).toList()));
   }
 
+  // ---- cached chats (Settings → "Clear cached chats") ----
+
+  /// Drops everything this phone remembers about sessions and chats: the
+  /// session list, fetched chats and images, and the status of messages sent
+  /// from here. The PCs are asked for their sessions again.
+  Future<void> clearChats() async {
+    _chats.clear();
+    _images.clear();
+    for (final t in _imageTimeouts.values) {
+      t.cancel();
+    }
+    _imageTimeouts.clear();
+    _outgoing.clear();
+    sessions = <SessionEntry>[];
+    notifyListeners();
+    if (await _isRunning()) {
+      _send('clear_sessions');
+    } else {
+      // Task not running → no concurrent writer, safe to clear directly.
+      await Store.saveSessions(<SessionEntry>[]);
+    }
+  }
+
   // ---- history (task owns `events`) ----
 
   Future<void> clearHistory() async {
