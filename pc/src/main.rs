@@ -12,6 +12,7 @@ mod listen;
 mod mdns;
 mod net;
 mod paths;
+mod prs;
 mod relay;
 mod requests;
 mod server;

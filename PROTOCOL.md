@@ -462,3 +462,41 @@ Claude itself:
   the session is not `working` or `ended`, and nothing was sent after it. A
   tap puts the text in the message box (the watch asks, then sends).
 
+# v1.6 — pull requests
+
+The open pull requests of a session's repository, as Claude Desktop pins
+them above its input. The PC reads them with the GitHub CLI (`gh`, logged in
+by the user) in the session's folder; the phone asks while a chat is open.
+
+## Wire frames (after `auth`)
+
+- Phone → PC: `{"type":"get_prs","session_id":"…"}`.
+- PC → phone: `{"type":"prs","session_id":"…","repo":"owner/name","branch":"<checked out>",
+  "prs":[…],"error":""}`. `error` is a sentence for the user when nothing
+  could be read ("GitHub CLI (gh) is not installed on the PC", "Not a git
+  repository", …); `prs` is empty then.
+- One pull request: `{"number":65,"title":"…","branch":"feature/…","url":"https://…",
+  "additions":87,"deletions":0,"draft":false,"review":"approved|changes|required|",
+  "ci":"pass|fail|pending|none","checks":[{"name":"build","state":"pass|fail|pending"}],
+  "author":"login","updated":"<ISO 8601>","current":true}`. `current`: its
+  branch is the one checked out in the session's folder; those come first.
+
+## Daemon
+
+- `gh repo view --json nameWithOwner`, then `gh pr list --state open --limit 20
+  --json number,title,headRefName,additions,deletions,url,isDraft,reviewDecision,
+  statusCheckRollup,updatedAt,author`, run in the session's `cwd`; `gh` is looked
+  for in the usual places because launchd/systemd give the daemon a short PATH.
+- `ci` rolls `statusCheckRollup` up: any failed check → `fail`, else any
+  running → `pending`, else `pass`; no checks → `none`.
+- Answers are kept 45 s per folder; a `gh` call is given 25 s.
+
+## Phone
+
+- Asks on opening a chat, every 2 minutes while it is open, and 3 s after a
+  `stop` event of that session (Claude may have pushed or opened one).
+- Shows up to two above the input ("Show N more" for the rest): number,
+  repository, branch, `+adds −dels`, a CI pill. Tapping one lists the checks
+  and offers the GitHub link and, when CI fails, a message to Claude asking
+  it to fix the failures. The × hides one until the chat is opened again.
+

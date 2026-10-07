@@ -635,3 +635,110 @@ class QrPayload {
     );
   }
 }
+
+/// One check of a pull request (PROTOCOL.md v1.6): `pass`, `fail` or `pending`.
+class PrCheck {
+  const PrCheck({required this.name, required this.state});
+
+  final String name;
+  final String state;
+
+  factory PrCheck.fromJson(Map<String, dynamic> j) =>
+      PrCheck(name: _asString(j['name']), state: _asString(j['state']));
+}
+
+/// An open pull request of the session's repository (PROTOCOL.md v1.6).
+class PullRequest {
+  const PullRequest({
+    required this.number,
+    this.title = '',
+    this.branch = '',
+    this.url = '',
+    this.additions = 0,
+    this.deletions = 0,
+    this.draft = false,
+    this.review = '',
+    this.ci = 'none',
+    this.checks = const <PrCheck>[],
+    this.author = '',
+    this.current = false,
+  });
+
+  final int number;
+  final String title;
+  final String branch;
+  final String url;
+  final int additions;
+  final int deletions;
+  final bool draft;
+
+  /// `approved`, `changes`, `required` or empty.
+  final String review;
+
+  /// `pass`, `fail`, `pending` or `none`.
+  final String ci;
+  final List<PrCheck> checks;
+  final String author;
+
+  /// Its branch is the one checked out in the session's folder.
+  final bool current;
+
+  factory PullRequest.fromJson(Map<String, dynamic> j) => PullRequest(
+        number: _asInt(j['number']),
+        title: _asString(j['title']),
+        branch: _asString(j['branch']),
+        url: _asString(j['url']),
+        additions: _asInt(j['additions']),
+        deletions: _asInt(j['deletions']),
+        draft: j['draft'] == true,
+        review: _asString(j['review']),
+        ci: _asString(j['ci']).isEmpty ? 'none' : _asString(j['ci']),
+        checks: <PrCheck>[
+          if (j['checks'] is List)
+            for (final c in j['checks'] as List)
+              if (c is Map) PrCheck.fromJson(Map<String, dynamic>.from(c)),
+        ],
+        author: _asString(j['author']),
+        current: j['current'] == true,
+      );
+}
+
+/// The pull requests of one session's repository, as last heard from the PC.
+class PrList {
+  const PrList({
+    this.repo = '',
+    this.branch = '',
+    this.prs = const <PullRequest>[],
+    this.error = '',
+    this.loading = false,
+    this.loaded = false,
+  });
+
+  final String repo;
+  final String branch;
+  final List<PullRequest> prs;
+  final String error;
+  final bool loading;
+  final bool loaded;
+
+  factory PrList.fromJson(Map<String, dynamic> j) => PrList(
+        repo: _asString(j['repo']),
+        branch: _asString(j['branch']),
+        prs: <PullRequest>[
+          if (j['prs'] is List)
+            for (final p in j['prs'] as List)
+              if (p is Map) PullRequest.fromJson(Map<String, dynamic>.from(p)),
+        ],
+        error: _asString(j['error']),
+        loaded: true,
+      );
+
+  PrList copyWith({bool? loading, String? error}) => PrList(
+        repo: repo,
+        branch: branch,
+        prs: prs,
+        error: error ?? this.error,
+        loading: loading ?? this.loading,
+        loaded: loaded,
+      );
+}

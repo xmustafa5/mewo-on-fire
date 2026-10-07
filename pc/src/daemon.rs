@@ -16,7 +16,7 @@ use crate::requests::{self, AskReply, Request, Requests};
 use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session, Sessions};
 use crate::store::{Event, Store};
 use crate::transcript::{self, ChatItem};
-use crate::{control, mdns, net, paths, relay, server, uploads};
+use crate::{control, mdns, net, paths, prs, relay, server, uploads};
 
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
 const BROADCAST_CAPACITY: usize = 256;
@@ -57,6 +57,8 @@ pub struct AppState {
     pub connected: AtomicUsize,
     /// Connected to the relay right now (see relay.rs).
     pub relay_up: AtomicBool,
+    /// Pull requests by repository (prs.rs, v1.6).
+    pub prs: prs::PrCache,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -570,6 +572,7 @@ async fn run_async() -> Result<()> {
         pair_codes: Mutex::new(HashMap::new()),
         connected: AtomicUsize::new(0),
         relay_up: AtomicBool::new(false),
+        prs: prs::PrCache::default(),
     });
 
     eprintln!(

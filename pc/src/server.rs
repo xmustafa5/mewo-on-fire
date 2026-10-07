@@ -348,7 +348,8 @@ async fn subscriber_loop(
 }
 
 /// A text frame from a subscribed phone: `answer` (v1.1), `sessions`,
-/// `get_chat`, `send` (v1.2), `get_image` (v1.3). Other frames are ignored.
+/// `get_chat`, `send` (v1.2), `get_image` (v1.3), `get_prs` (v1.6). Other
+/// frames are ignored.
 async fn handle_frame(
     state: &AppState,
     device: &Device,
@@ -369,8 +370,27 @@ async fn handle_frame(
         "get_chat" => handle_get_chat(state, sink, &msg).await,
         "get_image" => handle_get_image(state, sink, &msg).await,
         "send" => handle_send(state, device, sink, &msg).await,
+        "get_prs" => handle_get_prs(state, sink, &msg).await,
         _ => Ok(()),
     }
+}
+
+/// `get_prs` → `prs` (v1.6): the open pull requests of the session's
+/// repository, from `gh` on this PC.
+async fn handle_get_prs(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    let session_id = str_field(msg, "session_id");
+    let cwd = state
+        .session_list()
+        .into_iter()
+        .find(|s| s.id == session_id)
+        .map(|s| s.cwd)
+        .unwrap_or_default();
+    let mut v = state.prs.list(&cwd).await;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("type".to_string(), json!("prs"));
+        obj.insert("session_id".to_string(), json!(session_id));
+    }
+    send_json(sink, &v).await
 }
 
 fn str_field<'a>(msg: &'a Value, key: &str) -> &'a str {

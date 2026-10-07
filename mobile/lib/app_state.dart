@@ -95,6 +95,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   final Map<String, ChatState> _chats = <String, ChatState>{};
 
+  /// Pull requests by session key (v1.6), while a chat is open.
+  final Map<String, PrList> _prs = <String, PrList>{};
+  final Map<String, Timer> _prsTimers = <String, Timer>{};
+  final Map<String, Timer> _prsTimeouts = <String, Timer>{};
+  static const Duration _prsEvery = Duration(minutes: 2);
+
   /// Fetched chat images by `pcId|sessionId|imageId`, oldest first.
   final Map<String, ChatImage> _images = <String, ChatImage>{};
   final Map<String, Timer> _imageTimeouts = <String, Timer>{};
@@ -307,6 +313,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       // After a reply was delivered, Claude's answer shows up with its stop.
       if (ev.kind == EventKind.stop && ev.sessionId.isNotEmpty) {
         _scheduleChatRefresh(pcId, ev.sessionId);
+        // It may have pushed or opened a pull request meanwhile.
+        if (_watched.containsKey(sessionKey(pcId, ev.sessionId))) {
+          Timer(const Duration(seconds: 3), () => refreshPrs(pcId, ev.sessionId));
+        }
       }
       notifyListeners();
     } else if (type == 'requests') {
@@ -333,6 +343,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _finishChat(key, error: msg['error'] is String ? msg['error'] as String : 'Failed');
     } else if (type == 'image') {
       _onImage(msg);
+    } else if (type == 'prs') {
+      _onPrs(msg);
     } else if (type == 'send_result') {
       _onSendResult(msg);
     }
@@ -540,7 +552,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _watched[key] = (_watched[key] ?? 0) + 1;
     // Not synchronously: called from initState (during a build), and
     // refreshChat notifies listeners.
-    unawaited(Future<void>.microtask(() => refreshChat(pcId, sessionId)));
+    unawaited(Future<void>.microtask(() {
+      refreshChat(pcId, sessionId);
+      refreshPrs(pcId, sessionId);
+    }));
+    _prsTimers[key]?.cancel();
+    _prsTimers[key] = Timer.periodic(_prsEvery, (_) => refreshPrs(pcId, sessionId));
   }
 
   void unwatchChat(String pcId, String sessionId) {
@@ -552,6 +569,50 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     _watched.remove(key);
     _chatRefreshTimers.remove(key)?.cancel();
+    _prsTimers.remove(key)?.cancel();
+  }
+
+  // ---- pull requests (v1.6) ----
+
+  PrList? prsOf(String pcId, String sessionId) => _prs[sessionKey(pcId, sessionId)];
+
+  /// Asks the PC for the open pull requests of the session's repository.
+  Future<void> refreshPrs(String pcId, String sessionId) async {
+    final key = sessionKey(pcId, sessionId);
+    final current = _prs[key] ?? const PrList();
+    if (current.loading) return;
+    _prs[key] = current.copyWith(loading: true);
+    notifyListeners();
+    _prsTimeouts[key]?.cancel();
+    _prsTimeouts[key] = Timer(const Duration(seconds: 30), () {
+      final c = _prs[key];
+      if (c == null || !c.loading) return;
+      _prs[key] = c.copyWith(loading: false, error: c.loaded ? c.error : 'No answer from ${pcNameFor(pcId)}');
+      notifyListeners();
+    });
+    if (!await _isRunning()) {
+      _prs[key] = current.copyWith(loading: false);
+      notifyListeners();
+      return;
+    }
+    try {
+      sendToTask(jsonEncode({'cmd': 'get_prs', 'pc_id': pcId, 'session_id': sessionId}));
+    } catch (_) {
+      _prs[key] = current.copyWith(loading: false);
+      notifyListeners();
+    }
+  }
+
+  void _onPrs(Map<String, dynamic> msg) {
+    final key = sessionKey('${msg['pc_id']}', '${msg['session_id']}');
+    _prsTimeouts.remove(key)?.cancel();
+    final fresh = PrList.fromJson(msg);
+    final old = _prs[key];
+    // A failed refresh keeps what was known, with the reason.
+    _prs[key] = fresh.error.isNotEmpty && old != null && old.loaded && fresh.prs.isEmpty
+        ? old.copyWith(loading: false, error: fresh.error)
+        : fresh;
+    notifyListeners();
   }
 
   void _scheduleChatRefresh(String pcId, String sessionId) {
@@ -797,6 +858,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// session list, fetched chats and images, and the status of messages sent
   /// from here. The PCs are asked for their sessions again.
   Future<void> clearChats() async {
+    _prs.clear();
     _chats.clear();
     _images.clear();
     for (final t in _imageTimeouts.values) {

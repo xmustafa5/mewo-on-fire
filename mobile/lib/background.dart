@@ -387,6 +387,8 @@ class CcTaskHandler extends TaskHandler {
       _handleGetChat(msg);
     } else if (cmd == 'get_image') {
       _handleGetImage(msg);
+    } else if (cmd == 'get_prs') {
+      _handleGetPrs(msg);
     } else if (cmd == 'refresh_sessions') {
       _handleRefreshSessions();
     } else if (cmd == 'clear_sessions') {
@@ -580,6 +582,35 @@ class CcTaskHandler extends TaskHandler {
 
   /// `{"pc_id", "session_id"}` → `get_chat`; the reply is forwarded as
   /// `chat`, or `chat_error` right away when the PC is not connected.
+  /// v1.6: asks the PC for the session's pull requests; answers with an
+  /// error `prs` itself when the PC cannot be asked.
+  void _handleGetPrs(Map<String, dynamic> msg) {
+    final pcId = _str(msg['pc_id']);
+    final sessionId = _str(msg['session_id']);
+    if (pcId.isEmpty || sessionId.isEmpty) return;
+    final link = _links[pcId];
+    String error = '';
+    if (link == null) {
+      error = 'This PC is no longer paired';
+    } else if (!link.getPrs(sessionId)) {
+      link.kick();
+      error = '${link.pc.name} is offline';
+    }
+    if (error.isEmpty) return;
+    _sendToMain(jsonEncode({
+      'type': 'prs',
+      'pc_id': pcId,
+      'session_id': sessionId,
+      'repo': '',
+      'prs': const <Object>[],
+      'error': error,
+    }));
+  }
+
+  Future<void> _onPrs(PcLink link, Map<String, dynamic> prs) async {
+    _sendToMain(jsonEncode(<String, dynamic>{...prs, 'type': 'prs', 'pc_id': link.pc.id}));
+  }
+
   void _handleGetChat(Map<String, dynamic> msg) {
     final pcId = _str(msg['pc_id']);
     final sessionId = _str(msg['session_id']);
@@ -777,6 +808,7 @@ class CcTaskHandler extends TaskHandler {
         onChat: _onChat,
         onImage: _onImage,
         onSendResult: _onSendResult,
+        onPrs: _onPrs,
       );
       _links[pc.id] = link;
       link.start();

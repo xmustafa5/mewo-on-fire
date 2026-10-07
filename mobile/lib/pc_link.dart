@@ -68,6 +68,9 @@ typedef LinkChatCallback = Future<void> Function(PcLink link, Map<String, dynami
 typedef LinkImageCallback = Future<void> Function(PcLink link, Map<String, dynamic> image);
 
 /// Called for every `send_result`; [status] is `delivered`, `queued` or `rejected`.
+/// `prs` (v1.6): the open pull requests of a session's repository.
+typedef LinkPrsCallback = Future<void> Function(PcLink link, Map<String, dynamic> prs);
+
 typedef LinkSendResultCallback = Future<void> Function(
     PcLink link, String clientId, String status, String reason);
 
@@ -90,6 +93,7 @@ class PcLink {
     required this.onChat,
     required this.onImage,
     required this.onSendResult,
+    required this.onPrs,
   });
 
   final PairedPc pc;
@@ -103,6 +107,7 @@ class PcLink {
   final LinkChatCallback onChat;
   final LinkImageCallback onImage;
   final LinkSendResultCallback onSendResult;
+  final LinkPrsCallback onPrs;
 
   static const Duration _minBackoff = Duration(seconds: 1);
   static const Duration _maxBackoff = Duration(seconds: 60);
@@ -212,6 +217,9 @@ class PcLink {
 
   /// Asks for all sessions (reply → [onSessions]). False if not connected.
   bool requestSessions() => _sendFrame({'type': 'sessions'});
+
+  /// v1.6: the pull requests of the session's repository → `prs`.
+  bool getPrs(String sessionId) => _sendFrame({'type': 'get_prs', 'session_id': sessionId});
 
   /// Asks for a session's chat (reply → [onChat]). False if not connected.
   bool getChat(String sessionId, {int limit = 100}) =>
@@ -500,6 +508,12 @@ class PcLink {
           if (id is! String || id.isEmpty) continue;
           try {
             await onChat(this, msg);
+          } catch (_) {}
+        } else if (type == 'prs') {
+          final id = msg['session_id'];
+          if (id is! String || id.isEmpty) continue;
+          try {
+            await onPrs(this, msg);
           } catch (_) {}
         } else if (type == 'image') {
           final id = msg['image_id'];

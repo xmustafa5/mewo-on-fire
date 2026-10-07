@@ -229,6 +229,15 @@ tokens per reply and applies to every Claude Code session on this PC, from
 the next prompt on. In a plain terminal the line is visible as
 `[next]: # "…"`.
 
+## Pull requests in the chat
+
+With the [GitHub CLI](https://cli.github.com) installed and logged in on the
+PC (`gh auth login`), a session's chat on the phone shows the open pull
+requests of its repository above the input, with the size of the change and
+whether CI passes; one tap lists the checks or asks Claude to fix them.
+Nothing to configure: the daemon runs `gh` in the session's folder when a
+phone asks.
+
 ## Away from the local network
 
 The phone reaches the PC at any of the addresses the daemon tells it about
