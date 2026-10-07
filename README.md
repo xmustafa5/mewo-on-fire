@@ -17,7 +17,6 @@ Claude Code ──hook──▶ Mewo on Fire (Rust; systemd user service / launc
 | [pc/](pc/) | Rust binary `mewo`: daemon, CLI and Claude Code hook. Runs on Linux and macOS. |
 | [pc/menubar/](pc/menubar/) | macOS menu bar app: service status, pairing QR code, phones and sessions. On Linux the same is built in: `mewo tray`. |
 | [mobile/](mobile/) | Flutter app for Android and iOS, with an Apple Watch app (see [mobile/README.md](mobile/README.md#apple-watch)). On iOS, background delivery is opt-in (see [mobile/README.md](mobile/README.md#ios)). |
-| [tv/](tv/) | Apple TV app (SwiftUI): sessions, chats and prompts on the big screen; see [tv/README.md](tv/README.md). |
 | [relay/](relay/) | Relay for using the app away from the PC's network (Cloudflare Worker, or `mewo relay-server`); see [pc/README.md](pc/README.md#away-from-the-local-network). |
 | [web/](web/) | Next.js download site: landing page, `install.sh` and download links for the latest release. |
 | [PROTOCOL.md](PROTOCOL.md) | Wire format both sides follow. |
