@@ -2483,9 +2483,10 @@ class _PrRow extends StatelessWidget {
     final t = Theme.of(context).textTheme;
     final color = _PrStrip.colorOf(pr.ci);
     final name = repo.contains('/') ? repo.substring(repo.indexOf('/') + 1) : repo;
+    final mono = Ember.mono(context);
     return GlassCard(
       margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-      padding: const EdgeInsets.fromLTRB(12, 7, 4, 7),
+      padding: const EdgeInsets.fromLTRB(12, 7, 4, 8),
       radius: 14,
       fill: Ember.surface2.withValues(alpha: 0.92),
       borderColor: pr.ci == 'fail'
@@ -2494,59 +2495,79 @@ class _PrRow extends StatelessWidget {
               ? Ember.amber.withValues(alpha: 0.35)
               : null,
       onTap: onTap,
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.call_merge_rounded, size: 18, color: color),
-          const SizedBox(width: 8),
-          Text(
-            '#${pr.number}',
-            style: t.labelMedium?.copyWith(color: Ember.text2, fontFamily: Ember.mono(context), fontSize: 12.5),
+          Row(
+            children: [
+              Icon(Icons.call_merge_rounded, size: 18, color: color),
+              const SizedBox(width: 8),
+              Text(
+                '#${pr.number}',
+                style: t.labelMedium?.copyWith(color: Ember.text2, fontFamily: mono, fontSize: 12.5),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  name.isEmpty ? pr.title : name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: t.titleSmall?.copyWith(fontSize: 13),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _Diff(additions: pr.additions, deletions: pr.deletions),
+              if (pr.ci != 'none') ...[
+                const SizedBox(width: 8),
+                _CiChip(state: pr.ci),
+              ],
+              GhostIconButton(
+                icon: Icons.close_rounded,
+                tooltip: 'Hide this pull request here',
+                filled: false,
+                size: 30,
+                iconSize: 15,
+                onPressed: onHide,
+              ),
+            ],
           ),
-          const SizedBox(width: 10),
-          Expanded(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(26, 0, 8, 0),
             child: Row(
               children: [
-                Flexible(
-                  flex: 2,
-                  child: Text(
-                    name.isEmpty ? pr.title : name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: t.titleSmall?.copyWith(fontSize: 13),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  flex: 3,
+                Expanded(
                   child: Text(
                     pr.branch,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: t.labelSmall?.copyWith(
                       color: Ember.text3,
-                      fontFamily: Ember.mono(context),
+                      fontFamily: mono,
                       fontWeight: FontWeight.w400,
                       letterSpacing: 0,
                       fontSize: 12,
                     ),
                   ),
                 ),
+                if (pr.draft)
+                  Text('Draft', style: t.labelSmall?.copyWith(color: Ember.text3))
+                else if (pr.review.isNotEmpty)
+                  Text(
+                    pr.review == 'approved'
+                        ? 'Approved'
+                        : pr.review == 'changes'
+                            ? 'Changes requested'
+                            : 'Review needed',
+                    style: t.labelSmall?.copyWith(
+                      color: pr.review == 'approved'
+                          ? Ember.ok
+                          : pr.review == 'changes'
+                              ? Ember.danger
+                              : Ember.text3,
+                    ),
+                  ),
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          _Diff(additions: pr.additions, deletions: pr.deletions),
-          if (pr.ci != 'none') ...[
-            const SizedBox(width: 8),
-            _CiChip(state: pr.ci),
-          ],
-          GhostIconButton(
-            icon: Icons.close_rounded,
-            tooltip: 'Hide this pull request here',
-            filled: false,
-            size: 30,
-            iconSize: 15,
-            onPressed: onHide,
           ),
         ],
       ),
