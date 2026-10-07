@@ -4,6 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../app_state.dart';
+import 'home_screen.dart' show EmberTabBar;
+import 'theme/ember.dart';
+import 'theme/glass.dart';
+import 'theme/motion.dart';
 
 class SettingsTab extends StatefulWidget {
   const SettingsTab({super.key});
@@ -73,16 +77,6 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
     await _checkBattery();
   }
 
-  Widget _header(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
-        child: Text(
-          text,
-          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color: Theme.of(context).colorScheme.primary,
-              ),
-        ),
-      );
-
   @override
   Widget build(BuildContext context) {
     final state = AppState.instance;
@@ -90,134 +84,255 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
       listenable: state,
       builder: (context, _) {
         final s = state.settings;
-        final cs = Theme.of(context).colorScheme;
+        var n = 0;
+        Widget group(List<Widget> rows) => FadeSlideIn(
+              delay: Motion.stagger(n++, step: 60),
+              child: _Group(children: rows),
+            );
         return Scaffold(
-          appBar: AppBar(title: const Text('Settings')),
+          backgroundColor: Colors.transparent,
           body: ListView(
-            padding: const EdgeInsets.only(bottom: 24),
+            physics: const BouncingScrollPhysics(),
+            padding: EdgeInsets.only(bottom: EmberTabBar.bottomInset(context)),
             children: [
-              _header(context, 'Answer from phone'),
-              SwitchListTile(
-                secondary: const Icon(Icons.touch_app_outlined),
-                title: const Text('Answer prompts from phone'),
-                subtitle: const Text(
-                    'Permission prompts, questions and plan approvals show a notification with '
-                    'Allow / Deny / option buttons. When off, they only appear under '
-                    '"Waiting for you" in the app.'),
-                isThreeLine: true,
-                value: s.answerFromPhone,
-                onChanged: (v) => state.updateSettings(s.copyWith(answerFromPhone: v)),
-              ),
-              _header(context, 'Notify me when'),
-              SwitchListTile(
-                secondary: const Icon(Icons.hourglass_top),
-                title: const Text('Claude needs input'),
-                subtitle: const Text('Permission prompts, questions, idle'),
-                value: s.notifyNeedsInput,
-                onChanged: (v) => state.updateSettings(s.copyWith(notifyNeedsInput: v)),
-              ),
-              SwitchListTile(
-                secondary: const Icon(Icons.check_circle_outline),
-                title: const Text('Claude finished'),
-                subtitle: const Text('A reply is done'),
-                value: s.notifyStop,
-                onChanged: (v) => state.updateSettings(s.copyWith(notifyStop: v)),
-              ),
-              SwitchListTile(
-                secondary: const Icon(Icons.stop_circle_outlined),
-                title: const Text('Session closed'),
-                subtitle: const Text('A Claude Code session ended'),
-                value: s.notifySessionEnd,
-                onChanged: (v) => state.updateSettings(s.copyWith(notifySessionEnd: v)),
-              ),
-              _header(context, 'Muted projects'),
-              if (s.mutedProjects.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                  child: Text(
-                    'None. Long-press an event in History to mute its project.',
-                    style: TextStyle(color: cs.outline),
+              const ScreenHeader(title: 'Settings', subtitle: Text('Notifications, background, data')),
+              const SectionLabel('Answer from phone', top: 16),
+              group([
+                _Row(
+                  icon: Icons.touch_app_outlined,
+                  color: Ember.mewo,
+                  title: 'Answer prompts from phone',
+                  subtitle: 'Permission prompts, questions and plan approvals arrive as a notification '
+                      'with Allow / Deny / option buttons. Off: they only show under "Waiting for you".',
+                  trailing: EmberSwitch(
+                    value: s.answerFromPhone,
+                    onChanged: (v) => state.updateSettings(s.copyWith(answerFromPhone: v)),
                   ),
-                )
-              else
-                for (final p in s.mutedProjects)
-                  ListTile(
-                    leading: const Icon(Icons.notifications_off_outlined),
-                    title: Text(p),
-                    trailing: TextButton(
-                      onPressed: () => state.unmuteProject(p),
-                      child: const Text('Unmute'),
-                    ),
-                  ),
-              if (Platform.isAndroid) ...[
-                _header(context, 'Reliability'),
-                ListTile(
-                  leading: Icon(
-                    _batteryExempt == true ? Icons.battery_full : Icons.battery_alert,
-                    color: _batteryExempt == false ? cs.error : null,
-                  ),
-                  title: const Text('Battery optimization'),
-                  subtitle: Text(_batteryExempt == null
-                      ? 'Checking…'
-                      : _batteryExempt!
-                          ? 'Unrestricted — Mewo on Fire can stay connected'
-                          : 'Optimized — Android may cut the connection. Tap to exempt.'),
-                  onTap: _batteryTap,
                 ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                  child: Text(
-                    'Some phones (Xiaomi, Samsung, Huawei, OnePlus, Oppo…) kill background apps '
-                    'even with this setting. If notifications stop arriving, follow the steps for '
-                    'your phone on dontkillmyapp.com (allow autostart, set battery to '
-                    '"No restrictions", lock Mewo on Fire in recent apps).',
-                    style: Theme.of(context).textTheme.bodySmall,
+              ]),
+              const SectionLabel('Notify me when'),
+              group([
+                _Row(
+                  icon: Icons.hourglass_top_rounded,
+                  color: Ember.amber,
+                  title: 'Claude needs input',
+                  subtitle: 'Permission prompts, questions, idle',
+                  trailing: EmberSwitch(
+                    value: s.notifyNeedsInput,
+                    onChanged: (v) => state.updateSettings(s.copyWith(notifyNeedsInput: v)),
                   ),
+                ),
+                _Row(
+                  icon: Icons.check_circle_outline_rounded,
+                  color: Ember.ok,
+                  title: 'Claude finished',
+                  subtitle: 'A reply is done',
+                  trailing: EmberSwitch(
+                    value: s.notifyStop,
+                    onChanged: (v) => state.updateSettings(s.copyWith(notifyStop: v)),
+                  ),
+                ),
+                _Row(
+                  icon: Icons.stop_circle_outlined,
+                  color: Ember.ash,
+                  title: 'Session closed',
+                  subtitle: 'A Claude Code session ended',
+                  trailing: EmberSwitch(
+                    value: s.notifySessionEnd,
+                    onChanged: (v) => state.updateSettings(s.copyWith(notifySessionEnd: v)),
+                  ),
+                ),
+              ]),
+              const SectionLabel('Muted projects'),
+              if (s.mutedProjects.isEmpty)
+                group([
+                  const _Row(
+                    icon: Icons.notifications_off_outlined,
+                    color: Ember.ash,
+                    title: 'None muted',
+                    subtitle: 'Long-press an event in History to mute its project.',
+                  ),
+                ])
+              else
+                group([
+                  for (final p in s.mutedProjects)
+                    _Row(
+                      icon: Icons.notifications_off_outlined,
+                      color: Ember.amber,
+                      title: p,
+                      trailing: EmberButton(
+                        label: 'Unmute',
+                        small: true,
+                        style: EmberButtonStyle.ghost,
+                        onPressed: () => state.unmuteProject(p),
+                      ),
+                    ),
+                ]),
+              if (Platform.isAndroid) ...[
+                const SectionLabel('Reliability'),
+                group([
+                  _Row(
+                    icon: _batteryExempt == true ? Icons.battery_full_rounded : Icons.battery_alert_rounded,
+                    color: _batteryExempt == false ? Ember.danger : Ember.ok,
+                    title: 'Battery optimization',
+                    subtitle: _batteryExempt == null
+                        ? 'Checking…'
+                        : _batteryExempt!
+                            ? 'Unrestricted — Mewo on Fire can stay connected'
+                            : 'Optimized — Android may cut the connection. Tap to exempt.',
+                    onTap: _batteryTap,
+                  ),
+                ]),
+                const _Note(
+                  'Some phones (Xiaomi, Samsung, Huawei, OnePlus, Oppo…) kill background apps '
+                  'even with this setting. If notifications stop arriving, follow the steps for '
+                  'your phone on dontkillmyapp.com (allow autostart, set battery to '
+                  '"No restrictions", lock Mewo on Fire in recent apps).',
                 ),
               ],
               if (Platform.isIOS) ...[
-                _header(context, 'Background'),
-                SwitchListTile(
-                  secondary: const Icon(Icons.all_inclusive),
-                  title: const Text('Stay connected in the background'),
-                  subtitle: const Text(
-                      'iOS pauses Mewo on Fire shortly after you leave the app, and notifications '
-                      'stop until you open it again. Turn this on to keep it running: it plays '
-                      'silent audio in the background, which uses more battery.'),
-                  isThreeLine: true,
-                  value: s.keepAlive,
-                  onChanged: (v) => state.updateSettings(s.copyWith(keepAlive: v)),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                  child: Text(
-                    'Swiping Mewo on Fire away in the app switcher stops it either way. '
-                    'Events you missed are listed in History when you open the app again.',
-                    style: Theme.of(context).textTheme.bodySmall,
+                const SectionLabel('Background'),
+                group([
+                  _Row(
+                    icon: Icons.all_inclusive_rounded,
+                    color: Ember.flame,
+                    title: 'Stay connected in the background',
+                    subtitle: 'iOS pauses the app shortly after you leave it and notifications stop '
+                        'until you come back. On, it keeps running by playing silent audio, which '
+                        'uses more battery.',
+                    trailing: EmberSwitch(
+                      value: s.keepAlive,
+                      onChanged: (v) => state.updateSettings(s.copyWith(keepAlive: v)),
+                    ),
                   ),
+                ]),
+                const _Note(
+                  'Swiping Mewo on Fire away in the app switcher stops it either way. '
+                  'Events you missed are listed in History when you open the app again.',
                 ),
               ],
-              _header(context, 'Data'),
-              ListTile(
-                leading: const Icon(Icons.cleaning_services_outlined),
-                title: const Text('Clear cached chats'),
-                subtitle: const Text(
-                    'Forgets the sessions and chats stored on this phone. They are fetched '
-                    'again from your PCs.'),
-                onTap: () => _clearChats(context, state),
-              ),
-              _header(context, 'About'),
-              const ListTile(
-                leading: Icon(Icons.lock_outline),
-                title: Text('Private'),
-                subtitle: Text(
-                    'The phone talks to your PCs over TLS with a pinned certificate — directly on '
-                    'your network, or through a relay that only passes the encrypted connection.'),
-              ),
+              const SectionLabel('Data'),
+              group([
+                _Row(
+                  icon: Icons.cleaning_services_outlined,
+                  color: Ember.ember,
+                  title: 'Clear cached chats',
+                  subtitle: 'Forgets the sessions and chats stored on this phone. '
+                      'They are fetched again from your PCs.',
+                  onTap: () => _clearChats(context, state),
+                ),
+              ]),
+              const SectionLabel('About'),
+              group([
+                const _Row(
+                  leading: MewoAvatar(size: 36),
+                  title: 'Mewo on Fire',
+                  subtitle: 'Claude Code in your pocket: see what it is doing, answer it, '
+                      'and keep the conversation going from anywhere.',
+                ),
+                const _Row(
+                  icon: Icons.lock_outline_rounded,
+                  color: Ember.ok,
+                  title: 'Private by design',
+                  subtitle: 'The phone talks to your PCs over TLS with a pinned certificate — directly on '
+                      'your network, or through a relay that only passes the encrypted connection along.',
+                ),
+              ]),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// Rows in one glass card, separated by hairlines.
+class _Group extends StatelessWidget {
+  const _Group({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const Divider(indent: 66, endIndent: 0),
+            children[i],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _Row extends StatelessWidget {
+  const _Row({
+    this.icon,
+    this.color = Ember.text2,
+    this.leading,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+    this.onTap,
+  });
+
+  final IconData? icon;
+  final Color color;
+  final Widget? leading;
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final row = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 13, 14, 13),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          leading ?? IconTile(icon: icon!, color: color, size: 36, iconSize: 18),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: t.titleSmall),
+                if (subtitle != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(subtitle!, style: t.bodySmall?.copyWith(color: Ember.text2)),
+                  ),
+              ],
+            ),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+          if (onTap != null) ...[
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right_rounded, size: 20, color: Ember.text3),
+          ],
+        ],
+      ),
+    );
+    if (onTap == null) return row;
+    return PressScale(scale: 0.985, onTap: onTap, child: row);
+  }
+}
+
+class _Note extends StatelessWidget {
+  const _Note(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 10, 22, 0),
+      child: Text(text, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Ember.text3)),
     );
   }
 }

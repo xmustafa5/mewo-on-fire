@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'theme/ember.dart';
+import 'theme/glass.dart';
+import 'theme/motion.dart';
+
 /// Closes the on-screen keyboard. Takes no room while the keyboard is hidden
 /// (the iOS keyboard has no key of its own for that).
 class KeyboardHideButton extends StatefulWidget {
@@ -44,10 +48,18 @@ class _KeyboardHideButtonState extends State<KeyboardHideButton> with WidgetsBin
   @override
   Widget build(BuildContext context) {
     if (!_keyboardUp) return const SizedBox.shrink();
-    return IconButton(
-      tooltip: 'Hide keyboard',
-      onPressed: () => FocusManager.instance.primaryFocus?.unfocus(),
-      icon: const Icon(Icons.keyboard_hide_outlined),
+    return FadeSlideIn(
+      offset: const Offset(-10, 0),
+      duration: Motion.base,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: GhostIconButton(
+          icon: Icons.keyboard_hide_outlined,
+          tooltip: 'Hide keyboard',
+          filled: false,
+          onPressed: () => FocusManager.instance.primaryFocus?.unfocus(),
+        ),
+      ),
     );
   }
 }

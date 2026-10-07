@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'app_state.dart';
@@ -6,6 +7,7 @@ import 'background.dart';
 import 'ui/answer_screen.dart';
 import 'ui/chat_screen.dart';
 import 'ui/home_screen.dart';
+import 'ui/theme/ember.dart';
 import 'watch_bridge.dart';
 
 void main() {
@@ -17,9 +19,6 @@ void main() {
   initForegroundTask();
   runApp(const MewoApp());
 }
-
-/// Claude-ish terracotta.
-const Color kSeedColor = Color(0xFFD97757);
 
 class MewoApp extends StatefulWidget {
   const MewoApp({super.key});
@@ -77,21 +76,27 @@ class _MewoAppState extends State<MewoApp> {
     nav.push(AnswerScreen.route(ref.pcId, ref.requestId));
   }
 
-  ThemeData _theme(Brightness b) => ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: kSeedColor, brightness: b),
-        listTileTheme: const ListTileThemeData(contentPadding: EdgeInsets.symmetric(horizontal: 16)),
-      );
-
   @override
   Widget build(BuildContext context) {
+    final theme = emberTheme();
     return MaterialApp(
       navigatorKey: _navigatorKey,
       title: 'Mewo on Fire',
       debugShowCheckedModeBanner: false,
-      theme: _theme(Brightness.light),
-      darkTheme: _theme(Brightness.dark),
-      themeMode: ThemeMode.system,
+      // Dark, always: the glow needs the dark.
+      theme: theme,
+      darkTheme: theme,
+      themeMode: ThemeMode.dark,
+      builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+        value: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+          systemNavigationBarColor: Colors.transparent,
+          systemNavigationBarIconBrightness: Brightness.light,
+        ),
+        child: ColoredBox(color: Ember.bg, child: child ?? const SizedBox.shrink()),
+      ),
       home: const HomeScreen(),
     );
   }

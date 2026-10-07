@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,14 +11,19 @@ import '../models.dart';
 import '../requests.dart' show Answers;
 import '../voice_input.dart';
 import 'answer_screen.dart';
+import 'history_tab.dart' show SheetAction;
 import 'keyboard_hide_button.dart';
-import 'sessions_tab.dart' show SessionStateChip;
+import 'theme/ember.dart';
+import 'theme/flame.dart';
+import 'theme/glass.dart';
+import 'theme/motion.dart';
 
-/// One session's chat (PROTOCOL.md v1.2): bubbles, tool one-liners, and an
-/// input bar to continue the session from the phone. Opened from the Sessions
-/// tab, a History item or by tapping an event notification. Pending v1.1
-/// requests of the session (permission / question / plan) are pinned as cards
-/// above the input bar, with quick answers.
+/// One session's chat (PROTOCOL.md v1.2): Claude's replies as a running
+/// document, what was typed on the PC and on this phone as bubbles, tool
+/// calls as a quiet rail, and an input bar to continue the session from the
+/// phone. Opened from the Sessions tab, a History item or by tapping an event
+/// notification. Pending v1.1 requests of the session (permission / question
+/// / plan) are pinned as cards above the input bar, with quick answers.
 ///
 /// Messages are Markdown and can carry images (v1.3). A long press on one
 /// opens its options (reply, copy, select text); the input bar can attach up
@@ -137,7 +143,10 @@ class _ChatScreenState extends State<ChatScreen> {
       note = _resolvedNote(_state.resolvedBy[e.key] ?? '', e.value) ?? note;
     }
     _cards = now;
-    if (added) _scrollToBottomSoon();
+    if (added) {
+      HapticFeedback.mediumImpact();
+      _scrollToBottomSoon();
+    }
     // An open answer screen on top reports it itself.
     if (note != null && (ModalRoute.isCurrentOf(context) ?? true)) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(note)));
@@ -165,15 +174,15 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_scroll.hasClients) {
         _scroll.animateTo(
           _scroll.position.minScrollExtent, // reversed list: bottom
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
+          duration: Motion.base,
+          curve: Motion.easeOut,
         );
       }
       if (_cardsScroll.hasClients) {
         _cardsScroll.animateTo(
           _cardsScroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
+          duration: Motion.base,
+          curve: Motion.easeOut,
         );
       }
     });
@@ -186,6 +195,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Same path as the answer screen ([AppState.answer]).
   Future<void> _answer(PendingRequest r, Map<String, dynamic> answer) async {
     if (r.answered || _sent.contains(r.key)) return;
+    HapticFeedback.mediumImpact();
     setState(() => _sent.add(r.key));
     await _state.answer(r.pcId, r.request.id, answer);
   }
@@ -200,6 +210,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _send() async {
     final typed = _input.text.trim();
     if (typed.isEmpty && _attachments.isEmpty) return;
+    HapticFeedback.lightImpact();
     final reply = _replyTo;
     final text = reply == null ? typed : '${_quote(reply.text)}\n\n$typed'.trim();
     final images = List<Uint8List>.of(_attachments);
@@ -209,6 +220,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _replyTo = null;
       _canSend = false;
     });
+    _scrollToBottomSoon();
     await _state.sendMessage(widget.pcId, widget.sessionId, text, images: images);
   }
 
@@ -250,6 +262,7 @@ class _ChatScreenState extends State<ChatScreen> {
       unawaited(VoiceInput.cancel());
       return;
     }
+    HapticFeedback.mediumImpact();
     setState(() {
       _voice = _Voice.recording;
       _voiceStart = DateTime.now();
@@ -272,6 +285,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _voiceSwitchLanguage() {
+    HapticFeedback.selectionClick();
     unawaited(_state.updateSettings(
         _state.settings.copyWith(voiceLanguage: VoiceInput.other(_voiceLanguage))));
   }
@@ -336,22 +350,30 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _attach() async {
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
-      showDragHandle: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Photo library'),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('Take a photo'),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
-            ),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Add pictures', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 14),
+              SheetAction(
+                icon: Icons.photo_library_outlined,
+                color: Ember.mewo,
+                title: 'Photo library',
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+              SheetAction(
+                icon: Icons.photo_camera_outlined,
+                color: Ember.amber,
+                title: 'Take a photo',
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -416,92 +438,134 @@ class _ChatScreenState extends State<ChatScreen> {
   }) async {
     await showModalBottomSheet<void>(
       context: context,
-      showDragHandle: true,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (canReply && failed == null && text.isNotEmpty)
-              ListTile(
-                leading: const Icon(Icons.reply),
-                title: const Text('Reply'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _startReply(role, text);
-                },
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                role == ChatRole.assistant ? "Claude's message" : 'Your message',
+                style: Theme.of(context).textTheme.titleMedium,
               ),
-            if (text.isNotEmpty)
-              ListTile(
-                leading: const Icon(Icons.copy),
-                title: const Text('Copy'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Clipboard.setData(ClipboardData(text: text));
-                  _toast('Copied');
-                },
-              ),
-            if (text.isNotEmpty)
-              ListTile(
-                leading: const Icon(Icons.text_fields),
-                title: const Text('Select text'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.of(context).push(
-                      MaterialPageRoute<void>(builder: (_) => _SelectTextScreen(text: text)));
-                },
-              ),
-            if (failed != null)
-              ListTile(
-                leading: const Icon(Icons.refresh),
-                title: const Text('Send again'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _state.removeOutgoing(widget.pcId, widget.sessionId, failed.clientId);
-                  _state.sendMessage(widget.pcId, widget.sessionId, failed.text,
-                      images: failed.images);
-                },
-              ),
-            if (failed != null)
-              ListTile(
-                leading: const Icon(Icons.delete_outline),
-                title: const Text('Remove'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _state.removeOutgoing(widget.pcId, widget.sessionId, failed.clientId);
-                },
-              ),
-          ],
+              const SizedBox(height: 14),
+              if (canReply && failed == null && text.isNotEmpty) ...[
+                SheetAction(
+                  icon: Icons.reply_rounded,
+                  color: Ember.amber,
+                  title: 'Reply',
+                  subtitle: 'Quote it above your next message',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _startReply(role, text);
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (text.isNotEmpty) ...[
+                SheetAction(
+                  icon: Icons.copy_rounded,
+                  color: Ember.mewo,
+                  title: 'Copy',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Clipboard.setData(ClipboardData(text: text));
+                    _toast('Copied');
+                  },
+                ),
+                const SizedBox(height: 8),
+                SheetAction(
+                  icon: Icons.text_fields_rounded,
+                  color: Ember.text2,
+                  title: 'Select text',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Navigator.of(context).push(
+                        MaterialPageRoute<void>(builder: (_) => _SelectTextScreen(text: text)));
+                  },
+                ),
+              ],
+              if (failed != null) ...[
+                const SizedBox(height: 8),
+                SheetAction(
+                  icon: Icons.refresh_rounded,
+                  color: Ember.ok,
+                  title: 'Send again',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _state.removeOutgoing(widget.pcId, widget.sessionId, failed.clientId);
+                    _state.sendMessage(widget.pcId, widget.sessionId, failed.text,
+                        images: failed.images);
+                  },
+                ),
+                const SizedBox(height: 8),
+                SheetAction(
+                  icon: Icons.delete_outline_rounded,
+                  color: Ember.danger,
+                  title: 'Remove',
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _state.removeOutgoing(widget.pcId, widget.sessionId, failed.clientId);
+                  },
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  void _toggle(String id) => setState(() {
-        if (!_expanded.remove(id)) _expanded.add(id);
-      });
+  void _toggle(String id) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (!_expanded.remove(id)) _expanded.add(id);
+    });
+  }
 
   MarkdownStyleSheet _styleSheet(ThemeData theme) {
     if (_md != null && identical(_mdTheme, theme)) return _md!;
-    final cs = theme.colorScheme;
     _mdTheme = theme;
     _mdMine.clear();
+    final t = theme.textTheme;
+    final mono = Ember.mono(_mdTheme == null ? context : context);
     _md = MarkdownStyleSheet.fromTheme(theme).copyWith(
-      p: theme.textTheme.bodyMedium,
+      p: t.bodyMedium,
+      h1: t.headlineSmall,
+      h2: t.titleLarge,
+      h3: t.titleMedium,
+      h4: t.titleSmall,
+      h5: t.titleSmall,
+      h6: t.titleSmall,
+      strong: const TextStyle(fontWeight: FontWeight.w700, color: Ember.text),
+      em: const TextStyle(fontStyle: FontStyle.italic),
+      listBullet: t.bodyMedium?.copyWith(color: Ember.amber),
+      a: t.bodyMedium?.copyWith(color: Ember.mewoSoft, decoration: TextDecoration.underline),
       code: TextStyle(
-        // iOS has no font called "monospace".
-        fontFamily: theme.platform == TargetPlatform.iOS ? 'Menlo' : 'monospace',
+        fontFamily: mono,
         fontSize: 13,
-        backgroundColor: cs.surfaceContainerHighest,
+        color: Ember.gold,
+        backgroundColor: Ember.codeBg,
       ),
       codeblockDecoration: BoxDecoration(
-        color: cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(6),
+        color: Ember.codeBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Ember.line),
       ),
-      codeblockPadding: const EdgeInsets.all(8),
-      blockquoteDecoration: BoxDecoration(
-        border: Border(left: BorderSide(color: cs.outline, width: 3)),
+      codeblockPadding: const EdgeInsets.all(12),
+      blockquote: t.bodyMedium?.copyWith(color: Ember.text2),
+      blockquoteDecoration: const BoxDecoration(
+        border: Border(left: BorderSide(color: Ember.ember, width: 3)),
       ),
-      blockquotePadding: const EdgeInsets.fromLTRB(10, 2, 4, 2),
+      blockquotePadding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
+      horizontalRuleDecoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Ember.line)),
+      ),
+      tableBorder: TableBorder.all(color: Ember.line, borderRadius: BorderRadius.circular(8)),
+      tableHead: t.labelLarge,
+      tableBody: t.bodySmall?.copyWith(color: Ember.text),
+      tableCellsPadding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
     );
     return _md!;
   }
@@ -513,7 +577,18 @@ class _ChatScreenState extends State<ChatScreen> {
       return _styleSheet(theme).copyWith(
         p: base,
         listBullet: base,
+        strong: TextStyle(fontWeight: FontWeight.w700, color: fg),
         a: base?.copyWith(decoration: TextDecoration.underline),
+        code: TextStyle(
+          fontFamily: Ember.mono(context),
+          fontSize: 13,
+          color: fg,
+          backgroundColor: const Color(0x47000000),
+        ),
+        codeblockDecoration: BoxDecoration(
+          color: const Color(0x47000000),
+          borderRadius: BorderRadius.circular(10),
+        ),
         blockquote: base?.copyWith(color: fg.withValues(alpha: 0.75)),
         blockquoteDecoration: BoxDecoration(
           border: Border(left: BorderSide(color: fg.withValues(alpha: 0.45), width: 3)),
@@ -544,7 +619,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final outgoing = _state.outgoingOf(widget.pcId, widget.sessionId);
     final pending = _pendingRequests();
     final waiting = pending.any((r) => !r.answered && !_sent.contains(r.key));
-    final cs = Theme.of(context).colorScheme;
 
     final title = session?.displayTitle ??
         ((chat?.title.isNotEmpty ?? false) ? chat!.title : 'Session ${_short(widget.sessionId)}');
@@ -554,47 +628,57 @@ class _ChatScreenState extends State<ChatScreen> {
     ].join(' · ');
 
     return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            Text(
-              sub,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: cs.outline),
-            ),
-          ],
-        ),
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: GlassTopBar(
+        title: Text(title),
+        subtitle: Text(sub),
         actions: [
           if (session != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: Center(child: SessionStateChip(session: session)),
+            AnimatedSwitcher(
+              duration: Motion.base,
+              transitionBuilder: fadeScaleTransition,
+              child: HeatChip(key: ValueKey<String>(session.state), state: session.state, compact: true),
             ),
-          IconButton(
-            tooltip: 'Refresh',
-            icon: const Icon(Icons.refresh),
-            onPressed: _refresh,
-          ),
+          GhostIconButton(icon: Icons.refresh_rounded, tooltip: 'Refresh', onPressed: _refresh),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, box) => Column(
-          children: [
-            if (chat?.loading ?? false) const LinearProgressIndicator(minHeight: 2),
-            if (chat != null && chat.error.isNotEmpty)
-              _ErrorBanner(text: chat.error, onRetry: _refresh),
-            Expanded(child: _list(context, chat, outgoing, session)),
-            if (pending.isNotEmpty) _requestCards(pending, box.maxHeight * 0.45),
-            _inputBar(
-              context,
-              session,
-              entry?.pcName ?? _state.pcNameFor(widget.pcId),
-              waiting: waiting,
-            ),
-          ],
+      body: EmberBackground(
+        animate: false,
+        child: LayoutBuilder(
+          builder: (context, box) => Column(
+            children: [
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(child: _list(context, chat, outgoing, session)),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      top: MediaQuery.paddingOf(context).top,
+                      child: AnimatedSwitcher(
+                        duration: Motion.base,
+                        transitionBuilder: fadeUpTransition,
+                        child: chat != null && chat.error.isNotEmpty
+                            ? _ErrorBanner(text: chat.error, onRetry: _refresh)
+                            : (chat?.loading ?? false)
+                                ? const _LoadingLine()
+                                : const SizedBox.shrink(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _StatusStrip(session: session, hasCards: pending.isNotEmpty),
+              if (pending.isNotEmpty) _requestCards(pending, box.maxHeight * 0.45),
+              _inputBar(
+                context,
+                session,
+                entry?.pcName ?? _state.pcNameFor(widget.pcId),
+                waiting: waiting,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -615,12 +699,14 @@ class _ChatScreenState extends State<ChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             for (final r in pending)
-              _RequestCard(
-                key: ValueKey<String>(r.key),
-                entry: r,
-                sending: r.answered || _sent.contains(r.key),
-                onOpen: () => _openRequest(r),
-                onAnswer: (Map<String, dynamic> a) => _answer(r, a),
+              FadeSlideIn(
+                key: ValueKey<String>('card:${r.key}'),
+                child: _RequestCard(
+                  entry: r,
+                  sending: r.answered || _sent.contains(r.key),
+                  onOpen: () => _openRequest(r),
+                  onAnswer: (Map<String, dynamic> a) => _answer(r, a),
+                ),
               ),
           ],
         ),
@@ -634,24 +720,32 @@ class _ChatScreenState extends State<ChatScreen> {
     List<OutgoingMessage> outgoing,
     CcSession? session,
   ) {
-    final cs = Theme.of(context).colorScheme;
+    final topInset = MediaQuery.paddingOf(context).top + 12;
     if (chat == null || (!chat.loaded && chat.loading)) {
-      return const Center(child: CircularProgressIndicator());
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.only(top: topInset),
+          child: const FlameMark(size: 48),
+        ),
+      );
     }
     final rows = _rows(context, chat.items, outgoing, session);
     if (rows.isEmpty) {
       return RefreshIndicator(
+        color: Ember.amber,
+        backgroundColor: Ember.surface2,
+        edgeOffset: topInset,
         onRefresh: _refresh,
         child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
+          physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+          padding: EdgeInsets.only(top: topInset + (chat.error.isNotEmpty ? 64 : 0)),
           children: [
-            Padding(
-              padding: const EdgeInsets.all(32),
-              child: Text(
-                chat.loaded ? 'No messages yet.' : 'Pull down to load the chat.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: cs.outline),
-              ),
+            EmptyState(
+              icon: Icons.forum_outlined,
+              title: chat.loaded ? 'No messages yet' : 'Pull to load the chat',
+              body: chat.loaded
+                  ? 'Say something below and Claude picks it up in this session.'
+                  : 'The chat is fetched from the PC when you pull down.',
             ),
           ],
         ),
@@ -660,15 +754,26 @@ class _ChatScreenState extends State<ChatScreen> {
     // Reversed: starts at the newest message and stays there as items arrive.
     // RefreshIndicator handles reversed lists (pull down at the oldest end).
     return RefreshIndicator(
+      color: Ember.amber,
+      backgroundColor: Ember.surface2,
+      edgeOffset: topInset,
       onRefresh: _refresh,
       child: ListView.builder(
         controller: _scroll,
         reverse: true,
-        physics: const AlwaysScrollableScrollPhysics(),
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        padding: EdgeInsets.fromLTRB(14, topInset, 14, 10),
         itemCount: rows.length,
-        itemBuilder: (context, i) => rows[rows.length - 1 - i],
+        itemBuilder: (context, i) {
+          final row = rows[rows.length - 1 - i];
+          return FadeSlideIn(
+            key: row.key,
+            delay: Motion.stagger(i, step: 30, max: 8),
+            offset: const Offset(0, 14),
+            child: row,
+          );
+        },
       ),
     );
   }
@@ -707,12 +812,10 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final theme = Theme.of(context);
-    final cs = theme.colorScheme;
     final md = _styleSheet(theme);
     MarkdownStyleSheet sheetFor(String role) {
       if (role == ChatRole.assistant) return md;
-      return _mineSheet(
-          theme, role == ChatRole.phone ? cs.onTertiaryContainer : cs.onPrimaryContainer);
+      return _mineSheet(theme, role == ChatRole.phone ? Colors.white : Ember.text);
     }
 
     final canReply = !(session?.ended ?? false) && !(session?.readOnly ?? false);
@@ -720,6 +823,7 @@ class _ChatScreenState extends State<ChatScreen> {
     var i = 0;
     while (i < items.length) {
       final it = items[i];
+      final rowId = it.id.isEmpty ? '${it.ts}:$i' : it.id;
       if (it.role == ChatRole.tool) {
         var j = i;
         while (j < items.length && items[j].role == ChatRole.tool) {
@@ -729,12 +833,14 @@ class _ChatScreenState extends State<ChatScreen> {
         final id = 'g:${group.first.id.isEmpty ? '$i' : group.first.id}';
         if (group.length == 1) {
           rows.add(_ToolLine(
+            key: ValueKey<String>(id),
             item: group.first,
             expanded: _expanded.contains(id),
             onTap: () => _toggle(id),
           ));
         } else {
           rows.add(_ToolGroup(
+            key: ValueKey<String>(id),
             items: group,
             expanded: _expanded.contains(id),
             onToggle: () => _toggle(id),
@@ -749,31 +855,33 @@ class _ChatScreenState extends State<ChatScreen> {
       final text = it.images.isEmpty ? it.text : _withoutImageMarks(it.text);
       final replyable = canReply && text.isNotEmpty;
       rows.add(_SwipeToReply(
+        key: ValueKey<String>('m:$rowId'),
         enabled: replyable,
         onReply: () => _startReply(it.role, text),
         child: _Bubble(
-        role: it.role,
-        text: text,
-        ts: it.ts,
-        status: m == null ? null : _statusLabel(m, session),
-        rejected: false,
-        styleSheet: sheetFor(it.role),
-        onTapLink: _copyLink,
-        images: <Widget>[
-          for (var n = 0; n < it.images.length; n++)
-            local
-                ? _ChatImageTile.bytes(m.images[n], onOpen: _viewImage)
-                : _ChatImageTile.remote(widget.pcId, widget.sessionId, it.images[n],
-                    onOpen: _viewImage),
-        ],
-        onLongPress: () => _showOptions(role: it.role, text: text, canReply: canReply),
-      ),
+          role: it.role,
+          text: text,
+          ts: it.ts,
+          status: m == null ? null : _statusLabel(m, session),
+          rejected: false,
+          styleSheet: sheetFor(it.role),
+          onTapLink: _copyLink,
+          images: <Widget>[
+            for (var n = 0; n < it.images.length; n++)
+              local
+                  ? _ChatImageTile.bytes(m.images[n], onOpen: _viewImage)
+                  : _ChatImageTile.remote(widget.pcId, widget.sessionId, it.images[n],
+                      onOpen: _viewImage),
+          ],
+          onLongPress: () => _showOptions(role: it.role, text: text, canReply: canReply),
+        ),
       ));
       i++;
     }
     for (final m in pending) {
       final rejected = m.status == SendStatus.rejected;
       rows.add(_Bubble(
+        key: ValueKey<String>('out:${m.clientId}'),
         role: ChatRole.phone,
         text: m.text,
         ts: m.ts,
@@ -812,6 +920,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// A suggested message goes into the box, to be changed or sent.
   void _useSuggestion(String text) {
+    HapticFeedback.selectionClick();
     _input.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: text.length),
@@ -820,7 +929,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// [waiting]: a request card of this session is not answered yet.
   Widget _inputBar(BuildContext context, CcSession? s, String pcName, {bool waiting = false}) {
-    final cs = Theme.of(context).colorScheme;
     final suggestions = _state.suggestionsOf(widget.pcId, widget.sessionId);
     final t = Theme.of(context).textTheme;
     String? blocked;
@@ -842,50 +950,76 @@ class _ChatScreenState extends State<ChatScreen> {
         hint = 'Claude is busy — your message is queued until it finishes.';
       }
     }
-    return Material(
-      color: cs.surfaceContainer,
+    return GlassBar(
+      border: const Border(top: BorderSide(color: Ember.line)),
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: EdgeInsets.fromLTRB(blocked != null ? 12 : 4, 8, 8, 8),
+          padding: EdgeInsets.fromLTRB(blocked != null ? 16 : 8, 8, 8, 8),
           child: blocked != null
-              ? Row(
-                  children: [
-                    Icon(Icons.lock_outline, size: 20, color: cs.outline),
-                    const SizedBox(width: 12),
-                    Expanded(child: Text(blocked, style: t.bodyMedium?.copyWith(color: cs.outline))),
-                  ],
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.lock_outline_rounded, size: 18, color: Ember.text3),
+                      const SizedBox(width: 12),
+                      Expanded(child: Text(blocked, style: t.bodySmall?.copyWith(color: Ember.text2))),
+                    ],
+                  ),
                 )
               : Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (hint != null)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-                        child: Text(hint, style: t.bodySmall?.copyWith(color: cs.outline)),
+                    AnimatedSize(
+                      duration: Motion.base,
+                      curve: Motion.easeOut,
+                      alignment: Alignment.bottomCenter,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (hint != null)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.info_outline_rounded, size: 13, color: Ember.text3),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(hint, style: t.labelSmall?.copyWith(color: Ember.text3)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          if (_replyTo != null)
+                            _ReplyBar(target: _replyTo!, onCancel: () => setState(() => _replyTo = null)),
+                          if (_attachments.isNotEmpty)
+                            _AttachmentStrip(
+                              images: _attachments,
+                              onOpen: _viewImage,
+                              onRemove: _removeAttachment,
+                            ),
+                          if (suggestions.isNotEmpty && !_canSend && _voice == _Voice.idle)
+                            _Suggestions(suggestions: suggestions, onPick: _useSuggestion),
+                        ],
                       ),
-                    if (_replyTo != null)
-                      _ReplyBar(target: _replyTo!, onCancel: () => setState(() => _replyTo = null)),
-                    if (_attachments.isNotEmpty)
-                      _AttachmentStrip(
-                        images: _attachments,
-                        onOpen: _viewImage,
-                        onRemove: _removeAttachment,
-                      ),
-                    if (suggestions.isNotEmpty && !_canSend && _voice == _Voice.idle)
-                      _Suggestions(suggestions: suggestions, onPick: _useSuggestion),
-                    if (_voice != _Voice.idle)
-                      _VoiceBar(
-                        working: _voice == _Voice.working,
-                        elapsed: DateTime.now().difference(_voiceStart),
-                        language: VoiceInput.languages[_voiceLanguage] ?? '',
-                        onLanguage: _voiceSwitchLanguage,
-                        onCancel: _voiceCancel,
-                        onDone: _voiceDone,
-                      )
-                    else
-                      _inputRow(cs),
+                    ),
+                    AnimatedSwitcher(
+                      duration: Motion.base,
+                      transitionBuilder: fadeUpTransition,
+                      child: _voice != _Voice.idle
+                          ? _VoiceBar(
+                              key: const ValueKey<String>('voice'),
+                              working: _voice == _Voice.working,
+                              elapsed: DateTime.now().difference(_voiceStart),
+                              language: VoiceInput.languages[_voiceLanguage] ?? '',
+                              onLanguage: _voiceSwitchLanguage,
+                              onCancel: _voiceCancel,
+                              onDone: _voiceDone,
+                            )
+                          : _inputRow(),
+                    ),
                   ],
                 ),
         ),
@@ -895,15 +1029,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Hide keyboard, attach, the message box, and send — or the microphone
   /// while the box is empty.
-  Widget _inputRow(ColorScheme cs) {
+  Widget _inputRow() {
+    final t = Theme.of(context).textTheme;
+    final mic = !_canSend && VoiceInput.supported;
     return Row(
+      key: const ValueKey<String>('input'),
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         const KeyboardHideButton(),
-        IconButton(
-          tooltip: 'Attach pictures',
-          onPressed: _attachments.length >= _maxImages ? null : _attach,
-          icon: const Icon(Icons.add_photo_alternate_outlined),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: GhostIconButton(
+            icon: Icons.add_photo_alternate_outlined,
+            tooltip: 'Attach pictures',
+            filled: false,
+            onPressed: _attachments.length >= _maxImages ? null : _attach,
+          ),
         ),
         Expanded(
           child: TextField(
@@ -911,39 +1052,177 @@ class _ChatScreenState extends State<ChatScreen> {
             minLines: 1,
             maxLines: 5,
             textCapitalization: TextCapitalization.sentences,
+            style: t.bodyMedium,
             decoration: InputDecoration(
               hintText: 'Message Claude…',
               isDense: true,
               filled: true,
-              fillColor: cs.surface,
+              fillColor: Ember.surface2.withValues(alpha: 0.9),
               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(24),
-                borderSide: BorderSide.none,
+                borderRadius: BorderRadius.circular(22),
+                borderSide: const BorderSide(color: Ember.line),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(22),
+                borderSide: const BorderSide(color: Ember.line),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(22),
+                borderSide: BorderSide(color: Ember.flame.withValues(alpha: 0.8), width: 1.5),
               ),
             ),
           ),
         ),
         const SizedBox(width: 8),
-        // Nothing typed: the button records a voice message.
-        if (!_canSend && VoiceInput.supported)
-          IconButton.filledTonal(
-            tooltip: 'Voice message',
-            onPressed: _voiceRecord,
-            icon: const Icon(Icons.mic),
-          )
-        else
-          IconButton.filled(
-            tooltip: 'Send',
-            onPressed: _canSend ? _send : null,
-            icon: const Icon(Icons.send),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 1),
+          child: AnimatedSwitcher(
+            duration: Motion.base,
+            transitionBuilder: fadeScaleTransition,
+            child: mic
+                ? _RoundAction(
+                    key: const ValueKey<String>('mic'),
+                    icon: Icons.mic_rounded,
+                    tooltip: 'Voice message',
+                    gradient: Ember.blue,
+                    glow: Ember.mewo,
+                    onPressed: _voiceRecord,
+                  )
+                : _RoundAction(
+                    key: const ValueKey<String>('send'),
+                    icon: Icons.arrow_upward_rounded,
+                    tooltip: 'Send',
+                    gradient: Ember.fire,
+                    glow: Ember.flame,
+                    onPressed: _canSend ? _send : null,
+                  ),
           ),
+        ),
       ],
     );
   }
 }
 
 enum _Voice { idle, recording, working }
+
+/// Round gradient button at the end of the input row (send / microphone).
+class _RoundAction extends StatelessWidget {
+  const _RoundAction({
+    super.key,
+    required this.icon,
+    required this.tooltip,
+    required this.gradient,
+    required this.glow,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final Gradient gradient;
+  final Color glow;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: tooltip,
+      child: Tooltip(
+        message: tooltip,
+        child: PressScale(
+          scale: 0.9,
+          onTap: onPressed,
+          child: AnimatedContainer(
+            duration: Motion.base,
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: enabled ? gradient : null,
+              color: enabled ? null : Ember.surface3,
+              border: Border.all(color: enabled ? Colors.transparent : Ember.line),
+              boxShadow: enabled
+                  ? [BoxShadow(color: glow.withValues(alpha: 0.45), blurRadius: 16, offset: const Offset(0, 4))]
+                  : const [],
+            ),
+            child: Icon(icon, size: 22, color: enabled ? Colors.white : Ember.text3),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Thin line under the top bar while the chat is being fetched.
+class _LoadingLine extends StatelessWidget {
+  const _LoadingLine();
+
+  @override
+  Widget build(BuildContext context) {
+    return const LinearProgressIndicator(minHeight: 2, color: Ember.amber);
+  }
+}
+
+/// Between the chat and the input: what Claude is doing right now.
+class _StatusStrip extends StatelessWidget {
+  const _StatusStrip({required this.session, required this.hasCards});
+
+  final CcSession? session;
+  final bool hasCards;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = session;
+    Widget child = const SizedBox.shrink();
+    if (s != null && s.state == SessionState.working) {
+      child = Padding(
+        key: const ValueKey<String>('working'),
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+        child: Row(
+          children: [
+            const FlameIcon(size: 18),
+            const SizedBox(width: 8),
+            Breathe(
+              min: 0.6,
+              child: Text(
+                'Claude is working…',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Ember.amber),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (s != null && s.state == SessionState.waiting && !hasCards) {
+      child = Padding(
+        key: const ValueKey<String>('waiting'),
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+        child: Row(
+          children: [
+            const GlowDot(color: Ember.amber, size: 8, live: true),
+            const SizedBox(width: 10),
+            Text(
+              'Claude is waiting on the PC',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Ember.amber),
+            ),
+          ],
+        ),
+      );
+    }
+    return AnimatedSize(
+      duration: Motion.base,
+      curve: Motion.easeOut,
+      alignment: Alignment.bottomCenter,
+      child: AnimatedSwitcher(
+        duration: Motion.base,
+        transitionBuilder: fadeUpTransition,
+        child: child,
+      ),
+    );
+  }
+}
 
 /// What Claude suggests to say next, above the message box: tap one to put
 /// it in the box.
@@ -955,18 +1234,38 @@ class _Suggestions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
       child: Row(
         children: [
-          for (final s in suggestions)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ActionChip(
-                avatar: const Icon(Icons.auto_awesome, size: 16),
-                label: Text(s),
-                onPressed: () => onPick(s),
+          for (var i = 0; i < suggestions.length; i++)
+            FadeSlideIn(
+              key: ValueKey<String>(suggestions[i]),
+              delay: Motion.stagger(i, step: 70),
+              offset: const Offset(16, 0),
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: PressScale(
+                  onTap: () => onPick(suggestions[i]),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(10, 8, 14, 8),
+                    decoration: BoxDecoration(
+                      color: Ember.surface2.withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Ember.amber.withValues(alpha: 0.4)),
+                      boxShadow: [BoxShadow(color: Ember.amber.withValues(alpha: 0.12), blurRadius: 12)],
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.auto_awesome_rounded, size: 14, color: Ember.amber),
+                        const SizedBox(width: 7),
+                        Text(suggestions[i], style: t.labelLarge?.copyWith(fontSize: 13.5)),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
         ],
@@ -979,6 +1278,7 @@ class _Suggestions extends StatelessWidget {
 /// language, discard, done) or turned into text.
 class _VoiceBar extends StatelessWidget {
   const _VoiceBar({
+    super.key,
     required this.working,
     required this.elapsed,
     required this.language,
@@ -996,16 +1296,19 @@ class _VoiceBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     if (working) {
       return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
         child: Row(
           children: [
-            const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-            const SizedBox(width: 12),
-            Text('Turning it into text…', style: t.bodyMedium),
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ember.amber),
+            ),
+            const SizedBox(width: 14),
+            Text('Turning it into text…', style: t.bodyMedium?.copyWith(color: Ember.text2)),
           ],
         ),
       );
@@ -1013,31 +1316,99 @@ class _VoiceBar extends StatelessWidget {
     final s = elapsed.inSeconds;
     return Row(
       children: [
-        IconButton(
+        GhostIconButton(
+          icon: Icons.delete_outline_rounded,
           tooltip: 'Discard',
+          color: Ember.danger,
           onPressed: onCancel,
-          icon: const Icon(Icons.delete_outline),
         ),
-        Icon(Icons.fiber_manual_record, size: 14, color: cs.error),
-        const SizedBox(width: 6),
+        const SizedBox(width: 10),
+        const GlowDot(color: Ember.danger, size: 9, live: true),
+        const SizedBox(width: 10),
+        const _Bars(),
+        const SizedBox(width: 10),
         Text(
           '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}',
           style: t.titleMedium?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
         ),
-        const SizedBox(width: 8),
-        ActionChip(
-          avatar: const Icon(Icons.language, size: 18),
-          label: Text(language),
-          tooltip: 'Language you are speaking',
-          onPressed: onLanguage,
+        const SizedBox(width: 10),
+        PressScale(
+          onTap: onLanguage,
+          child: Tooltip(
+            message: 'Language you are speaking',
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(8, 6, 10, 6),
+              decoration: BoxDecoration(
+                color: Ember.surface2,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Ember.line),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.language_rounded, size: 15, color: Ember.text2),
+                  const SizedBox(width: 5),
+                  Text(language, style: t.labelMedium?.copyWith(color: Ember.text)),
+                ],
+              ),
+            ),
+          ),
         ),
         const Spacer(),
-        FilledButton.icon(
-          onPressed: onDone,
-          icon: const Icon(Icons.stop),
-          label: const Text('Done'),
-        ),
+        EmberButton(label: 'Done', icon: Icons.stop_rounded, small: true, onPressed: onDone),
       ],
+    );
+  }
+}
+
+/// Little equalizer that moves while recording (there is no real level to
+/// show; it says "listening").
+class _Bars extends StatefulWidget {
+  const _Bars();
+
+  @override
+  State<_Bars> createState() => _BarsState();
+}
+
+class _BarsState extends State<_Bars> with SingleTickerProviderStateMixin {
+  late final AnimationController _c =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (reducedMotion(context)) {
+      _c.stop();
+    } else if (!_c.isAnimating) {
+      _c.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, _) => Row(
+        children: [
+          for (var i = 0; i < 5; i++)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1.5),
+              child: Container(
+                width: 3,
+                height: 6 + 12 * (0.5 + 0.5 * math.sin(_c.value * 2 * math.pi * (1 + i * 0.15) + i * 1.3)),
+                decoration: BoxDecoration(
+                  gradient: Ember.fireSoft,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -1052,10 +1423,12 @@ String _clock(int ts) {
   return '${t.year}-${two(t.month)}-${two(t.day)} $hm';
 }
 
-/// A user / phone (right) or assistant (left) message: pictures, then the
-/// text as Markdown. A long press opens the message options.
+/// A message. Claude's replies run full width like a document under a small
+/// flame; what was typed on the PC sits right in a quiet bubble; what this
+/// phone sent sits right in a blue one. A long press opens the options.
 class _Bubble extends StatelessWidget {
   const _Bubble({
+    super.key,
     required this.role,
     required this.text,
     required this.ts,
@@ -1079,25 +1452,10 @@ class _Bubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final width = MediaQuery.sizeOf(context).width;
     final mine = role != ChatRole.assistant;
     final phone = role == ChatRole.phone;
-    final bg = !mine
-        ? cs.surfaceContainerHigh
-        : phone
-            ? cs.tertiaryContainer
-            : cs.primaryContainer;
-    final fg = !mine
-        ? cs.onSurface
-        : phone
-            ? cs.onTertiaryContainer
-            : cs.onPrimaryContainer;
-    final footer = <String>[
-      if (phone) '📱 from phone',
-      if (_clock(ts).isNotEmpty) _clock(ts),
-    ].join(' · ');
 
     // Not selectable: a long press opens the options ("Select text" is one).
     // What we typed keeps its line breaks.
@@ -1108,47 +1466,108 @@ class _Bubble extends StatelessWidget {
       onTapLink: (String linkText, String? href, String title) => onTapLink(href),
       imageBuilder: (Uri uri, String? title, String? alt) => Text(
         '[image${(alt ?? '').isEmpty ? '' : ': $alt'}]',
-        style: t.bodySmall?.copyWith(color: cs.outline),
+        style: t.bodySmall?.copyWith(color: Ember.text3),
       ),
     );
 
+    if (!mine) {
+      return GestureDetector(
+        onLongPress: onLongPress,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(2, 10, 2, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const FlameIcon(size: 14, animate: false),
+                  const SizedBox(width: 6),
+                  Text('CLAUDE', style: t.labelSmall?.copyWith(color: Ember.text3, letterSpacing: 1.2)),
+                  if (_clock(ts).isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Text(_clock(ts), style: t.labelSmall?.copyWith(color: Ember.text3, fontWeight: FontWeight.w400)),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 6),
+              if (images.isNotEmpty)
+                Padding(
+                  padding: EdgeInsets.only(bottom: text.isEmpty ? 0 : 8),
+                  child: Wrap(spacing: 6, runSpacing: 6, children: images),
+                ),
+              if (text.isNotEmpty) body,
+            ],
+          ),
+        ),
+      );
+    }
+
+    final fg = phone ? Colors.white : Ember.text;
+    final footer = <String>[
+      if (_clock(ts).isNotEmpty) _clock(ts),
+      ?status,
+    ].join(' · ');
     return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: Alignment.centerRight,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: width * (mine ? 0.82 : 0.92)),
+        constraints: BoxConstraints(maxWidth: width * 0.82),
         child: GestureDetector(
           onLongPress: onLongPress,
           child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+            margin: const EdgeInsets.fromLTRB(0, 6, 0, 6),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
             decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(16),
-                topRight: const Radius.circular(16),
-                bottomLeft: Radius.circular(mine ? 16 : 4),
-                bottomRight: Radius.circular(mine ? 4 : 16),
+              gradient: phone ? Ember.blue : null,
+              color: phone ? null : Ember.surface3,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
+                bottomLeft: Radius.circular(20),
+                bottomRight: Radius.circular(6),
               ),
+              border: Border.all(
+                color: rejected
+                    ? Ember.danger.withValues(alpha: 0.7)
+                    : phone
+                        ? Colors.white.withValues(alpha: 0.12)
+                        : Ember.lineStrong,
+              ),
+              boxShadow: phone
+                  ? [BoxShadow(color: Ember.mewo.withValues(alpha: 0.3), blurRadius: 18, offset: const Offset(0, 6))]
+                  : const [BoxShadow(color: Color(0x33000000), blurRadius: 14, offset: Offset(0, 6))],
             ),
             child: Column(
-              crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.end,
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (images.isNotEmpty)
                   Padding(
-                    padding: EdgeInsets.only(top: 2, bottom: text.isEmpty ? 0 : 6),
+                    padding: EdgeInsets.only(top: 2, bottom: text.isEmpty ? 0 : 8),
                     child: Wrap(spacing: 6, runSpacing: 6, children: images),
                   ),
                 if (text.isNotEmpty) body,
-                if (footer.isNotEmpty || status != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    [footer, status ?? ''].where((s) => s.isNotEmpty).join(' · '),
-                    style: t.labelSmall?.copyWith(
-                      color: rejected ? cs.error : fg.withValues(alpha: 0.7),
+                const SizedBox(height: 5),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (phone) ...[
+                      Icon(Icons.smartphone_rounded, size: 11, color: fg.withValues(alpha: 0.75)),
+                      const SizedBox(width: 4),
+                    ],
+                    Flexible(
+                      child: Text(
+                        footer,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: t.labelSmall?.copyWith(
+                          color: rejected ? Ember.danger : fg.withValues(alpha: 0.72),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ],
             ),
           ),
@@ -1158,11 +1577,10 @@ class _Bubble extends StatelessWidget {
   }
 }
 
-/// The message a reply quotes.
-/// Drag a bubble sideways to reply to it: it follows the finger a little,
+/// Drag a message sideways to reply to it: it follows the finger a little,
 /// a reply arrow appears, and letting go past the threshold starts the reply.
 class _SwipeToReply extends StatefulWidget {
-  const _SwipeToReply({required this.enabled, required this.onReply, required this.child});
+  const _SwipeToReply({super.key, required this.enabled, required this.onReply, required this.child});
 
   final bool enabled;
   final VoidCallback onReply;
@@ -1178,10 +1596,10 @@ class _SwipeToReplyState extends State<_SwipeToReply> with SingleTickerProviderS
 
   late final AnimationController _back = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 180),
-  )..addListener(() => setState(() => _shift = _release * (1 - _back.value)));
+    duration: const Duration(milliseconds: 220),
+  )..addListener(() => setState(() => _shift = _release * (1 - Curves.easeOutBack.transform(_back.value))));
 
-  double _shift = 0; // current horizontal offset of the bubble
+  double _shift = 0; // current horizontal offset of the message
   double _release = 0; // offset when the finger let go
   bool _armed = false; // past the threshold: the arrow is lit
 
@@ -1214,7 +1632,6 @@ class _SwipeToReplyState extends State<_SwipeToReply> with SingleTickerProviderS
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled) return widget.child;
-    final cs = Theme.of(context).colorScheme;
     final progress = (_shift.abs() / _threshold).clamp(0.0, 1.0);
     return GestureDetector(
       behavior: HitTestBehavior.deferToChild,
@@ -1231,7 +1648,18 @@ class _SwipeToReplyState extends State<_SwipeToReply> with SingleTickerProviderS
                 opacity: progress,
                 child: Transform.scale(
                   scale: 0.6 + 0.4 * progress,
-                  child: Icon(Icons.reply, color: _armed ? cs.primary : cs.outline),
+                  child: Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _armed ? Ember.amber : Ember.surface3,
+                      boxShadow: _armed
+                          ? [BoxShadow(color: Ember.amber.withValues(alpha: 0.5), blurRadius: 14)]
+                          : const [],
+                    ),
+                    child: Icon(Icons.reply_rounded, size: 18, color: _armed ? Ember.bg : Ember.text2),
+                  ),
                 ),
               ),
             ),
@@ -1257,33 +1685,39 @@ class _ReplyBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final who = target.role == ChatRole.assistant ? 'Claude' : 'your message';
     return Container(
-      margin: const EdgeInsets.fromLTRB(4, 0, 0, 6),
-      padding: const EdgeInsets.only(left: 10),
-      decoration: BoxDecoration(border: Border(left: BorderSide(color: cs.primary, width: 3))),
+      margin: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+      decoration: BoxDecoration(
+        color: Ember.surface2.withValues(alpha: 0.8),
+        borderRadius: BorderRadius.circular(14),
+        border: const Border(left: BorderSide(color: Ember.amber, width: 3)),
+      ),
       child: Row(
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Replying to $who', style: t.labelMedium?.copyWith(color: cs.primary)),
+                Text('Replying to $who', style: t.labelMedium?.copyWith(color: Ember.amber)),
+                const SizedBox(height: 2),
                 Text(
                   target.text.replaceAll(RegExp(r'\s+'), ' '),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                  style: t.bodySmall?.copyWith(color: Ember.text2),
                 ),
               ],
             ),
           ),
-          IconButton(
+          GhostIconButton(
+            icon: Icons.close_rounded,
             tooltip: 'Cancel reply',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.close, size: 18),
+            filled: false,
+            size: 36,
+            iconSize: 18,
             onPressed: onCancel,
           ),
         ],
@@ -1302,34 +1736,42 @@ class _AttachmentStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return SizedBox(
-      height: 72,
+      height: 76,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
         itemCount: images.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: 10),
         itemBuilder: (context, i) => Stack(
           clipBehavior: Clip.none,
           children: [
             GestureDetector(
               onTap: () => onOpen(images[i]),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Image.memory(images[i],
-                    width: 64, height: 64, fit: BoxFit.cover, cacheWidth: 192),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Ember.lineStrong),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(11),
+                  child: Image.memory(images[i], width: 64, height: 64, fit: BoxFit.cover, cacheWidth: 192),
+                ),
               ),
             ),
             Positioned(
-              top: -6,
-              right: -6,
+              top: -7,
+              right: -7,
               child: GestureDetector(
                 onTap: () => onRemove(i),
                 child: Container(
-                  decoration: BoxDecoration(color: cs.inverseSurface, shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                    color: Ember.text,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Ember.bg, width: 2),
+                  ),
                   padding: const EdgeInsets.all(2),
-                  child: Icon(Icons.close, size: 14, color: cs.onInverseSurface),
+                  child: const Icon(Icons.close_rounded, size: 12, color: Ember.bg),
                 ),
               ),
             ),
@@ -1340,7 +1782,7 @@ class _AttachmentStrip extends StatelessWidget {
   }
 }
 
-/// A picture inside a bubble: one we sent (bytes at hand) or one the PC has
+/// A picture inside a message: one we sent (bytes at hand) or one the PC has
 /// (fetched on demand, see [AppState.chatImage]). Tap to see it in full.
 class _ChatImageTile extends StatelessWidget {
   const _ChatImageTile.bytes(Uint8List this.bytes, {required this.onOpen})
@@ -1361,7 +1803,6 @@ class _ChatImageTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final remote = bytes == null ? AppState.instance.chatImage(pcId, sessionId, imageId) : null;
     final data = bytes ?? remote?.bytes;
     final Widget child;
@@ -1377,11 +1818,11 @@ class _ChatImageTile extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.broken_image_outlined, color: cs.outline),
+            const Icon(Icons.broken_image_outlined, color: Ember.text3),
             const SizedBox(height: 4),
             Text('${remote.error}\nTap to retry',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(color: cs.outline)),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Ember.text3)),
           ],
         ),
       );
@@ -1390,9 +1831,16 @@ class _ChatImageTile extends StatelessWidget {
         child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
       );
     }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Container(width: _size, height: _size, color: cs.surfaceContainerHighest, child: child),
+    return Container(
+      width: _size,
+      height: _size,
+      decoration: BoxDecoration(
+        color: Ember.surface3,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Ember.line),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: child,
     );
   }
 }
@@ -1407,7 +1855,8 @@ class _ImageViewer extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(backgroundColor: Colors.black, foregroundColor: Colors.white),
+      extendBodyBehindAppBar: true,
+      appBar: const GlassTopBar(title: Text('Picture')),
       body: SafeArea(
         child: InteractiveViewer(
           minScale: 1,
@@ -1428,31 +1877,34 @@ class _SelectTextScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      backgroundColor: Colors.transparent,
+      appBar: GlassTopBar(
         title: const Text('Select text'),
         actions: [
-          IconButton(
+          GhostIconButton(
+            icon: Icons.copy_all_rounded,
             tooltip: 'Copy all',
-            icon: const Icon(Icons.copy_all),
             onPressed: () {
               Clipboard.setData(ClipboardData(text: text));
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(const SnackBar(content: Text('Copied')));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
             },
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: SelectableText(text, style: Theme.of(context).textTheme.bodyLarge),
+      body: EmberBackground(
+        animate: false,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
+          child: SelectableText(text, style: Theme.of(context).textTheme.bodyLarge),
+        ),
       ),
     );
   }
 }
 
-/// One tool call as a compact grey line; tap to show it in full.
+/// One tool call as a quiet line on the rail; tap to show it in full.
 class _ToolLine extends StatelessWidget {
-  const _ToolLine({required this.item, required this.expanded, required this.onTap});
+  const _ToolLine({super.key, required this.item, required this.expanded, required this.onTap});
 
   final ChatItem item;
   final bool expanded;
@@ -1460,33 +1912,38 @@ class _ToolLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final style = TextStyle(color: cs.outline, fontSize: 12.5);
     final tool = item.tool.isEmpty ? 'Tool' : item.tool;
     final detail = item.text == item.tool ? '' : item.text;
-    return InkWell(
+    return PressScale(
+      scale: 0.99,
+      haptic: false,
       onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+        padding: const EdgeInsets.fromLTRB(2, 3, 2, 3),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 1),
-              child: Icon(Icons.build_outlined, size: 14, color: cs.outline),
+            const Padding(
+              padding: EdgeInsets.only(top: 3),
+              child: Icon(Icons.terminal_rounded, size: 13, color: Ember.text3),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 8),
             Expanded(
               child: Text.rich(
                 TextSpan(
                   children: [
-                    TextSpan(text: tool, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    TextSpan(
+                      text: tool,
+                      style: const TextStyle(fontWeight: FontWeight.w600, color: Ember.text2),
+                    ),
                     if (detail.isNotEmpty)
-                      TextSpan(text: '  $detail', style: const TextStyle(fontFamily: 'monospace')),
+                      TextSpan(
+                        text: '  $detail',
+                        style: TextStyle(fontFamily: Ember.mono(context), color: Ember.text3),
+                      ),
                   ],
                 ),
-                style: style,
+                style: const TextStyle(fontSize: 12.5, height: 1.4),
                 maxLines: expanded ? null : 1,
                 overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
               ),
@@ -1500,7 +1957,7 @@ class _ToolLine extends StatelessWidget {
 
 /// Consecutive tool calls, collapsed to one line ("5 tool calls · Bash, Edit…").
 class _ToolGroup extends StatelessWidget {
-  const _ToolGroup({required this.items, required this.expanded, required this.onToggle});
+  const _ToolGroup({super.key, required this.items, required this.expanded, required this.onToggle});
 
   final List<ChatItem> items;
   final bool expanded;
@@ -1508,51 +1965,61 @@ class _ToolGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final names = <String>[];
     for (final it in items) {
       final n = it.tool.isEmpty ? 'Tool' : it.tool;
       if (!names.contains(n)) names.add(n);
     }
-    final style = TextStyle(color: cs.outline, fontSize: 12.5);
+    const style = TextStyle(color: Ember.text3, fontSize: 12.5, height: 1.4);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        InkWell(
+        PressScale(
+          scale: 0.99,
+          haptic: false,
           onTap: onToggle,
-          borderRadius: BorderRadius.circular(6),
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+            padding: const EdgeInsets.fromLTRB(2, 4, 2, 4),
             child: Row(
               children: [
-                Icon(Icons.build_outlined, size: 14, color: cs.outline),
-                const SizedBox(width: 6),
+                const Icon(Icons.terminal_rounded, size: 13, color: Ember.text3),
+                const SizedBox(width: 8),
                 Text('${items.length} tool calls',
-                    style: style.copyWith(fontWeight: FontWeight.w600)),
-                const SizedBox(width: 6),
+                    style: style.copyWith(fontWeight: FontWeight.w600, color: Ember.text2)),
+                const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    names.join(', '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: style,
-                  ),
+                  child: Text(names.join(', '), maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
                 ),
-                Icon(expanded ? Icons.expand_less : Icons.expand_more, size: 18, color: cs.outline),
+                AnimatedRotation(
+                  turns: expanded ? 0.5 : 0,
+                  duration: Motion.base,
+                  curve: Motion.emphasized,
+                  child: const Icon(Icons.expand_more_rounded, size: 18, color: Ember.text3),
+                ),
               ],
             ),
           ),
         ),
-        if (expanded)
-          Padding(
-            padding: const EdgeInsets.only(left: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final it in items) _ToolLine(item: it, expanded: true, onTap: null),
-              ],
-            ),
-          ),
+        AnimatedSize(
+          duration: Motion.base,
+          curve: Motion.easeOut,
+          alignment: Alignment.topCenter,
+          child: expanded
+              ? Container(
+                  margin: const EdgeInsets.fromLTRB(8, 2, 0, 6),
+                  padding: const EdgeInsets.only(left: 10),
+                  decoration: const BoxDecoration(
+                    border: Border(left: BorderSide(color: Ember.lineStrong, width: 1.5)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final it in items) _ToolLine(item: it, expanded: true, onTap: null),
+                    ],
+                  ),
+                )
+              : const SizedBox(width: double.infinity),
+        ),
       ],
     );
   }
@@ -1562,7 +2029,6 @@ class _ToolGroup extends StatelessWidget {
 /// answers; tapping the card body opens the full answer screen.
 class _RequestCard extends StatelessWidget {
   const _RequestCard({
-    super.key,
     required this.entry,
     required this.sending,
     required this.onOpen,
@@ -1585,85 +2051,91 @@ class _RequestCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final r = entry.request;
-    final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
+    final color = Ember.requestColor(r.kind);
     final title = r.title.isEmpty ? AnswerScreen.kindLabel(r.kind) : r.title;
     final summary = r.summary.isNotEmpty ? r.summary : r.detail;
-    final summaryStyle = t.bodySmall?.copyWith(
-      color: cs.onSurfaceVariant,
-      fontFamily: r.kind == RequestKind.permission ? 'monospace' : null,
-    );
-    return Card(
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      color: cs.surfaceContainerHigh,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: cs.primary, width: 1.5),
-      ),
-      child: InkWell(
-        onTap: onOpen,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    return GlassCard(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 6),
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+      glow: sending ? null : color,
+      borderColor: color.withValues(alpha: sending ? 0.25 : 0.5),
+      fill: Ember.surface2.withValues(alpha: 0.92),
+      onTap: onOpen,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(AnswerScreen.iconFor(r.kind), size: 20, color: cs.primary),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              Hero(
+                tag: 'request:${entry.key}',
+                child: IconTile(icon: AnswerScreen.iconFor(r.kind), color: color, size: 34, iconSize: 17),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: t.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                        Expanded(
+                          child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.titleSmall),
                         ),
-                        if (summary.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Text(
-                              summary,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: summaryStyle,
-                            ),
-                          ),
+                        Text(AnswerScreen.kindLabel(r.kind), style: t.labelSmall?.copyWith(color: color)),
                       ],
                     ),
-                  ),
-                  Icon(Icons.chevron_right, size: 20, color: cs.outline),
-                ],
+                    if (summary.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text(
+                          summary,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: t.bodySmall?.copyWith(
+                            color: Ember.text2,
+                            fontFamily: r.kind == RequestKind.permission ? Ember.mono(context) : null,
+                            fontSize: r.kind == RequestKind.permission ? 12.5 : 13,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 8),
-              if (sending) _sendingRow(context) else _actions(context, r),
+              const SizedBox(width: 4),
+              const Padding(
+                padding: EdgeInsets.only(top: 7),
+                child: Icon(Icons.chevron_right_rounded, size: 20, color: Ember.text3),
+              ),
             ],
           ),
-        ),
+          const SizedBox(height: 10),
+          AnimatedSwitcher(
+            duration: Motion.base,
+            transitionBuilder: fadeUpTransition,
+            child: sending ? _sendingRow(context) : _actions(context, r),
+          ),
+        ],
       ),
     );
   }
 
   Widget _sendingRow(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      key: const ValueKey<String>('sending'),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          SizedBox(
+          const SizedBox(
             width: 14,
             height: 14,
-            child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+            child: CircularProgressIndicator(strokeWidth: 2, color: Ember.amber),
           ),
           const SizedBox(width: 10),
           Text(
-            'Sending…',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.outline),
+            'Sending your answer…',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Ember.text2),
           ),
         ],
       ),
@@ -1671,80 +2143,68 @@ class _RequestCard extends StatelessWidget {
   }
 
   Widget _actions(BuildContext context, CcRequest r) {
-    final cs = Theme.of(context).colorScheme;
-    final filled = FilledButton.styleFrom(
-      visualDensity: VisualDensity.compact,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-    final outlined = OutlinedButton.styleFrom(
-      visualDensity: VisualDensity.compact,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-    final danger = OutlinedButton.styleFrom(
-      foregroundColor: cs.error,
-      visualDensity: VisualDensity.compact,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-    final plain = TextButton.styleFrom(
-      visualDensity: VisualDensity.compact,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
     final List<Widget> buttons;
     switch (r.kind) {
       case RequestKind.plan:
         buttons = <Widget>[
-          FilledButton(
-            style: filled,
+          EmberButton(
+            label: 'Approve',
+            icon: Icons.check_rounded,
+            small: true,
             onPressed: () => onAnswer(Answers.approve()),
-            child: const Text('Approve'),
           ),
-          OutlinedButton(
-            style: danger,
+          EmberButton(
+            label: 'Reject',
+            small: true,
+            style: EmberButtonStyle.danger,
             onPressed: () => onAnswer(Answers.reject()),
-            child: const Text('Reject'),
           ),
-          TextButton(style: plain, onPressed: onOpen, child: const Text('Read plan')),
+          EmberButton(label: 'Read plan', small: true, style: EmberButtonStyle.ghost, onPressed: onOpen),
         ];
         break;
       case RequestKind.question:
         final q = _singleQuestion(r);
         if (q == null) {
           buttons = <Widget>[
-            FilledButton(style: filled, onPressed: onOpen, child: const Text('Answer')),
+            EmberButton(label: 'Answer', icon: Icons.edit_rounded, small: true, style: EmberButtonStyle.blue, onPressed: onOpen),
           ];
         } else {
           buttons = <Widget>[
             for (final o in q.options)
-              FilledButton.tonal(
-                style: filled,
+              EmberButton(
+                label: o.label,
+                small: true,
+                style: EmberButtonStyle.secondary,
                 onPressed: () => onAnswer(Answers.questions(<String, String>{q.question: o.label})),
-                child: Text(o.label),
               ),
-            OutlinedButton(style: outlined, onPressed: onOpen, child: const Text('Other…')),
+            EmberButton(label: 'Other…', small: true, style: EmberButtonStyle.ghost, onPressed: onOpen),
           ];
         }
         break;
       default: // permission
         buttons = <Widget>[
-          FilledButton(
-            style: filled,
+          EmberButton(
+            label: 'Allow',
+            icon: Icons.check_rounded,
+            small: true,
             onPressed: () => onAnswer(Answers.allow()),
-            child: const Text('Allow'),
           ),
           if (r.canAllowAlways)
-            FilledButton.tonal(
-              style: filled,
+            EmberButton(
+              label: 'Always',
+              small: true,
+              style: EmberButtonStyle.secondary,
               onPressed: () => onAnswer(Answers.allowAlways()),
-              child: const Text('Always'),
             ),
-          OutlinedButton(
-            style: danger,
+          EmberButton(
+            label: 'Deny',
+            small: true,
+            style: EmberButtonStyle.danger,
             onPressed: () => onAnswer(Answers.deny()),
-            child: const Text('Deny'),
           ),
         ];
     }
-    return Wrap(spacing: 8, runSpacing: 6, children: buttons);
+    return Wrap(key: const ValueKey<String>('actions'), spacing: 8, runSpacing: 8, children: buttons);
   }
 }
 
@@ -1756,16 +2216,20 @@ class _ErrorBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Material(
-      color: cs.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+      child: GlassCard(
+        padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+        radius: 16,
+        fill: const Color(0xFF2A1618).withValues(alpha: 0.94),
+        borderColor: Ember.danger.withValues(alpha: 0.45),
         child: Row(
           children: [
-            Icon(Icons.cloud_off_outlined, size: 20, color: cs.onErrorContainer),
+            const Icon(Icons.cloud_off_rounded, size: 18, color: Ember.danger),
             const SizedBox(width: 12),
-            Expanded(child: Text(text, style: TextStyle(color: cs.onErrorContainer))),
+            Expanded(
+              child: Text(text, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Ember.text)),
+            ),
             TextButton(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),

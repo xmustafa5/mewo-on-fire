@@ -44,6 +44,15 @@ To pair several PCs, repeat the steps on each PC. Removing a PC in the app stops
 notifications from it. To revoke a phone from the PC side, run `mewo revoke`.
 The app then shows that PC as "Unpaired".
 
+## Look and feel
+
+The app is dark only: warm charcoal, fire for what Claude is doing (a session
+that is working carries a small flame, one that needs you glows amber) and
+electric blue for everything that comes from the phone. Every list staggers in,
+cards press down under the finger, and the tab bar's lit segment slides. All of
+that follows the system's Reduce Motion setting: with it on, things appear in
+place and nothing pulses. The visual tokens live in `lib/ui/theme/ember.dart`.
+
 ## Behaviour
 
 - The app reconnects with an exponential backoff from 1 s to 60 s. It reconnects
