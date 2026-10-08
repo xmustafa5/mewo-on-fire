@@ -63,6 +63,7 @@ fn try_run() -> Option<String> {
         "session_id": session_id,
         "cwd": cwd,
         "transcript_path": str_of(&v, "transcript_path"),
+        "host_session_id": crate::hook::host_session_id(),
     });
     wait_for_message(&req)
 }

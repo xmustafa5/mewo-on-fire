@@ -374,6 +374,20 @@ function sizeNet() {
 sizeNet(); addEventListener('resize', () => { sizeNet(); layout(); });
 net.addEventListener('mousemove', (e) => { const r = net.getBoundingClientRect(); mouse = { x: e.clientX - r.left, y: e.clientY - r.top }; });
 net.addEventListener('mouseleave', () => { mouse = { x: -1, y: -1 }; });
+// A click on a session that runs in Claude Desktop opens it there.
+const bursts = [];
+net.addEventListener('click', () => {
+  if (!hover || hover.kind !== 'session') return;
+  const s = hover.s;
+  if (!s.desktop) return;
+  bursts.push({ x: hover.x, y: hover.y, t: 0, c: stateColor(s.state) });
+  const url = 'claude://claude.ai/epitaxy/' + encodeURIComponent(s.desktop);
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo) {
+    window.webkit.messageHandlers.mewo.postMessage({ cmd: 'open', url });
+  } else {
+    location.href = url;
+  }
+});
 
 let model = { sessions: [], daemon: null };
 function layout() {
@@ -448,7 +462,7 @@ function drawNet(now) {
   // hover
   hover = null; let best = 26;
   for (const n of nodes.values()) { if (n.kind === 'core') continue; const d = Math.hypot(n.x - mouse.x, n.y - mouse.y); if (d < best) { best = d; hover = n; } }
-  net.style.cursor = hover ? 'pointer' : 'crosshair';
+  net.style.cursor = hover && hover.kind === 'session' && hover.s.desktop ? 'pointer' : hover ? 'default' : 'crosshair';
 
   // edges
   for (const n of nodes.values()) {
@@ -528,11 +542,17 @@ function drawNet(now) {
     roundRectLabel(n.x, n.y + r + 8, trunc(title, 24), ended ? C.dim : '#fff', 10.5, 600);
     roundRectLabel(n.x, n.y + r + 22, stateLabel(s.state), col, 8.5, 700);
   }
+  // click bursts
+  for (let i = bursts.length - 1; i >= 0; i--) {
+    const b = bursts[i]; b.t += dt * 1.6;
+    if (b.t >= 1) { bursts.splice(i, 1); continue; }
+    nx.beginPath(); nx.arc(b.x, b.y, 14 + b.t * 70, 0, Math.PI * 2); nx.strokeStyle = b.c; nx.globalAlpha = (1 - b.t) * 0.9; nx.lineWidth = 2.5 * (1 - b.t) + 0.5; nx.stroke(); nx.globalAlpha = 1;
+  }
   // tooltip
   if (hover && hover.kind === 'session') {
     const s = hover.s;
     tip.style.display = 'block';
-    tip.innerHTML = `<div class="t">${esc(s.title || s.project || s.id)}</div><div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)} · ${s.last_ts ? hm(s.last_ts) : ''}${s.queued ? ` · ${s.queued} FROM PHONE` : ''}${s.listening ? '' : ' · NOT LISTENING'}</div><div class="x">${esc(s.last_text || '')}</div>`;
+    tip.innerHTML = `<div class="t">${esc(s.title || s.project || s.id)}</div><div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)} · ${s.last_ts ? hm(s.last_ts) : ''}${s.queued ? ` · ${s.queued} FROM PHONE` : ''}${s.listening ? '' : ' · NOT LISTENING'}</div><div class="x">${esc(s.last_text || '')}</div><div class="m" style="margin-top:8px;color:${s.desktop ? 'var(--cyan)' : 'var(--dim2)'}">${s.desktop ? '▶ CLICK TO OPEN IN CLAUDE DESKTOP' : 'NOT A CLAUDE DESKTOP SESSION'}</div>`;
     const tx = Math.min(W - 316, hover.x + 18), ty = Math.min(H - 120, hover.y + 18);
     tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
   } else if (hover && hover.kind === 'hub') {

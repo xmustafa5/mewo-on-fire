@@ -7,6 +7,7 @@ mod config;
 mod control;
 mod daemon;
 mod dashboard;
+mod desktop;
 mod hook;
 mod install;
 mod listen;

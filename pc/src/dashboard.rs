@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::config::now_ms;
-use crate::{control, paths};
+use crate::{control, desktop, paths};
 
 const HTML: &str = include_str!("../dashboard/index.html");
 pub const DEFAULT_PORT: u16 = 47824;
@@ -138,7 +138,8 @@ fn collect() -> Value {
         }
         match control::request_at(&path, &json!({"cmd": "status"}), TIMEOUT) {
             Ok(status) => {
-                let sessions = field(&path, json!({"cmd": "sessions"}), "sessions");
+                let mut sessions = field(&path, json!({"cmd": "sessions"}), "sessions");
+                desktop::tag(&mut sessions);
                 let events = field(&path, json!({"cmd": "events", "limit": 120}), "events");
                 let requests = field(&path, json!({"cmd": "requests"}), "requests");
                 return json!({

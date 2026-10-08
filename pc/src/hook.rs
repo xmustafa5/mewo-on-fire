@@ -62,6 +62,7 @@ pub fn map_request(v: &Value) -> Option<Value> {
     let session_id = field(v, "session_id");
     let transcript_path = field(v, "transcript_path");
     let effort = effort_level(v);
+    let host = host_session_id();
     if name == "UserPromptSubmit" {
         return Some(json!({
             "cmd": "session_state",
@@ -69,6 +70,7 @@ pub fn map_request(v: &Value) -> Option<Value> {
             "cwd": hook_cwd(v),
             "transcript_path": transcript_path,
             "effort": effort,
+            "host_session_id": host,
             "state": "working",
         }));
     }
@@ -79,7 +81,19 @@ pub fn map_request(v: &Value) -> Option<Value> {
         "session_id": session_id,
         "transcript_path": transcript_path,
         "effort": effort,
+        "host_session_id": host,
     }))
+}
+
+/// Claude Desktop's id of the session the hook runs in (v1.6): the app
+/// puts it in the environment of every Claude Code it starts. Empty in a
+/// terminal.
+pub fn host_session_id() -> String {
+    std::env::var("CLAUDE_CODE_HOST_SESSION_ID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.starts_with("local_") && s.len() < 80)
+        .unwrap_or_default()
 }
 
 /// `effort.level` from the hook input ("" if absent).

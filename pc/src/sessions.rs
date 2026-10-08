@@ -55,6 +55,10 @@ pub struct Session {
     pub last_ts: u64,
     pub last_text: String,
     pub queued: usize,
+    /// v1.6: Claude Desktop's id of the session (`local_…`), when the
+    /// session runs inside the desktop app; empty otherwise.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub desktop: String,
 }
 
 /// Private session facts from the hooks (`emit`, `session_state`, `listen`).
@@ -65,6 +69,8 @@ pub struct Meta {
     pub cwd: String,
     pub transcript_path: String,
     pub effort: String,
+    /// `CLAUDE_CODE_HOST_SESSION_ID` in the hook's environment (v1.6).
+    pub desktop: String,
 }
 
 impl Meta {
@@ -83,6 +89,7 @@ impl Meta {
             cwd: s("cwd"),
             transcript_path: s("transcript_path"),
             effort: s("effort"),
+            desktop: s("host_session_id"),
         }
     }
 }
@@ -241,6 +248,9 @@ impl Entry {
         if !meta.transcript_path.is_empty() && meta.transcript_path != self.transcript_path {
             self.transcript_path = meta.transcript_path.clone();
             self.scan_key = None;
+        }
+        if !meta.desktop.is_empty() {
+            self.session.desktop = meta.desktop.clone();
         }
         if !meta.effort.is_empty() {
             self.session.effort = meta.effort.clone();

@@ -500,3 +500,15 @@ by the user) in the session's folder; the phone asks while a chat is open.
   and offers the GitHub link and, when CI fails, a message to Claude asking
   it to fix the failures. The × hides one until the chat is opened again.
 
+
+
+## Session `desktop` (optional)
+
+A session that runs inside Claude Desktop carries `"desktop": "local_…"`,
+the app's own id of it, taken by the hooks from
+`CLAUDE_CODE_HOST_SESSION_ID` in their environment. Absent for sessions in
+a terminal. `claude://claude.ai/epitaxy/<desktop>` opens the session in the
+app; the operations console does that on a click. On macOS the console also
+reads the app's own records (`~/Library/Application Support/Claude/
+claude-code-sessions`) for sessions the hooks did not tag.
+\n

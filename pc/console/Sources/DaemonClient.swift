@@ -69,6 +69,41 @@ enum DaemonClient {
     return r[key] as? [Any] ?? []
   }
 
+  /// Claude Desktop's own records: Claude Code session id → the app's
+  /// `local_…` id, for sessions the daemon did not tag itself.
+  private static var desktopCache: (at: Date, map: [String: String])?
+  static func desktopIds() -> [String: String] {
+    if let c = desktopCache, Date().timeIntervalSince(c.at) < 30 { return c.map }
+    var out: [String: String] = [:]
+    let root = NSHomeDirectory() + "/Library/Application Support/Claude/claude-code-sessions"
+    let fm = FileManager.default
+    for account in (try? fm.contentsOfDirectory(atPath: root)) ?? [] {
+      let a = root + "/" + account
+      for org in (try? fm.contentsOfDirectory(atPath: a)) ?? [] {
+        let o = a + "/" + org
+        for name in (try? fm.contentsOfDirectory(atPath: o)) ?? [] where name.hasPrefix("local_") && name.hasSuffix(".json") {
+          guard let data = fm.contents(atPath: o + "/" + name),
+                let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let cli = j["cliSessionId"] as? String, !cli.isEmpty,
+                let desktop = j["sessionId"] as? String, desktop.hasPrefix("local_") else { continue }
+          out[cli] = desktop
+        }
+      }
+    }
+    desktopCache = (Date(), out)
+    return out
+  }
+
+  private static func tagged(_ sessions: [Any]) -> [Any] {
+    let ids = desktopIds()
+    if ids.isEmpty { return sessions }
+    return sessions.map { any in
+      guard var s = any as? [String: Any], let id = s["id"] as? String else { return any }
+      if (s["desktop"] as? String ?? "").isEmpty, let d = ids[id] { s["desktop"] = d }
+      return s
+    }
+  }
+
   /// Everything the page shows, from the first daemon that answers; the
   /// same shape as `mewo dashboard`'s `/api/state`.
   static func collect() -> [String: Any] {
@@ -81,7 +116,7 @@ enum DaemonClient {
         return [
           "ok": true,
           "daemon": status,
-          "sessions": list(at: c.path, ["cmd": "sessions"], "sessions"),
+          "sessions": tagged(list(at: c.path, ["cmd": "sessions"], "sessions")),
           "events": list(at: c.path, ["cmd": "events", "limit": 120], "events"),
           "requests": list(at: c.path, ["cmd": "requests"], "requests"),
           "legacy": c.legacy,

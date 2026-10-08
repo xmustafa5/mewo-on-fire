@@ -56,11 +56,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   /// The page says "ready" once its script is up; from then on it gets the
   /// state every two seconds.
   func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-    guard message.body as? String == "ready" else { return }
-    ready = true
-    timer?.invalidate()
-    timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.push() }
-    push()
+    if message.body as? String == "ready" {
+      ready = true
+      timer?.invalidate()
+      timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.push() }
+      push()
+      return
+    }
+    // {"cmd": "open", "url": "claude://…"}: a session clicked on the graph.
+    if let m = message.body as? [String: Any], m["cmd"] as? String == "open",
+       let raw = m["url"] as? String, let url = URL(string: raw), url.scheme == "claude" {
+      NSWorkspace.shared.open(url)
+    }
+  }
+
+  /// Links the page navigates to (claude://…) go to the app that owns them.
+  func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+               decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+    if let url = action.request.url, let scheme = url.scheme, scheme != "file" {
+      NSWorkspace.shared.open(url)
+      decisionHandler(.cancel)
+      return
+    }
+    decisionHandler(.allow)
   }
 
   private func push() {
