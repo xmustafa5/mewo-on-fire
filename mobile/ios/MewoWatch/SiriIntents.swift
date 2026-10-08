@@ -65,7 +65,7 @@ struct WatchSessionQuery: EntityStringQuery {
 struct TellClaudeWatchIntent: AppIntent {
   static var title: LocalizedStringResource = "Tell Claude Code"
   static var description = IntentDescription(
-    "Sends a message to a Claude Code session on your PC, through your iPhone.")
+    "Sends a message to a Claude Code session on your PC, through your phone.")
   static var openAppWhenRun = false
 
   @Parameter(title: "Message", requestValueDialog: "What do you want to tell Claude?")
@@ -121,7 +121,7 @@ struct TellClaudeWatchIntent: AppIntent {
     } catch {
       // Not reachable from here: the iPhone takes it from its queue.
       if link.handOver(pcId: target.pcId, sessionId: target.sessionId, text: text) {
-        return .result(dialog: "Handed to your iPhone for \(target.name); it sends it when it can.")
+        return .result(dialog: "Handed to your phone for \(target.name); it sends it when it can.")
       }
       return .result(dialog: "Not sent: \(error.localizedDescription)")
     }
