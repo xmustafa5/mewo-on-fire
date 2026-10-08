@@ -71,6 +71,9 @@ typedef LinkImageCallback = Future<void> Function(PcLink link, Map<String, dynam
 /// `prs` (v1.6): the open pull requests of a session's repository.
 typedef LinkPrsCallback = Future<void> Function(PcLink link, Map<String, dynamic> prs);
 
+/// `new_session_result` (v1.6).
+typedef LinkNewSessionCallback = Future<void> Function(PcLink link, String clientId, bool ok, String error);
+
 typedef LinkSendResultCallback = Future<void> Function(
     PcLink link, String clientId, String status, String reason);
 
@@ -94,6 +97,7 @@ class PcLink {
     required this.onImage,
     required this.onSendResult,
     required this.onPrs,
+    required this.onNewSessionResult,
   });
 
   final PairedPc pc;
@@ -108,6 +112,7 @@ class PcLink {
   final LinkImageCallback onImage;
   final LinkSendResultCallback onSendResult;
   final LinkPrsCallback onPrs;
+  final LinkNewSessionCallback onNewSessionResult;
 
   static const Duration _minBackoff = Duration(seconds: 1);
   static const Duration _maxBackoff = Duration(seconds: 60);
@@ -220,6 +225,11 @@ class PcLink {
 
   /// v1.6: the pull requests of the session's repository → `prs`.
   bool getPrs(String sessionId) => _sendFrame({'type': 'get_prs', 'session_id': sessionId});
+
+  /// v1.6: a new Claude Code session in Claude Desktop on the PC, with
+  /// [prompt] as its first message → `new_session_result`.
+  bool newSession(String clientId, String cwd, String prompt) =>
+      _sendFrame({'type': 'new_session', 'client_id': clientId, 'cwd': cwd, 'prompt': prompt});
 
   /// Asks for a session's chat (reply → [onChat]). False if not connected.
   bool getChat(String sessionId, {int limit = 100}) =>
@@ -508,6 +518,12 @@ class PcLink {
           if (id is! String || id.isEmpty) continue;
           try {
             await onChat(this, msg);
+          } catch (_) {}
+        } else if (type == 'new_session_result') {
+          final id = msg['client_id'];
+          if (id is! String || id.isEmpty) continue;
+          try {
+            await onNewSessionResult(this, id, msg['ok'] == true, msg['error'] is String ? msg['error'] as String : '');
           } catch (_) {}
         } else if (type == 'prs') {
           final id = msg['session_id'];

@@ -21,6 +21,7 @@ use crate::paths;
 use crate::requests::{AskReply, Request};
 use crate::sessions::{ListenReply, ListenStart, Meta};
 use crate::store::Event;
+use crate::desktop;
 
 const MAX_REQUEST_BYTES: u64 = 1 << 20;
 /// `mewo chat`: default and maximum number of items.
@@ -243,6 +244,15 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             json!({"ok": true, "last_id": last, "events": state.events_since(last.saturating_sub(n))})
         }
         "requests" => json!({"ok": true, "requests": state.pending_requests()}),
+        // v1.6: a new session in Claude Desktop (the console's "New session").
+        "new_session" => {
+            let cwd = req.get("cwd").and_then(Value::as_str).unwrap_or("");
+            let prompt = req.get("prompt").and_then(Value::as_str).unwrap_or("");
+            match desktop::open_new_session(cwd, prompt) {
+                Ok(()) => json!({"ok": true}),
+                Err(e) => json!({"ok": false, "error": e}),
+            }
+        }
         _ => json!({"ok": false, "error": "unknown_cmd"}),
     }
 }

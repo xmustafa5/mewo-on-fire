@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Client of the daemon's local control socket (see PROTOCOL.md): one
@@ -102,6 +103,35 @@ enum DaemonClient {
       if (s["desktop"] as? String ?? "").isEmpty, let d = ids[id] { s["desktop"] = d }
       return s
     }
+  }
+
+  /// A new Claude Code session in Claude Desktop with [prompt] as its first
+  /// message: through this daemon when it runs (its log sees it), else by
+  /// opening the link from here (a legacy daemon has no such command).
+  static func newSession(cwd: String, prompt: String) -> [String: Any] {
+    let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.isEmpty { return ["ok": false, "error": "The first message is empty"] }
+    for c in candidates where !c.legacy && FileManager.default.fileExists(atPath: c.path) {
+      if let r = try? request(at: c.path, ["cmd": "new_session", "cwd": cwd, "prompt": text], timeout: 10) {
+        return ["ok": r["ok"] as? Bool ?? false, "error": r["error"] as? String ?? ""]
+      }
+    }
+    guard FileManager.default.fileExists(atPath: "/Applications/Claude.app")
+      || FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Applications/Claude.app") else {
+      return ["ok": false, "error": "Claude Desktop is not installed on this Mac"]
+    }
+    var items = [URLQueryItem(name: "q", value: text), URLQueryItem(name: "source", value: "mewo")]
+    if !cwd.isEmpty {
+      guard FileManager.default.fileExists(atPath: cwd) else { return ["ok": false, "error": "No such folder: \(cwd)"] }
+      items.append(URLQueryItem(name: "folder", value: cwd))
+    }
+    var comps = URLComponents(); comps.scheme = "claude"; comps.host = "code"; comps.path = "/new"; comps.queryItems = items
+    guard let url = comps.url else { return ["ok": false, "error": "Could not build the link"] }
+    var opened = false
+    let done = DispatchSemaphore(value: 0)
+    DispatchQueue.main.async { opened = NSWorkspace.shared.open(url); done.signal() }
+    done.wait()
+    return opened ? ["ok": true] : ["ok": false, "error": "Claude Desktop did not take the link"]
   }
 
   /// Everything the page shows, from the first daemon that answers; the

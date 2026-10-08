@@ -95,6 +95,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   final Map<String, ChatState> _chats = <String, ChatState>{};
 
+  /// New sessions asked of a PC (v1.6), by client id, until it answers.
+  final Map<String, Completer<String>> _newSessions = <String, Completer<String>>{};
+
   /// Pull requests by session key (v1.6), while a chat is open.
   final Map<String, PrList> _prs = <String, PrList>{};
   final Map<String, Timer> _prsTimers = <String, Timer>{};
@@ -345,6 +348,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _onImage(msg);
     } else if (type == 'prs') {
       _onPrs(msg);
+    } else if (type == 'new_session_result') {
+      final c = _newSessions.remove('${msg['client_id']}');
+      c?.complete(msg['ok'] == true ? '' : (msg['error'] is String && (msg['error'] as String).isNotEmpty ? msg['error'] as String : 'The PC could not start it'));
     } else if (type == 'send_result') {
       _onSendResult(msg);
     }
@@ -570,6 +576,33 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _watched.remove(key);
     _chatRefreshTimers.remove(key)?.cancel();
     _prsTimers.remove(key)?.cancel();
+  }
+
+  // ---- new sessions (v1.6) ----
+
+  /// Asks [pcId] to start a Claude Code session in Claude Desktop with
+  /// [prompt] as its first message, in [cwd] when given. Resolves to an
+  /// empty string, or the reason it did not happen.
+  Future<String> newSession(String pcId, {String cwd = '', required String prompt}) async {
+    if (prompt.trim().isEmpty) return 'Write the first message';
+    if (!await _isRunning()) return 'The background service is stopped. Start it on Home.';
+    final clientId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final c = Completer<String>();
+    _newSessions[clientId] = c;
+    try {
+      sendToTask(jsonEncode({'cmd': 'new_session', 'pc_id': pcId, 'client_id': clientId, 'cwd': cwd, 'prompt': prompt.trim()}));
+    } catch (_) {
+      _newSessions.remove(clientId);
+      return 'Could not reach the background service';
+    }
+    final result = await c.future.timeout(const Duration(seconds: 20), onTimeout: () => 'No answer from ${pcNameFor(pcId)}');
+    _newSessions.remove(clientId);
+    if (result.isEmpty) {
+      // Desktop sends the prompt; the hooks bring the session here.
+      Timer(const Duration(seconds: 4), refreshSessions);
+      Timer(const Duration(seconds: 12), refreshSessions);
+    }
+    return result;
   }
 
   // ---- pull requests (v1.6) ----

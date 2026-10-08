@@ -126,6 +126,33 @@ main {
 }
 #offline .big { font-size: 22px; letter-spacing: 0.4em; text-shadow: 0 0 24px rgba(255,61,31,.6); }
 #offline .why { color: var(--dim); font-size: 11px; letter-spacing: 0.08em; max-width: 520px; line-height: 1.6; }
+#newbtn {
+  position: absolute; top: 12px; left: 14px; z-index: 5; cursor: pointer;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.28em; color: var(--bg);
+  background: linear-gradient(135deg, #ff3d1f, #ff6b35, #ffb347); border: 0; padding: 9px 14px;
+  box-shadow: 0 6px 20px rgba(255,107,53,.35);
+}
+#newbtn:hover { filter: brightness(1.08); }
+#newsess {
+  position: absolute; top: 52px; left: 14px; width: 360px; display: none; z-index: 7;
+  background: rgba(6, 12, 20, 0.96); border: 1px solid var(--cyan-line); padding: 14px 16px;
+  box-shadow: 0 16px 50px rgba(0,0,0,.7), 0 0 30px rgba(79,209,255,.12);
+}
+#newsess .t { font-weight: 700; color: #fff; font-size: 14px; margin-bottom: 4px; }
+#newsess .m { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); margin-bottom: 10px; }
+#newsess label { display: block; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.3em; color: var(--dim2); margin: 8px 0 5px; }
+#newsess select, #newsess textarea {
+  width: 100%; box-sizing: border-box; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text);
+  font: 12.5px/1.4 var(--sans); padding: 8px 10px; outline: none;
+}
+#newsess select:focus, #newsess textarea:focus { border-color: var(--cyan); }
+#newsess textarea { min-height: 92px; resize: vertical; }
+#newsess .row { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+#newsess .go { flex: 1; cursor: pointer; border: 0; padding: 10px; font: 700 12px var(--sans); letter-spacing: 0.08em; color: var(--bg); background: linear-gradient(135deg, #ff3d1f, #ff6b35, #ffb347); }
+#newsess .go:disabled { opacity: .45; cursor: default; }
+#newsess .cancel { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); padding: 10px 12px; font: 12px var(--sans); }
+#newsess .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-top: 8px; color: var(--amber); min-height: 14px; }
+#newsess .msg.bad { color: var(--heat); }
 #detail {
   position: absolute; right: 14px; bottom: 44px; width: 330px; display: none; z-index: 6;
   background: rgba(6, 12, 20, 0.95); border: 1px solid var(--cyan-line); padding: 14px 16px 14px;
@@ -269,6 +296,17 @@ footer .seg { display: flex; gap: 22px; }
     <span class="c tl"></span><span class="c tr"></span><span class="c bl"></span><span class="c br"></span>
     <canvas id="net"></canvas>
     <div id="tip"></div>
+    <button id="newbtn" type="button">+ NEW SESSION</button>
+    <div id="newsess">
+      <div class="t">New session</div>
+      <div class="m">CLAUDE DESKTOP STARTS IT WITH YOUR FIRST MESSAGE</div>
+      <label for="ns-project">PROJECT</label>
+      <select id="ns-project"><option value="">Desktop's current project</option></select>
+      <label for="ns-prompt">FIRST MESSAGE</label>
+      <textarea id="ns-prompt" placeholder="What should Claude do?"></textarea>
+      <div class="row"><button class="go" id="ns-go" type="button" disabled>START SESSION</button><button class="cancel" id="ns-cancel" type="button">Cancel</button></div>
+      <div class="msg" id="ns-msg"></div>
+    </div>
     <div id="detail"></div>
     <div id="legacy">LEGACY DAEMON · FEED OFF UNTIL <b>mewo install</b></div>
     <div id="legend">
@@ -405,6 +443,39 @@ function openUrl(url) {
     window.open(url, '_blank', 'noopener');
   }
 }
+// New session: a project the daemon has seen (or Desktop's current one) and a first message.
+const ns = { box: $('newsess'), project: $('ns-project'), prompt: $('ns-prompt'), go: $('ns-go'), msg: $('ns-msg') };
+let nsPending = null;
+function fillProjects() {
+  const seen = new Set(); const opts = ['<option value="">Desktop\'s current project</option>'];
+  for (const s of model.sessions || []) {
+    if (!s.cwd || seen.has(s.cwd)) continue; seen.add(s.cwd);
+    opts.push(`<option value="${esc(s.cwd)}">${esc(s.project || s.cwd.split('/').pop())} — ${esc(s.cwd)}</option>`);
+    if (seen.size >= 12) break;
+  }
+  const cur = ns.project.value; ns.project.innerHTML = opts.join(''); ns.project.value = cur;
+}
+$('newbtn').addEventListener('click', () => { fillProjects(); ns.box.style.display = 'block'; ns.msg.textContent = ''; ns.msg.className = 'msg'; ns.prompt.focus(); });
+$('ns-cancel').addEventListener('click', () => { ns.box.style.display = 'none'; });
+ns.prompt.addEventListener('input', () => { ns.go.disabled = !ns.prompt.value.trim(); });
+function newSessionResult(r) {
+  nsPending = null; ns.go.disabled = !ns.prompt.value.trim();
+  if (r && r.ok) { ns.msg.className = 'msg'; ns.msg.textContent = 'STARTED · IT APPEARS HERE IN A MOMENT'; ns.prompt.value = ''; ns.go.disabled = true; setTimeout(() => { ns.box.style.display = 'none'; }, 1800); }
+  else { ns.msg.className = 'msg bad'; ns.msg.textContent = (r && r.error) || 'The PC could not start it'; }
+}
+window.__newSessionResult = newSessionResult;
+$('ns-go').addEventListener('click', async () => {
+  const prompt = ns.prompt.value.trim(); if (!prompt || nsPending) return;
+  const cwd = ns.project.value; ns.go.disabled = true; ns.msg.className = 'msg'; ns.msg.textContent = 'ASKING CLAUDE DESKTOP…';
+  nsPending = { cwd, prompt };
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo) {
+    window.webkit.messageHandlers.mewo.postMessage({ cmd: 'new_session', cwd, prompt });
+    setTimeout(() => { if (nsPending) newSessionResult({ ok: false, error: 'No answer from the Mac app' }); }, 15000);
+  } else {
+    try { const r = await fetch('/api/new_session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cwd, prompt }) }); newSessionResult(await r.json()); }
+    catch (e) { newSessionResult({ ok: false, error: 'The console process did not answer' }); }
+  }
+});
 // A click on a session shows its card: open it in Claude Desktop, open what it made.
 const bursts = [];
 const detail = $('detail');

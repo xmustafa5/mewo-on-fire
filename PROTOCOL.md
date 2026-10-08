@@ -524,3 +524,16 @@ oldest first, at most 20. `kind` comes from the files the call sent
 phone shows them above the chat input and opens them; the console lists them
 on a session's card.
 
+## New session (v1.6)
+
+- Phone → PC: `{"type":"new_session","client_id":"…","cwd":"<folder or empty>","prompt":"<first message>"}`.
+- PC → phone: `{"type":"new_session_result","client_id":"…","ok":true|false,"error":"…"}`.
+- Control socket: `{"cmd":"new_session","cwd","prompt"}` → `{"ok", "error"}`.
+
+The daemon opens `claude://code/new?q=<prompt>&folder=<cwd>&source=mewo` with
+`open`; Claude Desktop creates the session and sends the prompt itself. The
+session then reaches the phone through the hooks like any other, a few
+seconds later. macOS with Claude Desktop only; a Linux PC answers with an
+error. Whether Desktop honours `folder` is its own business: when it does
+not, the session opens in the project Desktop has in front.
+

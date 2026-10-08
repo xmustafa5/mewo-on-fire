@@ -71,10 +71,14 @@ fn handle(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     reader.read_line(&mut line)?;
+    let mut content_length = 0usize;
     loop {
         let mut h = String::new();
         if reader.read_line(&mut h)? == 0 || h == "\r\n" || h == "\n" {
             break;
+        }
+        if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+            content_length = v.trim().parse().unwrap_or(0).min(65536);
         }
     }
     let mut parts = line.split_whitespace();
@@ -83,6 +87,15 @@ fn handle(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
     let (status, ctype, body) = match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => ("200 OK", "text/html; charset=utf-8", HTML.to_string()),
         ("GET", "/api/state") => ("200 OK", "application/json; charset=utf-8", state_json(cache)),
+        ("POST", "/api/new_session") => {
+            let mut raw = vec![0u8; content_length];
+            std::io::Read::read_exact(&mut reader, &mut raw)?;
+            let req: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+            let cwd = req.get("cwd").and_then(Value::as_str).unwrap_or("");
+            let prompt = req.get("prompt").and_then(Value::as_str).unwrap_or("");
+            let reply = new_session(cwd, prompt);
+            ("200 OK", "application/json; charset=utf-8", reply.to_string())
+        }
         _ => ("404 Not Found", "text/plain; charset=utf-8", "not found".to_string()),
     };
     write!(
@@ -104,6 +117,24 @@ fn state_json(cache: &Cache) -> String {
     let s = collect().to_string();
     *cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), s.clone()));
     s
+}
+
+/// The console's "New session": through the daemon when it is this one
+/// (so its log sees it), else straight from here (a legacy daemon has no
+/// such command).
+fn new_session(cwd: &str, prompt: &str) -> Value {
+    for (path, legacy) in sockets() {
+        if !path.exists() || legacy {
+            continue;
+        }
+        if let Ok(v) = control::request_at(&path, &json!({"cmd": "new_session", "cwd": cwd, "prompt": prompt}), TIMEOUT) {
+            return v;
+        }
+    }
+    match desktop::open_new_session(cwd, prompt) {
+        Ok(()) => json!({"ok": true}),
+        Err(e) => json!({"ok": false, "error": e}),
+    }
 }
 
 /// Control sockets to try: this daemon's, then a legacy `ccnotify` one.

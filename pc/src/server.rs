@@ -25,6 +25,7 @@ use crate::sessions::Session;
 use crate::store::Event;
 use crate::transcript;
 use crate::uploads;
+use crate::desktop;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
 type WsSink = SplitSink<Ws, Message>;
@@ -371,8 +372,32 @@ async fn handle_frame(
         "get_image" => handle_get_image(state, sink, &msg).await,
         "send" => handle_send(state, device, sink, &msg).await,
         "get_prs" => handle_get_prs(state, sink, &msg).await,
+        "new_session" => handle_new_session(device, sink, &msg).await,
         _ => Ok(()),
     }
+}
+
+/// `new_session` → `new_session_result` (v1.6): a new Claude Code session in
+/// Claude Desktop on this PC, with the phone's text as its first message.
+async fn handle_new_session(device: &Device, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    let cwd = str_field(msg, "cwd").to_string();
+    let prompt = str_field(msg, "prompt").to_string();
+    let client_id = str_field(msg, "client_id").to_string();
+    let result = tokio::task::block_in_place(|| desktop::open_new_session(&cwd, &prompt));
+    match &result {
+        Ok(()) => eprintln!("mewo: device {} ({}) started a session", device.id, device.name),
+        Err(e) => eprintln!("mewo: device {} ({}) could not start a session: {e}", device.id, device.name),
+    }
+    send_json(
+        sink,
+        &json!({
+            "type": "new_session_result",
+            "client_id": client_id,
+            "ok": result.is_ok(),
+            "error": result.err().unwrap_or_default(),
+        }),
+    )
+    .await
 }
 
 /// `get_prs` → `prs` (v1.6): the open pull requests of the session's

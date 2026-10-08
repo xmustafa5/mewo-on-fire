@@ -94,3 +94,54 @@ pub fn tag(sessions: &mut Value) {
         }
     }
 }
+
+/// Starts a new Claude Code session in Claude Desktop (v1.6) with [prompt]
+/// as its first message, in [cwd] when Desktop honours the folder. The app
+/// owns the `claude://` scheme, so this is one `open` on macOS.
+pub fn open_new_session(cwd: &str, prompt: &str) -> Result<(), String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err("The first message is empty".to_string());
+    }
+    if !cfg!(target_os = "macos") {
+        return Err("Starting sessions needs Claude Desktop, which runs on macOS".to_string());
+    }
+    if !std::path::Path::new("/Applications/Claude.app").exists()
+        && !std::path::Path::new(&format!("{}/Applications/Claude.app", std::env::var("HOME").unwrap_or_default())).exists()
+    {
+        return Err("Claude Desktop is not installed on this Mac".to_string());
+    }
+    let mut url = format!("claude://code/new?q={}&source=mewo", percent(prompt));
+    let cwd = cwd.trim();
+    if !cwd.is_empty() {
+        if !std::path::Path::new(cwd).is_dir() {
+            return Err(format!("No such folder on this Mac: {cwd}"));
+        }
+        url.push_str(&format!("&folder={}", percent(cwd)));
+    }
+    let status = std::process::Command::new("open")
+        .arg(&url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("could not run open: {e}"))?;
+    if status.success() {
+        eprintln!("mewo: new session asked of Claude Desktop ({} chars{})", prompt.chars().count(), if cwd.is_empty() { String::new() } else { format!(", in {cwd}") });
+        Ok(())
+    } else {
+        Err("Claude Desktop did not take the link".to_string())
+    }
+}
+
+/// Percent-encoding for a query value (RFC 3986 unreserved stay as they are).
+fn percent(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}

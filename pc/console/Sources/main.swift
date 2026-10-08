@@ -63,6 +63,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
       push()
       return
     }
+    // {"cmd": "new_session", "cwd", "prompt"}: the console's New session form.
+    if let m = message.body as? [String: Any], m["cmd"] as? String == "new_session" {
+      let cwd = m["cwd"] as? String ?? ""
+      let prompt = m["prompt"] as? String ?? ""
+      queue.async { [weak self] in
+        let reply = DaemonClient.newSession(cwd: cwd, prompt: prompt)
+        let json = (try? JSONSerialization.data(withJSONObject: reply)).flatMap { String(data: $0, encoding: .utf8) } ?? "{\"ok\":false}"
+        DispatchQueue.main.async { self?.web.evaluateJavaScript("window.__newSessionResult(\(json))", completionHandler: nil) }
+      }
+      return
+    }
     // {"cmd": "open", "url": "claude://…"}: a session clicked on the graph.
     if let m = message.body as? [String: Any], m["cmd"] as? String == "open",
        let raw = m["url"] as? String, let url = URL(string: raw),

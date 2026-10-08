@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../models.dart';
 import 'chat_screen.dart';
+import 'new_session_sheet.dart';
 import 'history_tab.dart' show relativeTime;
 import 'home_screen.dart' show EmberTabBar;
 import 'theme/ember.dart';
@@ -81,6 +82,12 @@ class _SessionsTabState extends State<SessionsTab> {
                         tooltip: 'Refresh',
                         onPressed: state.refreshSessions,
                       ),
+                      GhostIconButton(
+                        icon: Icons.add_rounded,
+                        tooltip: 'New session',
+                        color: Ember.amber,
+                        onPressed: state.pcs.isEmpty ? null : () => showNewSessionSheet(context),
+                      ),
                     ],
                   ),
                 ),
@@ -93,6 +100,14 @@ class _SessionsTabState extends State<SessionsTab> {
                           ? 'Your Claude Code sessions show up here once a PC is paired.'
                           : 'They appear here as soon as Claude Code runs on a paired PC. '
                               'If a PC was set up before sessions existed, run `mewo install` on it again.',
+                      action: state.pcs.isEmpty
+                          ? null
+                          : EmberButton(
+                              label: 'Start a session',
+                              icon: Icons.add_rounded,
+                              shimmer: true,
+                              onPressed: () => showNewSessionSheet(context),
+                            ),
                     ),
                   )
                 else
