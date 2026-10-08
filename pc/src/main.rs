@@ -44,6 +44,8 @@ Commands:
   sessions       List Claude Code sessions (state, listening, queued phone messages)
   chat <session> Show the last 20 chat items of a session (id prefix from `sessions`)
   test           Send a test notification
+  demo           Put a sample session (with its chat) and event in the app, for a
+                 first look without Claude Code running
   test-ask       Send a test permission request and print the phone's answer
   relay <url>    Use a relay so phones also connect away from the LAN (`relay off`
                  to stop; see relay/ for the relay itself)
@@ -115,6 +117,7 @@ fn main() {
             }
         },
         "test" => cli::test(),
+        "demo" => cli::demo(),
         "test-ask" => cli::test_ask(),
         "relay" => match args.get(1) {
             Some(url) => cli::relay(url),
