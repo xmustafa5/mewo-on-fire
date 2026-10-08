@@ -205,6 +205,14 @@ and requests beside it. It is served by that command on this machine only
 socket, so it also works with a daemon from before the rename, just without
 the feed. Honours the system's Reduce Motion setting.
 
+**As a Mac app** (no browser, no server): [`console/`](console/) wraps the
+same page in a window of its own, with a Dock icon and full screen, fed
+straight from the daemon's socket.
+
+```sh
+pc/console/install.sh      # builds and installs "~/Applications/Mewo Console.app", then opens it
+```
+
 ## Firewall
 
 The phone connects to TCP port `47821`; discovery uses mDNS (UDP 5353).

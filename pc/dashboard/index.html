@@ -633,7 +633,15 @@ async function poll() {
   } catch (e) { apply({ ok: false, error: 'The console process stopped (`mewo dashboard`).' }); }
 }
 setInterval(() => { if (lastSync) $('sync').textContent = `SYNC ${Math.max(0, Math.round((Date.now() - lastSync) / 1000))}s AGO`; }, 1000);
-poll(); setInterval(poll, 2000);
+// Inside the Mac app (pc/console) the page gets its state pushed instead of polling.
+const native = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo);
+window.__apply = (s) => { apply(s); lastSync = Date.now(); };
+if (native) {
+  document.body.classList.add('native');
+  window.webkit.messageHandlers.mewo.postMessage('ready');
+} else {
+  poll(); setInterval(poll, 2000);
+}
 })();
 </script>
 </body>
