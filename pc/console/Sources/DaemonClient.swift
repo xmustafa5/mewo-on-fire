@@ -8,17 +8,18 @@ enum DaemonClient {
   struct NotRunning: Error {}
   struct BadReply: Error {}
 
-  /// Sockets to try, this daemon's first, then legacy ones.
+  /// Sockets to try: this daemon's (the same rule as `paths::socket_path()`:
+  /// the state folder, or /tmp only when the home path is too long for a
+  /// socket), then a legacy `ccnotify` daemon's.
   static var candidates: [(path: String, legacy: Bool)] {
     let home = NSHomeDirectory()
     let env = ProcessInfo.processInfo.environment
     let user = env["USER"] ?? env["LOGNAME"] ?? "user"
-    return [
-      (home + "/.local/state/mewo-on-fire/mewo-on-fire.sock", false),
-      ("/tmp/mewo-on-fire-\(user).sock", false),
-      (home + "/.local/state/ccnotify/ccnotify.sock", true),
-      ("/tmp/ccnotify-\(user).sock", true),
-    ]
+    let state = home + "/.local/state/mewo-on-fire/mewo-on-fire.sock"
+    let current = state.utf8.count <= 103 ? state : "/tmp/mewo-on-fire-\(user).sock"
+    let legacyState = home + "/.local/state/ccnotify/ccnotify.sock"
+    let legacy = legacyState.utf8.count <= 103 ? legacyState : "/tmp/ccnotify-\(user).sock"
+    return [(current, false), (legacy, true)]
   }
 
   static func request(at socketPath: String, _ request: [String: Any], timeout: Int = 3) throws -> [String: Any] {
