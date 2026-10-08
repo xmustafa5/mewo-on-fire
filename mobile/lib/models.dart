@@ -326,6 +326,43 @@ class SessionState {
   static const ended = 'ended';
 }
 
+/// Something a session published with Claude's Artifact tool (PROTOCOL.md
+/// v1.6): a design canvas, a document, a page.
+class SessionArtifact {
+  const SessionArtifact({required this.url, this.title = '', this.kind = 'artifact', this.ts = 0});
+
+  final String url;
+  final String title;
+
+  /// `design`, `document`, `page` or `artifact`.
+  final String kind;
+  final int ts;
+
+  factory SessionArtifact.fromJson(Map<String, dynamic> j) => SessionArtifact(
+        url: _asString(j['url']),
+        title: _asString(j['title']),
+        kind: _asString(j['kind']).isEmpty ? 'artifact' : _asString(j['kind']),
+        ts: _asInt(j['ts']),
+      );
+
+  Map<String, dynamic> toJson() => {'url': url, 'title': title, 'kind': kind, 'ts': ts};
+
+  String get kindLabel {
+    switch (kind) {
+      case 'design':
+        return 'Design';
+      case 'document':
+        return 'Document';
+      case 'page':
+        return 'Page';
+      default:
+        return 'Artifact';
+    }
+  }
+
+  DateTime get time => DateTime.fromMillisecondsSinceEpoch(ts);
+}
+
 /// A Claude Code session known to a PC daemon (PROTOCOL.md v1.2).
 class CcSession {
   const CcSession({
@@ -341,6 +378,7 @@ class CcSession {
     this.lastTs = 0,
     this.lastText = '',
     this.queued = 0,
+    this.artifacts = const <SessionArtifact>[],
   });
 
   final String id; // full session id
@@ -356,6 +394,9 @@ class CcSession {
   final String lastText;
   final int queued;
 
+  /// v1.6: designs, documents and pages the session published, oldest first.
+  final List<SessionArtifact> artifacts;
+
   factory CcSession.fromJson(Map<String, dynamic> j) => CcSession(
         id: _asString(j['id']),
         short: _asString(j['short']),
@@ -369,6 +410,11 @@ class CcSession {
         lastTs: _asInt(j['last_ts']),
         lastText: _asString(j['last_text']),
         queued: _asInt(j['queued']),
+        artifacts: <SessionArtifact>[
+          if (j['artifacts'] is List)
+            for (final a in j['artifacts'] as List)
+              if (a is Map) SessionArtifact.fromJson(Map<String, dynamic>.from(a)),
+        ],
       );
 
   Map<String, dynamic> toJson() => {
@@ -384,6 +430,7 @@ class CcSession {
         'last_ts': lastTs,
         'last_text': lastText,
         'queued': queued,
+        if (artifacts.isNotEmpty) 'artifacts': artifacts.map((a) => a.toJson()).toList(),
       };
 
   bool get ended => state == SessionState.ended;

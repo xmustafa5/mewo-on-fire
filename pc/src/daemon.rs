@@ -328,6 +328,7 @@ impl AppState {
                         key,
                         title: tr.title,
                         agents_running: tr.agents_running,
+                        artifacts: tr.artifacts,
                     };
                     self.push_session(lock(&self.sessions).apply_scan(result));
                 }

@@ -126,6 +126,26 @@ main {
 }
 #offline .big { font-size: 22px; letter-spacing: 0.4em; text-shadow: 0 0 24px rgba(255,61,31,.6); }
 #offline .why { color: var(--dim); font-size: 11px; letter-spacing: 0.08em; max-width: 520px; line-height: 1.6; }
+#detail {
+  position: absolute; right: 14px; bottom: 44px; width: 330px; display: none; z-index: 6;
+  background: rgba(6, 12, 20, 0.95); border: 1px solid var(--cyan-line); padding: 14px 16px 14px;
+  box-shadow: 0 16px 50px rgba(0,0,0,.7), 0 0 30px rgba(79,209,255,.12);
+}
+#detail .hd { display: flex; align-items: flex-start; gap: 10px; }
+#detail .t { font-weight: 700; color: #fff; font-size: 14px; flex: 1; }
+#detail .x { background: none; border: 1px solid var(--cyan-dim); color: var(--dim); width: 26px; height: 26px; cursor: pointer; font-size: 14px; line-height: 1; }
+#detail .m { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); margin: 6px 0 8px; }
+#detail .last { color: var(--text); opacity: .85; font-size: 12px; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 12px; }
+#detail .sec { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.3em; color: var(--dim2); margin: 10px 0 6px; }
+#detail .act {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; cursor: pointer; margin: 0 0 6px;
+  background: rgba(79,209,255,0.06); border: 1px solid var(--cyan-dim); color: var(--text); padding: 9px 11px; font: 12px/1.3 var(--sans);
+}
+#detail .act:hover { border-color: var(--cyan); background: rgba(79,209,255,0.12); }
+#detail .act .k { font-family: var(--mono); font-size: 9px; letter-spacing: 0.2em; color: var(--c, var(--cyan)); flex: none; width: 58px; }
+#detail .act .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#detail .act.primary { background: rgba(79,209,255,0.14); border-color: var(--cyan); }
+#detail .none { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim2); }
 #legacy {
   position: absolute; top: 12px; right: 14px; display: none; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em;
   color: var(--amber); border: 1px solid rgba(255,179,71,.4); padding: 6px 10px; background: rgba(255,179,71,.06);
@@ -249,6 +269,7 @@ footer .seg { display: flex; gap: 22px; }
     <span class="c tl"></span><span class="c tr"></span><span class="c bl"></span><span class="c br"></span>
     <canvas id="net"></canvas>
     <div id="tip"></div>
+    <div id="detail"></div>
     <div id="legacy">LEGACY DAEMON · FEED OFF UNTIL <b>mewo install</b></div>
     <div id="legend">
       <span style="--c: var(--fire)">WORKING</span>
@@ -374,19 +395,35 @@ function sizeNet() {
 sizeNet(); addEventListener('resize', () => { sizeNet(); layout(); });
 net.addEventListener('mousemove', (e) => { const r = net.getBoundingClientRect(); mouse = { x: e.clientX - r.left, y: e.clientY - r.top }; });
 net.addEventListener('mouseleave', () => { mouse = { x: -1, y: -1 }; });
-// A click on a session that runs in Claude Desktop opens it there.
-const bursts = [];
-net.addEventListener('click', () => {
-  if (!hover || hover.kind !== 'session') return;
-  const s = hover.s;
-  if (!s.desktop) return;
-  bursts.push({ x: hover.x, y: hover.y, t: 0, c: stateColor(s.state) });
-  const url = 'claude://claude.ai/epitaxy/' + encodeURIComponent(s.desktop);
+// Links leave the page: the Mac app hands them to macOS, a browser opens them.
+function openUrl(url) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo) {
     window.webkit.messageHandlers.mewo.postMessage({ cmd: 'open', url });
-  } else {
+  } else if (url.startsWith('claude://')) {
     location.href = url;
+  } else {
+    window.open(url, '_blank', 'noopener');
   }
+}
+// A click on a session shows its card: open it in Claude Desktop, open what it made.
+const bursts = [];
+const detail = $('detail');
+const kindLabel = (k) => k === 'design' ? 'DESIGN' : k === 'document' ? 'DOC' : k === 'page' ? 'PAGE' : 'ARTIFACT';
+function showDetail(s) {
+  const arts = [...(s.artifacts || [])].reverse();
+  detail.innerHTML = `<div class="hd"><div class="t">${esc(s.title || s.project || s.id)}</div><button class="x" aria-label="Close">×</button></div>
+    <div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}</div>
+    ${s.last_text ? `<div class="last">${esc(s.last_text)}</div>` : ''}
+    ${s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
+    ${arts.length ? `<div class="sec">MADE BY CLAUDE</div>` + arts.map((a) => `<button class="act" style="--c:${a.kind === 'design' ? 'var(--amber)' : 'var(--cyan)'}" data-url="${esc(a.url)}"><span class="k">${kindLabel(a.kind)}</span><span class="n">${esc(a.title || 'Untitled ' + a.kind)}</span></button>`).join('') : ''}`;
+  detail.style.display = 'block';
+  detail.querySelector('.x').onclick = () => { detail.style.display = 'none'; };
+  for (const b of detail.querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
+}
+net.addEventListener('click', () => {
+  if (!hover || hover.kind !== 'session') { detail.style.display = 'none'; return; }
+  bursts.push({ x: hover.x, y: hover.y, t: 0, c: stateColor(hover.s.state) });
+  showDetail(hover.s);
 });
 
 let model = { sessions: [], daemon: null };
@@ -462,7 +499,7 @@ function drawNet(now) {
   // hover
   hover = null; let best = 26;
   for (const n of nodes.values()) { if (n.kind === 'core') continue; const d = Math.hypot(n.x - mouse.x, n.y - mouse.y); if (d < best) { best = d; hover = n; } }
-  net.style.cursor = hover && hover.kind === 'session' && hover.s.desktop ? 'pointer' : hover ? 'default' : 'crosshair';
+  net.style.cursor = hover && hover.kind === 'session' ? 'pointer' : hover ? 'default' : 'crosshair';
 
   // edges
   for (const n of nodes.values()) {
@@ -537,6 +574,7 @@ function drawNet(now) {
     nx.stroke(); nx.setLineDash([]); nx.shadowBlur = 0;
     nx.beginPath(); nx.arc(0, 0, r * 0.32, 0, Math.PI * 2); nx.fillStyle = col; nx.fill();
     if ((s.queued || 0) > 0) { nx.beginPath(); nx.arc(r * 0.8, -r * 0.8, 5, 0, Math.PI * 2); nx.fillStyle = C.mewo; nx.shadowColor = C.mewo; nx.shadowBlur = 10; nx.fill(); nx.shadowBlur = 0; }
+    if ((s.artifacts || []).length) { nx.save(); nx.translate(r * 0.85, r * 0.85); nx.rotate(Math.PI / 4); nx.fillStyle = C.amber; nx.shadowColor = C.amber; nx.shadowBlur = 10; nx.fillRect(-4, -4, 8, 8); nx.restore(); nx.shadowBlur = 0; }
     nx.restore();
     const title = s.title || s.project || s.short || s.id.slice(0, 8);
     roundRectLabel(n.x, n.y + r + 8, trunc(title, 24), ended ? C.dim : '#fff', 10.5, 600);
@@ -552,7 +590,7 @@ function drawNet(now) {
   if (hover && hover.kind === 'session') {
     const s = hover.s;
     tip.style.display = 'block';
-    tip.innerHTML = `<div class="t">${esc(s.title || s.project || s.id)}</div><div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)} · ${s.last_ts ? hm(s.last_ts) : ''}${s.queued ? ` · ${s.queued} FROM PHONE` : ''}${s.listening ? '' : ' · NOT LISTENING'}</div><div class="x">${esc(s.last_text || '')}</div><div class="m" style="margin-top:8px;color:${s.desktop ? 'var(--cyan)' : 'var(--dim2)'}">${s.desktop ? '▶ CLICK TO OPEN IN CLAUDE DESKTOP' : 'NOT A CLAUDE DESKTOP SESSION'}</div>`;
+    tip.innerHTML = `<div class="t">${esc(s.title || s.project || s.id)}</div><div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)} · ${s.last_ts ? hm(s.last_ts) : ''}${s.queued ? ` · ${s.queued} FROM PHONE` : ''}${s.listening ? '' : ' · NOT LISTENING'}</div><div class="x">${esc(s.last_text || '')}</div><div class="m" style="margin-top:8px;color:var(--cyan)">${(s.artifacts || []).length ? `◆ ${s.artifacts.length} MADE · ` : ''}CLICK FOR DETAILS</div>`;
     const tx = Math.min(W - 316, hover.x + 18), ty = Math.min(H - 120, hover.y + 18);
     tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
   } else if (hover && hover.kind === 'hub') {

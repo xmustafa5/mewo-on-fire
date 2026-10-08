@@ -1,7 +1,7 @@
 //! Claude Code transcript (JSONL) → chat items (PROTOCOL.md v1.2
 //! "Transcript → chat items"). Blocking file IO: call from spawn_blocking.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -48,10 +48,27 @@ pub struct ImageRef {
     pub id: String,
 }
 
+/// Something Claude published with its Artifact tool (v1.6): a design
+/// canvas, a document, a page… `kind` is `design`, `document`, `page` or
+/// `artifact` when the files did not say.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Artifact {
+    pub url: String,
+    pub title: String,
+    pub kind: String,
+    pub ts: u64,
+}
+
+/// At most this many artifacts are kept per session (the newest).
+const MAX_ARTIFACTS: usize = 20;
+
 #[derive(Debug, Default)]
 pub struct Transcript {
     /// The last `limit` items, oldest first.
     pub items: Vec<ChatItem>,
+    /// Artifacts published in this transcript, oldest first (v1.6).
+    pub artifacts: Vec<Artifact>,
     /// Last `custom-title` entry's `customTitle` (a session renamed by the
     /// user; the Claude desktop app writes its titles this way too), else the
     /// last `ai-title` entry's `aiTitle`.
@@ -116,6 +133,9 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
     // role-user item.
     let mut open_agents: HashSet<String> = HashSet::new();
     let mut last_ts: u64 = 0;
+    // v1.6: Artifact tool calls whose url only the tool_result tells.
+    let mut pending_artifacts: HashMap<String, (String, String)> = HashMap::new();
+    let mut artifacts: Vec<Artifact> = Vec::new();
 
     for (n, line) in bytes.split(|&b| b == b'\n').enumerate() {
         if line.iter().all(u8::is_ascii_whitespace) {
@@ -158,6 +178,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
         // found again by `image`.
         let mut images: Vec<ImageRef> = Vec::new();
         if kind == "user" {
+            artifact_results(content, &mut pending_artifacts, &mut artifacts, last_ts);
             if let Some((text, blocks)) = user_text(content, &mut open_agents) {
                 open_agents.clear();
                 found.push(("user", text, None));
@@ -171,6 +192,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
                 }
             }
         } else {
+            artifact_calls(content, &mut pending_artifacts, &mut artifacts, last_ts);
             assistant_items(content, &mut found, &mut open_agents);
         }
 
@@ -209,8 +231,128 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
 
     Transcript {
         items: items.into_iter().collect(),
+        artifacts,
         title: custom_title.or(ai_title),
         agents_running: !open_agents.is_empty(),
+    }
+}
+
+/// What an Artifact tool call's input says the artifact is.
+fn artifact_kind(input: &Value) -> &'static str {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(p) = input.get("file_path").and_then(Value::as_str) {
+        names.push(p.to_string());
+    }
+    if let Some(files) = input.get("files") {
+        match files {
+            Value::Object(m) => names.extend(m.keys().cloned()),
+            Value::Array(a) => names.extend(a.iter().filter_map(Value::as_str).map(str::to_string)),
+            _ => {}
+        }
+    }
+    if names.iter().any(|n| n.ends_with(".dc.html") || n.ends_with("canvas.json")) {
+        "design"
+    } else if names.iter().any(|n| n.ends_with(".md")) {
+        "document"
+    } else if names.iter().any(|n| n.ends_with(".html")) {
+        "page"
+    } else {
+        "artifact"
+    }
+}
+
+/// The first claude.ai artifact url in [text].
+fn artifact_url_in(text: &str) -> Option<String> {
+    let mut rest = text;
+    while let Some(i) = rest.find("https://claude.ai/") {
+        let tail = &rest[i..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || c == ')' || c == '"' || c == '\'' || c == ',')
+            .unwrap_or(tail.len());
+        let url = &tail[..end];
+        if url.contains("/artifact/") {
+            return Some(url.trim_end_matches('.').to_string());
+        }
+        rest = &tail[1..];
+    }
+    None
+}
+
+fn upsert_artifact(list: &mut Vec<Artifact>, url: String, title: String, kind: &str, ts: u64) {
+    if let Some(a) = list.iter_mut().find(|a| a.url == url) {
+        a.ts = ts;
+        if a.title.is_empty() && !title.is_empty() {
+            a.title = title;
+        }
+        if a.kind == "artifact" && kind != "artifact" {
+            a.kind = kind.to_string();
+        }
+        return;
+    }
+    list.push(Artifact { url, title, kind: kind.to_string(), ts });
+    while list.len() > MAX_ARTIFACTS {
+        list.remove(0);
+    }
+}
+
+/// Assistant line: `Artifact` tool_use blocks. A call naming its `url`
+/// counts at once; a create (`type_url`) or a first publish waits for the
+/// url in its tool_result.
+fn artifact_calls(
+    content: Option<&Value>,
+    pending: &mut HashMap<String, (String, String)>,
+    out: &mut Vec<Artifact>,
+    ts: u64,
+) {
+    let Some(Value::Array(blocks)) = content else { return };
+    for b in blocks {
+        if str_of(b, "type") != "tool_use" || str_of(b, "name") != "Artifact" {
+            continue;
+        }
+        let null = Value::Null;
+        let input = b.get("input").unwrap_or(&null);
+        if matches!(
+            str_of(input, "action"),
+            "read" | "list" | "delete" | "open" | "pin" | "unpin" | "quickstart"
+        ) || flag(input, "asset")
+        {
+            continue;
+        }
+        let title = str_of(input, "title").trim().to_string();
+        let kind = artifact_kind(input);
+        let url = str_of(input, "url");
+        if url.contains("/artifact/") {
+            upsert_artifact(out, url.to_string(), title, kind, ts);
+        } else {
+            let id = str_of(b, "id");
+            if !id.is_empty() {
+                pending.insert(id.to_string(), (title, kind.to_string()));
+            }
+        }
+    }
+}
+
+/// User line: tool_results of pending Artifact calls carry the url.
+fn artifact_results(
+    content: Option<&Value>,
+    pending: &mut HashMap<String, (String, String)>,
+    out: &mut Vec<Artifact>,
+    ts: u64,
+) {
+    let Some(Value::Array(blocks)) = content else { return };
+    for b in blocks {
+        if str_of(b, "type") != "tool_result" {
+            continue;
+        }
+        let Some((title, kind)) = pending.remove(str_of(b, "tool_use_id")) else { continue };
+        let text: String = match b.get("content") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(parts)) => parts.iter().map(|p| str_of(p, "text")).collect::<Vec<_>>().join(" "),
+            _ => String::new(),
+        };
+        if let Some(url) = artifact_url_in(&text) {
+            upsert_artifact(out, url, title, &kind, ts);
+        }
     }
 }
 

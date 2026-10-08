@@ -65,7 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     // {"cmd": "open", "url": "claude://…"}: a session clicked on the graph.
     if let m = message.body as? [String: Any], m["cmd"] as? String == "open",
-       let raw = m["url"] as? String, let url = URL(string: raw), url.scheme == "claude" {
+       let raw = m["url"] as? String, let url = URL(string: raw),
+       ["claude", "https", "http"].contains(url.scheme ?? "") {
       NSWorkspace.shared.open(url)
     }
   }

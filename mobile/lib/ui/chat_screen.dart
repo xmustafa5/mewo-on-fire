@@ -607,10 +607,16 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _replyTo = _ReplyTarget(role: role, text: text));
   }
 
+  /// A link in a message opens; a link that cannot be opened is copied.
   void _copyLink(String? href) {
     if (href == null || href.isEmpty) return;
-    Clipboard.setData(ClipboardData(text: href));
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
+    final uri = Uri.tryParse(href);
+    if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')) {
+      Clipboard.setData(ClipboardData(text: href));
+      _toast('Link copied');
+      return;
+    }
+    unawaited(_openUrl(href));
   }
 
   @override
@@ -673,6 +679,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               _StatusStrip(session: session, hasCards: pending.isNotEmpty),
+              if (session != null && session.artifacts.isNotEmpty)
+                _ArtifactStrip(artifacts: session.artifacts, onOpen: _openUrl, onCopy: _copyArtifactLink),
               if (prs != null) _PrStrip(list: prs, onOpen: _showPr),
               if (pending.isNotEmpty) _requestCards(pending, box.maxHeight * 0.45),
               _inputBar(
@@ -689,6 +697,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   static String _short(String id) => id.length > 8 ? id.substring(0, 8) : id;
+
+  void _copyArtifactLink(String url) {
+    Clipboard.setData(ClipboardData(text: url));
+    _toast('Link copied');
+  }
 
   // ---- pull requests (v1.6) ----
 
@@ -2358,6 +2371,137 @@ class _RequestCard extends StatelessWidget {
         ];
     }
     return Wrap(key: const ValueKey<String>('actions'), spacing: 8, runSpacing: 8, children: buttons);
+  }
+}
+
+/// What the session made with Claude's Artifact tool (v1.6): designs,
+/// documents, pages. Tap to open it on the phone; hold to copy the link.
+class _ArtifactStrip extends StatefulWidget {
+  const _ArtifactStrip({required this.artifacts, required this.onOpen, required this.onCopy});
+
+  final List<SessionArtifact> artifacts;
+  final Future<void> Function(String url) onOpen;
+  final void Function(String url) onCopy;
+
+  static (IconData, Color) look(String kind) {
+    switch (kind) {
+      case 'design':
+        return (Icons.brush_rounded, Ember.amber);
+      case 'document':
+        return (Icons.article_outlined, Ember.mewoSoft);
+      case 'page':
+        return (Icons.web_rounded, Ember.ok);
+      default:
+        return (Icons.auto_awesome_rounded, Ember.text2);
+    }
+  }
+
+  @override
+  State<_ArtifactStrip> createState() => _ArtifactStripState();
+}
+
+class _ArtifactStripState extends State<_ArtifactStrip> {
+  static const int _fold = 2;
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    // Newest first.
+    final all = widget.artifacts.reversed.toList();
+    final shown = _expanded ? all : all.take(_fold).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < shown.length; i++)
+          FadeSlideIn(
+            key: ValueKey<String>(shown[i].url),
+            delay: Motion.stagger(i, step: 50),
+            offset: const Offset(0, 10),
+            child: _ArtifactRow(
+              artifact: shown[i],
+              onTap: () => widget.onOpen(shown[i].url),
+              onLongPress: () => widget.onCopy(shown[i].url),
+            ),
+          ),
+        if (all.length > _fold)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: PressScale(
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(
+                  _expanded ? 'Show less' : 'Show ${all.length - _fold} more',
+                  style: t.labelMedium?.copyWith(color: Ember.text2),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ArtifactRow extends StatelessWidget {
+  const _ArtifactRow({required this.artifact, required this.onTap, required this.onLongPress});
+
+  final SessionArtifact artifact;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final (icon, color) = _ArtifactStrip.look(artifact.kind);
+    final title = artifact.title.isEmpty ? 'Claude ${artifact.kindLabel.toLowerCase()}' : artifact.title;
+    return GlassCard(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
+      radius: 14,
+      fill: Ember.surface2.withValues(alpha: 0.92),
+      borderColor: color.withValues(alpha: 0.35),
+      glow: artifact.kind == 'design' ? color : null,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: Row(
+        children: [
+          IconTile(icon: icon, color: color, size: 34, iconSize: 17),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.titleSmall?.copyWith(fontSize: 13.5)),
+                const SizedBox(height: 2),
+                Text(
+                  '${artifact.kindLabel} · made by Claude${artifact.ts > 0 ? ' · ${_clock(artifact.ts)}' : ''}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: t.labelSmall?.copyWith(color: Ember.text3),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: color.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.open_in_new_rounded, size: 13, color: color),
+                const SizedBox(width: 5),
+                Text('Open', style: t.labelMedium?.copyWith(color: color, fontSize: 12)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

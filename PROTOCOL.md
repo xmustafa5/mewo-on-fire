@@ -512,3 +512,15 @@ app; the operations console does that on a click. On macOS the console also
 reads the app's own records (`~/Library/Application Support/Claude/
 claude-code-sessions`) for sessions the hooks did not tag.
 \n
+
+## Session `artifacts` (optional)
+
+What the session made with Claude's Artifact tool, read from the transcript
+(a tool_use named `Artifact`; the url from its input, or from the
+tool_result of a create): `"artifacts": [{"url": "https://claude.ai/artifact/…",
+"title": "Onboarding", "kind": "design|document|page|artifact", "ts": <unix ms>}]`,
+oldest first, at most 20. `kind` comes from the files the call sent
+(`.dc.html`/`canvas.json` → design, `.md` → document, `.html` → page). The
+phone shows them above the chat input and opens them; the console lists them
+on a session's card.
+

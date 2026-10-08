@@ -191,6 +191,28 @@ class _SessionCard extends StatelessWidget {
                       Text(relativeTime(s.time), style: t.labelSmall?.copyWith(color: Ember.text3)),
                     ],
                     const Spacer(),
+                    if (s.artifacts.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Container(
+                          padding: const EdgeInsets.fromLTRB(7, 2, 8, 2),
+                          decoration: BoxDecoration(
+                            color: Ember.amber.withValues(alpha: 0.13),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Ember.amber.withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.brush_rounded, size: 11, color: Ember.amber),
+                              const SizedBox(width: 4),
+                              Text(
+                                s.artifacts.length == 1 ? '1 artifact' : '${s.artifacts.length} artifacts',
+                                style: t.labelSmall?.copyWith(color: Ember.amber),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     if (s.queued > 0)
                       Container(
                         padding: const EdgeInsets.fromLTRB(7, 2, 8, 2),

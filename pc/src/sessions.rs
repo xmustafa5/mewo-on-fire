@@ -59,6 +59,10 @@ pub struct Session {
     /// session runs inside the desktop app; empty otherwise.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub desktop: String,
+    /// v1.6: what the session published with the Artifact tool (designs,
+    /// documents, pages), oldest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<transcript::Artifact>,
 }
 
 /// Private session facts from the hooks (`emit`, `session_state`, `listen`).
@@ -171,6 +175,7 @@ pub struct ScanResult {
     pub key: FileKey,
     pub title: Option<String>,
     pub agents_running: bool,
+    pub artifacts: Vec<transcript::Artifact>,
 }
 
 /// Blocking (spawn_blocking): stat each target's transcript and re-read the
@@ -189,6 +194,7 @@ pub fn scan(targets: Vec<ScanTarget>) -> Vec<ScanResult> {
                 key,
                 title: tr.title,
                 agents_running: tr.agents_running,
+                artifacts: tr.artifacts,
             })
         })
         .collect()
@@ -696,6 +702,7 @@ impl Sessions {
         if let Some(title) = r.title {
             entry.session.title = title;
         }
+        entry.session.artifacts = r.artifacts;
         entry.sync();
         if entry.session == before {
             return None;
