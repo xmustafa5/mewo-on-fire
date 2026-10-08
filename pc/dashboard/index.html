@@ -153,6 +153,26 @@ main {
 #newsess .cancel { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); padding: 10px 12px; font: 12px var(--sans); }
 #newsess .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-top: 8px; color: var(--amber); min-height: 14px; }
 #newsess .msg.bad { color: var(--heat); }
+#preview {
+  position: absolute; top: 52px; left: 14px; bottom: 14px; width: min(54vw, 960px); display: none; z-index: 8; flex-direction: column;
+  background: rgba(6, 12, 20, 0.97); border: 1px solid var(--cyan-line);
+  box-shadow: 0 16px 50px rgba(0,0,0,.7), 0 0 30px rgba(79,209,255,.12);
+}
+#preview.on { display: flex; }
+#preview .hd { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--cyan-dim); }
+#preview .hd .t { font-weight: 700; color: #fff; font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#preview .hd .k { font-family: var(--mono); font-size: 9px; letter-spacing: 0.2em; color: var(--c, var(--amber)); border: 1px solid currentColor; padding: 3px 7px; flex: none; }
+#preview .hd .lnk { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); font: 10px var(--mono); letter-spacing: 0.16em; padding: 6px 9px; }
+#preview .hd .lnk:hover, #preview .hd .x:hover { border-color: var(--cyan); color: var(--text); }
+#preview .hd .x { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); width: 28px; height: 28px; font-size: 14px; line-height: 1; }
+#preview .boards { display: flex; gap: 6px; padding: 10px 14px 0; flex-wrap: wrap; }
+#preview .boards button { cursor: pointer; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--dim); font: 11px var(--sans); padding: 5px 10px; }
+#preview .boards button.on { border-color: var(--amber); color: var(--amber); background: rgba(255,179,71,0.08); }
+#preview .stage { flex: 1; position: relative; overflow: hidden; margin: 12px 14px 14px; }
+#preview .stage iframe { border: 0; background: #0C0A09; position: absolute; left: 0; top: 0; }
+#preview .stage.fill iframe { width: 100%; height: 100%; }
+#preview .stage.board iframe { transform-origin: top left; border-radius: 22px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+#preview .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); padding: 20px 14px; }
 #detail {
   position: absolute; right: 14px; bottom: 44px; width: 330px; display: none; z-index: 6;
   background: rgba(6, 12, 20, 0.95); border: 1px solid var(--cyan-line); padding: 14px 16px 14px;
@@ -306,6 +326,11 @@ footer .seg { display: flex; gap: 22px; }
       <textarea id="ns-prompt" placeholder="What should Claude do?"></textarea>
       <div class="row"><button class="go" id="ns-go" type="button" disabled>START SESSION</button><button class="cancel" id="ns-cancel" type="button">Cancel</button></div>
       <div class="msg" id="ns-msg"></div>
+    </div>
+    <div id="preview">
+      <div class="hd"><span class="k" id="pv-kind">DESIGN</span><div class="t" id="pv-title"></div><button class="lnk" id="pv-open" type="button">OPEN ON CLAUDE.AI</button><button class="x" id="pv-close" type="button" aria-label="Close">×</button></div>
+      <div class="boards" id="pv-boards"></div>
+      <div class="stage fill" id="pv-stage"></div>
     </div>
     <div id="detail"></div>
     <div id="legacy">LEGACY DAEMON · FEED OFF UNTIL <b>mewo install</b></div>
@@ -476,6 +501,60 @@ $('ns-go').addEventListener('click', async () => {
     catch (e) { newSessionResult({ ok: false, error: 'The console process did not answer' }); }
   }
 });
+// What a session made, shown in place: the daemon's copy of the files, through the Mac app's
+// mewo-artifact:// scheme, or `mewo dashboard`'s /artifact/<id>/. A design shows board by board.
+const pv = { box: $('preview'), kind: $('pv-kind'), title: $('pv-title'), boards: $('pv-boards'), stage: $('pv-stage') };
+let pvCurrent = null;
+const inMacApp = () => !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo);
+const artifactBase = (a) => inMacApp() ? `mewo-artifact://a/${a.id}/` : `/artifact/${a.id}/`;
+function closePreview() { pv.box.classList.remove('on'); pv.stage.innerHTML = ''; pvCurrent = null; }
+$('pv-close').addEventListener('click', closePreview);
+window.__preview = preview;
+$('pv-open').addEventListener('click', () => { if (pvCurrent) openUrl(pvCurrent.url); });
+function fitBoard() {
+  const f = pv.stage.querySelector('iframe'); if (!f || !pv.stage.classList.contains('board')) return;
+  const w = +f.dataset.w, h = +f.dataset.h, r = pv.stage.getBoundingClientRect();
+  const k = Math.min(r.width / w, r.height / h, 1);
+  f.style.transform = `scale(${k})`; f.style.left = `${Math.max(0, (r.width - w * k) / 2)}px`;
+}
+addEventListener('resize', fitBoard);
+function showBoard(base, file, w, h) {
+  pv.stage.className = 'stage board'; pv.stage.innerHTML = '';
+  const f = document.createElement('iframe'); f.width = w; f.height = h; f.dataset.w = w; f.dataset.h = h; f.src = base + file; f.title = file;
+  f.onload = fitBoard;
+  pv.stage.appendChild(f); fitBoard(); requestAnimationFrame(fitBoard);
+  for (const b of pv.boards.querySelectorAll('button')) b.classList.toggle('on', b.dataset.file === file);
+}
+async function preview(a) {
+  pvCurrent = a;
+  pv.kind.textContent = kindLabel(a.kind); pv.kind.style.setProperty('--c', a.kind === 'design' ? 'var(--amber)' : 'var(--cyan)');
+  pv.title.textContent = a.title || 'Untitled ' + a.kind;
+  pv.boards.innerHTML = ''; pv.stage.innerHTML = ''; pv.stage.className = 'stage fill';
+  pv.box.classList.add('on');
+  const base = artifactBase(a), entry = a.entry || 'index.html';
+  if (entry.endsWith('canvas.json')) {
+    const dir = entry.slice(0, entry.length - 'canvas.json'.length);
+    let canvas = null;
+    try { canvas = await (await fetch(base + entry)).json(); } catch (e) { canvas = null; }
+    if (pvCurrent !== a) return;
+    const boards = (canvas && canvas.boards) || {};
+    const order = ((canvas && canvas.order && canvas.order.length) ? canvas.order : Object.keys(boards)).filter((f) => boards[f] || f.endsWith('.dc.html'));
+    if (!order.length) { pv.stage.innerHTML = '<div class="msg">NO BOARDS IN THIS DESIGN YET</div>'; return; }
+    for (const file of order) {
+      const b = boards[file] || {}; const btn = document.createElement('button'); btn.type = 'button'; btn.dataset.file = dir + file;
+      btn.textContent = b.title || file.replace(/\.dc\.html$/, '');
+      btn.onclick = () => showBoard(base, dir + file, b.w || 390, b.h || 844);
+      pv.boards.appendChild(btn);
+    }
+    const b0 = boards[order[0]] || {};
+    showBoard(base, dir + order[0], b0.w || 390, b0.h || 844);
+    return;
+  }
+  if (entry.endsWith('.dc.html')) { showBoard(base, entry, 390, 844); return; }
+  const f = document.createElement('iframe'); f.title = pv.title.textContent;
+  f.src = base + entry + (entry.endsWith('.md') ? '.html' : '');
+  pv.stage.appendChild(f);
+}
 // A click on a session shows its card: open it in Claude Desktop, open what it made.
 const bursts = [];
 const detail = $('detail');
@@ -486,10 +565,13 @@ function showDetail(s) {
     <div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}</div>
     ${s.last_text ? `<div class="last">${esc(s.last_text)}</div>` : ''}
     ${s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
-    ${arts.length ? `<div class="sec">MADE BY CLAUDE</div>` + arts.map((a) => `<button class="act" style="--c:${a.kind === 'design' ? 'var(--amber)' : 'var(--cyan)'}" data-url="${esc(a.url)}"><span class="k">${kindLabel(a.kind)}</span><span class="n">${esc(a.title || 'Untitled ' + a.kind)}</span></button>`).join('') : ''}`;
+    ${arts.length ? `<div class="sec">MADE BY CLAUDE</div>` + arts.map((a, i) => `<button class="act" style="--c:${a.kind === 'design' ? 'var(--amber)' : 'var(--cyan)'}" data-url="${esc(a.url)}" data-art="${i}"><span class="k">${kindLabel(a.kind)}</span><span class="n">${esc(a.title || 'Untitled ' + a.kind)}</span>${a.local ? '<span class="k" style="width:auto">VIEW</span>' : ''}</button>`).join('') : ''}`;
   detail.style.display = 'block';
   detail.querySelector('.x').onclick = () => { detail.style.display = 'none'; };
-  for (const b of detail.querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
+  for (const b of detail.querySelectorAll('button[data-url]')) {
+    const a = b.dataset.art !== undefined ? arts[+b.dataset.art] : null;
+    b.onclick = () => (a && a.local && a.id ? preview(a) : openUrl(b.dataset.url));
+  }
 }
 net.addEventListener('click', () => {
   if (!hover || hover.kind !== 'session') { detail.style.display = 'none'; return; }

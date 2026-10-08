@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' as fln;
+import 'package:path_provider/path_provider.dart';
 
 import 'background.dart';
 import 'ios_background.dart';
@@ -94,6 +95,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final ValueNotifier<SessionRef?> openSession = ValueNotifier<SessionRef?>(null);
 
   final Map<String, ChatState> _chats = <String, ChatState>{};
+
+  /// Artifact files on their way from a PC (v1.6), by client id.
+  final Map<String, _ArtifactFetch> _artifactFetches = <String, _ArtifactFetch>{};
 
   /// New sessions asked of a PC (v1.6), by client id, until it answers.
   final Map<String, Completer<String>> _newSessions = <String, Completer<String>>{};
@@ -348,6 +352,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _onImage(msg);
     } else if (type == 'prs') {
       _onPrs(msg);
+    } else if (type == 'artifact_file' || type == 'artifact_end') {
+      _onArtifactFrame(msg);
     } else if (type == 'new_session_result') {
       final c = _newSessions.remove('${msg['client_id']}');
       c?.complete(msg['ok'] == true ? '' : (msg['error'] is String && (msg['error'] as String).isNotEmpty ? msg['error'] as String : 'The PC could not start it'));
@@ -576,6 +582,72 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _watched.remove(key);
     _chatRefreshTimers.remove(key)?.cancel();
     _prsTimers.remove(key)?.cancel();
+  }
+
+  // ---- artifacts (v1.6) ----
+
+  /// The files of [a] from [pcId], saved under the temp folder. Throws a
+  /// [StateError] with the reason when they do not come.
+  Future<ArtifactBundle> fetchArtifact(String pcId, String sessionId, SessionArtifact a) async {
+    if (!await _isRunning()) throw StateError('The background service is stopped. Start it on Home.');
+    final clientId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final tmp = await getTemporaryDirectory();
+    final dir = Directory('${tmp.path}/mewo-artifacts/$pcId/${a.id.isEmpty ? clientId : a.id}');
+    if (await dir.exists()) await dir.delete(recursive: true);
+    await dir.create(recursive: true);
+    final fetch = _ArtifactFetch(dir.path);
+    _artifactFetches[clientId] = fetch;
+    try {
+      sendToTask(jsonEncode({'cmd': 'get_artifact', 'pc_id': pcId, 'client_id': clientId, 'session_id': sessionId, 'url': a.url}));
+    } catch (_) {
+      _artifactFetches.remove(clientId);
+      throw StateError('Could not reach the background service');
+    }
+    try {
+      return await fetch.done.future.timeout(
+        const Duration(seconds: 90),
+        onTimeout: () => throw StateError('No answer from ${pcNameFor(pcId)}'),
+      );
+    } finally {
+      _artifactFetches.remove(clientId);
+    }
+  }
+
+  void _onArtifactFrame(Map<String, dynamic> msg) {
+    final fetch = _artifactFetches['${msg['client_id']}'];
+    if (fetch == null) return;
+    if (msg['type'] == 'artifact_file') {
+      final path = '${msg['path'] ?? ''}';
+      if (path.isEmpty || path.startsWith('/') || path.split('/').any((p) => p.isEmpty || p == '..')) return;
+      final count = msg['parts'] is int && (msg['parts'] as int) > 0 ? msg['parts'] as int : 1;
+      final part = msg['part'] is int ? msg['part'] as int : 0;
+      final parts = fetch.parts.putIfAbsent(path, () => List<String?>.filled(count, null));
+      if (part < 0 || part >= parts.length) return;
+      parts[part] = '${msg['data'] ?? ''}';
+      if (parts.any((p) => p == null)) return;
+      final joined = parts.join();
+      fetch.parts.remove(path);
+      final bytes = msg['encoding'] == 'base64' ? base64Decode(joined) : utf8.encode(joined);
+      fetch.writes.add(File('${fetch.dir}/$path').create(recursive: true).then((f) => f.writeAsBytes(bytes)).then((_) {}));
+      return;
+    }
+    if (fetch.done.isCompleted) return;
+    if (msg['ok'] != true) {
+      final e = msg['error'];
+      fetch.done.completeError(StateError(e is String && e.isNotEmpty ? e : 'The PC could not send it'));
+      return;
+    }
+    Future.wait(fetch.writes).then((_) {
+      if (fetch.done.isCompleted) return;
+      fetch.done.complete(ArtifactBundle(
+        dir: fetch.dir,
+        entry: '${msg['entry'] ?? ''}',
+        kind: '${msg['kind'] ?? ''}',
+        title: '${msg['title'] ?? ''}',
+      ));
+    }, onError: (Object _) {
+      if (!fetch.done.isCompleted) fetch.done.completeError(StateError('Could not save the files'));
+    });
   }
 
   // ---- new sessions (v1.6) ----
@@ -921,4 +993,26 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       await Store.saveEvents(<HistoryEntry>[]);
     }
   }
+}
+
+/// An artifact's files, fetched from the PC into a folder of the temp dir
+/// (v1.6). [entry] is what to open inside it.
+class ArtifactBundle {
+  const ArtifactBundle({required this.dir, required this.entry, required this.kind, required this.title});
+
+  final String dir;
+  final String entry;
+  final String kind;
+  final String title;
+}
+
+class _ArtifactFetch {
+  _ArtifactFetch(this.dir);
+
+  final String dir;
+
+  /// Chunks per file until all of them are there.
+  final Map<String, List<String?>> parts = <String, List<String?>>{};
+  final List<Future<void>> writes = <Future<void>>[];
+  final Completer<ArtifactBundle> done = Completer<ArtifactBundle>();
 }

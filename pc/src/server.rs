@@ -25,6 +25,7 @@ use crate::sessions::Session;
 use crate::store::Event;
 use crate::transcript;
 use crate::uploads;
+use crate::artifacts;
 use crate::desktop;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
@@ -372,6 +373,7 @@ async fn handle_frame(
         "get_image" => handle_get_image(state, sink, &msg).await,
         "send" => handle_send(state, device, sink, &msg).await,
         "get_prs" => handle_get_prs(state, sink, &msg).await,
+        "get_artifact" => handle_get_artifact(state, sink, &msg).await,
         "new_session" => handle_new_session(device, sink, &msg).await,
         _ => Ok(()),
     }
@@ -416,6 +418,68 @@ async fn handle_get_prs(state: &AppState, sink: &mut WsSink, msg: &Value) -> Res
         obj.insert("session_id".to_string(), json!(session_id));
     }
     send_json(sink, &v).await
+}
+
+/// `get_artifact` → the files of an artifact the daemon kept a copy of:
+/// one `artifact_file` per chunk, then `artifact_end` (v1.6).
+async fn handle_get_artifact(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    use base64::Engine as _;
+    let client_id = str_field(msg, "client_id").to_string();
+    let session_id = str_field(msg, "session_id");
+    let url = str_field(msg, "url");
+    let found = state
+        .session_list()
+        .into_iter()
+        .find(|s| s.id == session_id)
+        .and_then(|s| s.artifacts.into_iter().find(|a| a.url == url))
+        .filter(|a| a.local && !a.id.is_empty());
+    let Some(a) = found else {
+        let v = json!({"type": "artifact_end", "client_id": client_id, "ok": false, "error": "The files are no longer on the PC"});
+        return send_json(sink, &v).await;
+    };
+    let id = a.id.clone();
+    let files = tokio::task::spawn_blocking(move || artifacts::files(&id)).await.unwrap_or_default();
+    if files.is_empty() {
+        let v = json!({"type": "artifact_end", "client_id": client_id, "ok": false, "error": "The files are no longer on the PC"});
+        return send_json(sink, &v).await;
+    }
+    for (path, bytes) in files {
+        let text = if artifacts::is_text(&path) { String::from_utf8(bytes.clone()).ok() } else { None };
+        let (encoding, payload) = match text {
+            Some(t) => ("text", t),
+            None => ("base64", base64::engine::general_purpose::STANDARD.encode(&bytes)),
+        };
+        let parts = chunks(&payload, ARTIFACT_CHUNK);
+        let n = parts.len();
+        for (i, data) in parts.into_iter().enumerate() {
+            let v = json!({"type": "artifact_file", "client_id": client_id, "path": path, "part": i, "parts": n, "encoding": encoding, "data": data});
+            send_json(sink, &v).await?;
+        }
+    }
+    let v = json!({"type": "artifact_end", "client_id": client_id, "ok": true, "id": a.id, "kind": a.kind, "entry": a.entry, "title": a.title});
+    send_json(sink, &v).await
+}
+
+/// Bytes per `artifact_file` frame: under the relay's message limit.
+const ARTIFACT_CHUNK: usize = 600_000;
+
+/// `s` in pieces of at most `max` bytes, on char boundaries; one empty
+/// piece for an empty string.
+fn chunks(s: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < s.len() {
+        let mut end = (start + max).min(s.len());
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.push(s[start..end].to_string());
+        start = end;
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
 }
 
 fn str_field<'a>(msg: &'a Value, key: &str) -> &'a str {

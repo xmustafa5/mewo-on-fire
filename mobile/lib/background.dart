@@ -391,6 +391,8 @@ class CcTaskHandler extends TaskHandler {
       _handleGetPrs(msg);
     } else if (cmd == 'new_session') {
       _handleNewSession(msg);
+    } else if (cmd == 'get_artifact') {
+      _handleGetArtifact(msg);
     } else if (cmd == 'refresh_sessions') {
       _handleRefreshSessions();
     } else if (cmd == 'clear_sessions') {
@@ -584,6 +586,28 @@ class CcTaskHandler extends TaskHandler {
 
   /// `{"pc_id", "session_id"}` → `get_chat`; the reply is forwarded as
   /// `chat`, or `chat_error` right away when the PC is not connected.
+  /// v1.6: asks the PC for the files of an artifact; answers with an error
+  /// `artifact_end` itself when the PC cannot be asked.
+  void _handleGetArtifact(Map<String, dynamic> msg) {
+    final pcId = _str(msg['pc_id']);
+    final clientId = _str(msg['client_id']);
+    if (pcId.isEmpty || clientId.isEmpty) return;
+    final link = _links[pcId];
+    String error = '';
+    if (link == null) {
+      error = 'This PC is no longer paired';
+    } else if (!link.getArtifact(clientId, _str(msg['session_id']), _str(msg['url']))) {
+      link.kick();
+      error = '${link.pc.name} is not connected right now';
+    }
+    if (error.isEmpty) return;
+    _sendToMain(jsonEncode({'type': 'artifact_end', 'pc_id': pcId, 'client_id': clientId, 'ok': false, 'error': error}));
+  }
+
+  Future<void> _onArtifact(PcLink link, Map<String, dynamic> msg) async {
+    _sendToMain(jsonEncode(<String, dynamic>{...msg, 'pc_id': link.pc.id}));
+  }
+
   /// v1.6: asks the PC to start a session in Claude Desktop; answers with
   /// an error `new_session_result` itself when the PC cannot be asked.
   void _handleNewSession(Map<String, dynamic> msg) {
@@ -834,6 +858,7 @@ class CcTaskHandler extends TaskHandler {
         onSendResult: _onSendResult,
         onPrs: _onPrs,
         onNewSessionResult: _onNewSessionResult,
+        onArtifact: _onArtifact,
       );
       _links[pc.id] = link;
       link.start();

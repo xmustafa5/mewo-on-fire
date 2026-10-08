@@ -12,6 +12,7 @@ import '../models.dart';
 import '../requests.dart' show Answers;
 import '../voice_input.dart';
 import 'answer_screen.dart';
+import 'artifact_screen.dart';
 import 'history_tab.dart' show SheetAction;
 import 'keyboard_hide_button.dart';
 import 'theme/ember.dart';
@@ -680,7 +681,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
               _StatusStrip(session: session, hasCards: pending.isNotEmpty),
               if (session != null && session.artifacts.isNotEmpty)
-                _ArtifactStrip(artifacts: session.artifacts, onOpen: _openUrl, onCopy: _copyArtifactLink),
+                _ArtifactStrip(artifacts: session.artifacts, onOpen: _openArtifact, onCopy: _copyArtifactLink),
               if (prs != null) _PrStrip(list: prs, onOpen: _showPr),
               if (pending.isNotEmpty) _requestCards(pending, box.maxHeight * 0.45),
               _inputBar(
@@ -697,6 +698,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   static String _short(String id) => id.length > 8 ? id.substring(0, 8) : id;
+
+  /// In place when the PC kept the files, else on claude.ai.
+  Future<void> _openArtifact(SessionArtifact a) async {
+    if (!a.local) return _openUrl(a.url);
+    HapticFeedback.selectionClick();
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => ArtifactScreen(pcId: widget.pcId, sessionId: widget.sessionId, artifact: a)),
+    );
+  }
 
   void _copyArtifactLink(String url) {
     Clipboard.setData(ClipboardData(text: url));
@@ -2380,7 +2390,7 @@ class _ArtifactStrip extends StatefulWidget {
   const _ArtifactStrip({required this.artifacts, required this.onOpen, required this.onCopy});
 
   final List<SessionArtifact> artifacts;
-  final Future<void> Function(String url) onOpen;
+  final Future<void> Function(SessionArtifact artifact) onOpen;
   final void Function(String url) onCopy;
 
   static (IconData, Color) look(String kind) {
@@ -2420,7 +2430,7 @@ class _ArtifactStripState extends State<_ArtifactStrip> {
             offset: const Offset(0, 10),
             child: _ArtifactRow(
               artifact: shown[i],
-              onTap: () => widget.onOpen(shown[i].url),
+              onTap: () => widget.onOpen(shown[i]),
               onLongPress: () => widget.onCopy(shown[i].url),
             ),
           ),
@@ -2493,9 +2503,9 @@ class _ArtifactRow extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Icon(Icons.open_in_new_rounded, size: 13, color: color),
+                Icon(artifact.local ? Icons.visibility_rounded : Icons.open_in_new_rounded, size: 13, color: color),
                 const SizedBox(width: 5),
-                Text('Open', style: t.labelMedium?.copyWith(color: color, fontSize: 12)),
+                Text(artifact.local ? 'View' : 'Open', style: t.labelMedium?.copyWith(color: color, fontSize: 12)),
               ],
             ),
           ),

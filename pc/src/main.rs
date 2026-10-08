@@ -1,6 +1,7 @@
 //! Mewo on Fire — Claude Code notifications to your phone over the LAN.
 //! See ../PROTOCOL.md for the wire contract.
 
+mod artifacts;
 mod ask;
 mod cli;
 mod config;

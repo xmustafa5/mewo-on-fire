@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::config::now_ms;
-use crate::{control, desktop, paths};
+use crate::{artifacts, control, desktop, paths};
 
 const HTML: &str = include_str!("../dashboard/index.html");
 pub const DEFAULT_PORT: u16 = 47824;
@@ -84,9 +84,18 @@ fn handle(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
-    let (status, ctype, body) = match (method, path) {
-        ("GET", "/") | ("GET", "/index.html") => ("200 OK", "text/html; charset=utf-8", HTML.to_string()),
-        ("GET", "/api/state") => ("200 OK", "application/json; charset=utf-8", state_json(cache)),
+    let (status, ctype, body): (&str, &str, Vec<u8>) = match (method, path) {
+        ("GET", "/") | ("GET", "/index.html") => ("200 OK", "text/html; charset=utf-8", HTML.as_bytes().to_vec()),
+        ("GET", "/api/state") => ("200 OK", "application/json; charset=utf-8", state_json(cache).into_bytes()),
+        // A copy the daemon kept of what a session published (v1.6).
+        ("GET", p) if p.starts_with("/artifact/") => {
+            let rest = &p["/artifact/".len()..];
+            let (id, rel) = rest.split_once('/').unwrap_or((rest, "index.html"));
+            match artifacts::file(id, &unpercent(rel)) {
+                Some((mime, bytes)) => ("200 OK", mime, bytes),
+                None => ("404 Not Found", "text/plain; charset=utf-8", b"not found".to_vec()),
+            }
+        }
         ("POST", "/api/new_session") => {
             let mut raw = vec![0u8; content_length];
             std::io::Read::read_exact(&mut reader, &mut raw)?;
@@ -94,9 +103,9 @@ fn handle(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
             let cwd = req.get("cwd").and_then(Value::as_str).unwrap_or("");
             let prompt = req.get("prompt").and_then(Value::as_str).unwrap_or("");
             let reply = new_session(cwd, prompt);
-            ("200 OK", "application/json; charset=utf-8", reply.to_string())
+            ("200 OK", "application/json; charset=utf-8", reply.to_string().into_bytes())
         }
-        _ => ("404 Not Found", "text/plain; charset=utf-8", "not found".to_string()),
+        _ => ("404 Not Found", "text/plain; charset=utf-8", b"not found".to_vec()),
     };
     write!(
         stream,
@@ -104,8 +113,27 @@ fn handle(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
          Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
         body.len()
     )?;
-    stream.write_all(body.as_bytes())?;
+    stream.write_all(&body)?;
     stream.flush()
+}
+
+/// `%20` and friends in a path.
+fn unpercent(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn state_json(cache: &Cache) -> String {

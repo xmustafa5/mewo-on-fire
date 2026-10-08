@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     let config = WKWebViewConfiguration()
     config.userContentController.add(self, name: "mewo")
+    config.setURLSchemeHandler(ArtifactSchemeHandler(), forURLScheme: "mewo-artifact")
     web = WKWebView(frame: .zero, configuration: config)
     web.navigationDelegate = self
     web.setValue(false, forKey: "drawsBackground")
@@ -85,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
   /// Links the page navigates to (claude://…) go to the app that owns them.
   func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-    if let url = action.request.url, let scheme = url.scheme, scheme != "file" {
+    if let url = action.request.url, let scheme = url.scheme, scheme != "file", scheme != "mewo-artifact" {
       NSWorkspace.shared.open(url)
       decisionHandler(.cancel)
       return
@@ -145,6 +146,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     NSApp.windowsMenu = winMenu
 
     NSApp.mainMenu = main
+  }
+}
+
+/// `mewo-artifact://a/<id>/<path>`: the daemon's copy of what a session
+/// published, from its state folder, so the page can show a design, a page
+/// or a document in an iframe without a server.
+final class ArtifactSchemeHandler: NSObject, WKURLSchemeHandler {
+  static let root = URL(fileURLWithPath: NSHomeDirectory() + "/.local/state/mewo-on-fire/artifacts").standardizedFileURL
+
+  func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+    guard let url = task.request.url else { return }
+    let parts = url.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+    let file = Self.root.appendingPathComponent(parts.joined(separator: "/")).standardizedFileURL.path
+    let inside = parts.count >= 2 && !parts.contains("..") && file.hasPrefix(Self.root.path + "/")
+    guard inside, let data = FileManager.default.contents(atPath: file) else {
+      reply(task, url, 404, "text/plain; charset=utf-8", Data("not found".utf8))
+      return
+    }
+    reply(task, url, 200, Self.mime(file), data)
+  }
+
+  func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
+
+  private func reply(_ task: WKURLSchemeTask, _ url: URL, _ status: Int, _ type: String, _ data: Data) {
+    let headers = ["Content-Type": type, "Content-Length": "\(data.count)", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache"]
+    guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers) else { return }
+    task.didReceive(response)
+    task.didReceive(data)
+    task.didFinish()
+  }
+
+  static func mime(_ path: String) -> String {
+    switch (path as NSString).pathExtension.lowercased() {
+    case "html", "htm": return "text/html; charset=utf-8"
+    case "css": return "text/css; charset=utf-8"
+    case "js", "mjs": return "text/javascript; charset=utf-8"
+    case "json": return "application/json; charset=utf-8"
+    case "md", "txt", "csv": return "text/plain; charset=utf-8"
+    case "svg": return "image/svg+xml"
+    case "png": return "image/png"
+    case "jpg", "jpeg": return "image/jpeg"
+    case "gif": return "image/gif"
+    case "webp": return "image/webp"
+    case "woff2": return "font/woff2"
+    case "woff": return "font/woff"
+    case "ttf": return "font/ttf"
+    case "mp4": return "video/mp4"
+    case "pdf": return "application/pdf"
+    default: return "application/octet-stream"
+    }
   }
 }
 

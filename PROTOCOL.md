@@ -537,3 +537,22 @@ seconds later. macOS with Claude Desktop only; a Linux PC answers with an
 error. Whether Desktop honours `folder` is its own business: when it does
 not, the session opens in the project Desktop has in front.
 
+## Artifact files (v1.6)
+
+A session's `artifacts` entries carry, when the daemon kept a copy of the
+published files, `id` (the last segment of the url), `local: true` and
+`entry`: what to open in the copy (`…/canvas.json` for a design, the page,
+or the `.md` of a document). The copy lives under
+`~/.local/state/mewo-on-fire/artifacts/<id>/`; a design's boards have their
+`{{prop}}` placeholders filled with the props' defaults so they render on
+their own, and a document has a `<name>.md.html` page beside it.
+
+- Phone → PC: `{"type":"get_artifact","client_id":"…","session_id":"…","url":"…"}`.
+- PC → phone: one `{"type":"artifact_file","client_id","path","part","parts","encoding":"text"|"base64","data"}`
+  per chunk (under 600 KB each), then
+  `{"type":"artifact_end","client_id","ok":true,"id","kind","entry","title"}`,
+  or `{"type":"artifact_end","client_id","ok":false,"error":"…"}` when the
+  files are gone.
+- `mewo dashboard` serves the copies at `/artifact/<id>/<path>`; the Mac
+  console reads them through its `mewo-artifact://a/<id>/<path>` scheme.
+

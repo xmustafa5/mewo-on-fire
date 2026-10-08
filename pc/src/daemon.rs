@@ -614,6 +614,7 @@ async fn expire_loop(state: Arc<AppState>) {
         state.expire_requests();
         if minutes % 60 == 0 {
             let _ = tokio::task::spawn_blocking(uploads::prune).await;
+            let _ = tokio::task::spawn_blocking(crate::artifacts::prune).await;
         }
         minutes += 1;
     }

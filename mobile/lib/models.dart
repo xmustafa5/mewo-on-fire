@@ -329,10 +329,27 @@ class SessionState {
 /// Something a session published with Claude's Artifact tool (PROTOCOL.md
 /// v1.6): a design canvas, a document, a page.
 class SessionArtifact {
-  const SessionArtifact({required this.url, this.title = '', this.kind = 'artifact', this.ts = 0});
+  const SessionArtifact({
+    required this.url,
+    this.title = '',
+    this.kind = 'artifact',
+    this.ts = 0,
+    this.id = '',
+    this.local = false,
+    this.entry = '',
+  });
 
   final String url;
   final String title;
+
+  /// The last segment of the url; the folder of the PC's copy.
+  final String id;
+
+  /// The PC kept the files: the app can show it in place.
+  final bool local;
+
+  /// What to open in the copy: a design's `canvas.json`, a page, a `.md`.
+  final String entry;
 
   /// `design`, `document`, `page` or `artifact`.
   final String kind;
@@ -343,9 +360,20 @@ class SessionArtifact {
         title: _asString(j['title']),
         kind: _asString(j['kind']).isEmpty ? 'artifact' : _asString(j['kind']),
         ts: _asInt(j['ts']),
+        id: _asString(j['id']),
+        local: j['local'] == true,
+        entry: _asString(j['entry']),
       );
 
-  Map<String, dynamic> toJson() => {'url': url, 'title': title, 'kind': kind, 'ts': ts};
+  Map<String, dynamic> toJson() => {
+        'url': url,
+        'title': title,
+        'kind': kind,
+        'ts': ts,
+        if (id.isNotEmpty) 'id': id,
+        if (local) 'local': true,
+        if (entry.isNotEmpty) 'entry': entry,
+      };
 
   String get kindLabel {
     switch (kind) {

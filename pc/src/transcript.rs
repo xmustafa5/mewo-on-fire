@@ -2,6 +2,7 @@
 //! "Transcript → chat items"). Blocking file IO: call from spawn_blocking.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ask::truncate_chars;
+use crate::artifacts;
 use crate::suggest;
 
 /// Only the tail of the transcript is read.
@@ -58,6 +60,16 @@ pub struct Artifact {
     pub title: String,
     pub kind: String,
     pub ts: u64,
+    /// The last segment of the url: the folder of the daemon's copy.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// The daemon has the files: `get_artifact` can hand them to a phone.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
+    /// What to open in the copy: a design's `canvas.json`, a page, a
+    /// document (`.md`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub entry: String,
 }
 
 /// At most this many artifacts are kept per session (the newest).
@@ -69,6 +81,8 @@ pub struct Transcript {
     pub items: Vec<ChatItem>,
     /// Artifacts published in this transcript, oldest first (v1.6).
     pub artifacts: Vec<Artifact>,
+    /// Where each artifact's files were published from, by url.
+    pub artifact_sources: HashMap<String, Vec<artifacts::Source>>,
     /// Last `custom-title` entry's `customTitle` (a session renamed by the
     /// user; the Claude desktop app writes its titles this way too), else the
     /// last `ai-title` entry's `aiTitle`.
@@ -91,7 +105,12 @@ pub fn file_key(path: &str) -> Option<FileKey> {
 /// unreadable file gives an empty transcript.
 pub fn read(path: &str, limit: usize) -> Transcript {
     match read_tail(Path::new(path)) {
-        Ok(bytes) => parse(&bytes, limit),
+        Ok(bytes) => {
+            let mut tr = parse(&bytes, limit);
+            // Keep the published files while they exist (v1.6).
+            artifacts::snapshot_all(&mut tr.artifacts, &tr.artifact_sources);
+            tr
+        }
         Err(_) => Transcript::default(),
     }
 }
@@ -134,8 +153,9 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
     let mut open_agents: HashSet<String> = HashSet::new();
     let mut last_ts: u64 = 0;
     // v1.6: Artifact tool calls whose url only the tool_result tells.
-    let mut pending_artifacts: HashMap<String, (String, String)> = HashMap::new();
+    let mut pending_artifacts: HashMap<String, (String, String, Vec<artifacts::Source>)> = HashMap::new();
     let mut artifacts: Vec<Artifact> = Vec::new();
+    let mut artifact_sources: HashMap<String, Vec<artifacts::Source>> = HashMap::new();
 
     for (n, line) in bytes.split(|&b| b == b'\n').enumerate() {
         if line.iter().all(u8::is_ascii_whitespace) {
@@ -178,7 +198,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
         // found again by `image`.
         let mut images: Vec<ImageRef> = Vec::new();
         if kind == "user" {
-            artifact_results(content, &mut pending_artifacts, &mut artifacts, last_ts);
+            artifact_results(content, &mut pending_artifacts, &mut artifacts, &mut artifact_sources, last_ts);
             if let Some((text, blocks)) = user_text(content, &mut open_agents) {
                 open_agents.clear();
                 found.push(("user", text, None));
@@ -192,7 +212,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
                 }
             }
         } else {
-            artifact_calls(content, &mut pending_artifacts, &mut artifacts, last_ts);
+            artifact_calls(content, &mut pending_artifacts, &mut artifacts, &mut artifact_sources, str_of(&v, "cwd"), last_ts);
             assistant_items(content, &mut found, &mut open_agents);
         }
 
@@ -232,6 +252,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
     Transcript {
         items: items.into_iter().collect(),
         artifacts,
+        artifact_sources,
         title: custom_title.or(ai_title),
         agents_running: !open_agents.is_empty(),
     }
@@ -289,7 +310,7 @@ fn upsert_artifact(list: &mut Vec<Artifact>, url: String, title: String, kind: &
         }
         return;
     }
-    list.push(Artifact { url, title, kind: kind.to_string(), ts });
+    list.push(Artifact { url, title, kind: kind.to_string(), ts, ..Artifact::default() });
     while list.len() > MAX_ARTIFACTS {
         list.remove(0);
     }
@@ -300,8 +321,10 @@ fn upsert_artifact(list: &mut Vec<Artifact>, url: String, title: String, kind: &
 /// url in its tool_result.
 fn artifact_calls(
     content: Option<&Value>,
-    pending: &mut HashMap<String, (String, String)>,
+    pending: &mut HashMap<String, (String, String, Vec<artifacts::Source>)>,
     out: &mut Vec<Artifact>,
+    sources: &mut HashMap<String, Vec<artifacts::Source>>,
+    cwd: &str,
     ts: u64,
 ) {
     let Some(Value::Array(blocks)) = content else { return };
@@ -321,12 +344,14 @@ fn artifact_calls(
         let title = str_of(input, "title").trim().to_string();
         let kind = artifact_kind(input);
         let url = str_of(input, "url");
+        let files = call_sources(input, cwd);
         if url.contains("/artifact/") {
             upsert_artifact(out, url.to_string(), title, kind, ts);
+            add_sources(sources, url, files);
         } else {
             let id = str_of(b, "id");
             if !id.is_empty() {
-                pending.insert(id.to_string(), (title, kind.to_string()));
+                pending.insert(id.to_string(), (title, kind.to_string(), files));
             }
         }
     }
@@ -335,8 +360,9 @@ fn artifact_calls(
 /// User line: tool_results of pending Artifact calls carry the url.
 fn artifact_results(
     content: Option<&Value>,
-    pending: &mut HashMap<String, (String, String)>,
+    pending: &mut HashMap<String, (String, String, Vec<artifacts::Source>)>,
     out: &mut Vec<Artifact>,
+    sources: &mut HashMap<String, Vec<artifacts::Source>>,
     ts: u64,
 ) {
     let Some(Value::Array(blocks)) = content else { return };
@@ -344,16 +370,95 @@ fn artifact_results(
         if str_of(b, "type") != "tool_result" {
             continue;
         }
-        let Some((title, kind)) = pending.remove(str_of(b, "tool_use_id")) else { continue };
+        let Some((title, kind, files)) = pending.remove(str_of(b, "tool_use_id")) else { continue };
         let text: String = match b.get("content") {
             Some(Value::String(s)) => s.clone(),
             Some(Value::Array(parts)) => parts.iter().map(|p| str_of(p, "text")).collect::<Vec<_>>().join(" "),
             _ => String::new(),
         };
         if let Some(url) = artifact_url_in(&text) {
+            add_sources(sources, &url, files);
             upsert_artifact(out, url, title, &kind, ts);
         }
     }
+}
+
+fn add_sources(sources: &mut HashMap<String, Vec<artifacts::Source>>, url: &str, files: Vec<artifacts::Source>) {
+    if files.is_empty() {
+        return;
+    }
+    let list = sources.entry(url.to_string()).or_default();
+    for f in files {
+        list.retain(|s| s.published != f.published);
+        list.push(f);
+    }
+}
+
+/// The files an Artifact tool call publishes and where it took them from:
+/// `file_path` is the page itself (`index.html` / `index.md`), or, under
+/// `root`, a data file at its path relative to root; `files` maps the
+/// published paths to sources relative to root or the session's cwd.
+fn call_sources(input: &Value, cwd: &str) -> Vec<artifacts::Source> {
+    let cwd = Path::new(cwd);
+    let abs = |p: &str| -> PathBuf {
+        let p = Path::new(p);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            cwd.join(p)
+        }
+    };
+    let root: Option<PathBuf> = Some(str_of(input, "root")).filter(|r| !r.is_empty()).map(abs);
+    let base = root.clone().unwrap_or_else(|| cwd.to_path_buf());
+    let from_base = |p: &str| -> PathBuf {
+        let p = Path::new(p);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base.join(p)
+        }
+    };
+    let mut out = Vec::new();
+    let fp = str_of(input, "file_path");
+    if !fp.is_empty() {
+        let from = abs(fp);
+        let published = root
+            .as_ref()
+            .and_then(|r| from.strip_prefix(r).ok())
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| if fp.ends_with(".md") { "index.md" } else { "index.html" }.to_string());
+        out.push(artifacts::Source { published, from, main: true });
+    }
+    match input.get("files") {
+        Some(Value::Object(m)) => {
+            for (published, v) in m {
+                let from = match v {
+                    Value::String(s) => from_base(s),
+                    Value::Object(o) => match o.get("from").and_then(Value::as_str) {
+                        Some(s) => from_base(s),
+                        None => continue, // copied from another artifact, or removed
+                    },
+                    _ => continue,
+                };
+                out.push(artifacts::Source { published: published.clone(), from, main: false });
+            }
+        }
+        Some(Value::Array(a)) => {
+            for e in a {
+                let p = match e {
+                    Value::String(s) => s.as_str(),
+                    Value::Object(o) => o.get("path").and_then(Value::as_str).unwrap_or(""),
+                    _ => continue,
+                };
+                if !p.is_empty() {
+                    out.push(artifacts::Source { published: p.to_string(), from: from_base(p), main: false });
+                }
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 /// The visible text of a user line and the indexes of its image blocks
