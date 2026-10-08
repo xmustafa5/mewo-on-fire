@@ -190,6 +190,21 @@ Logs: `journalctl --user -u mewo-on-fire -f` on Linux, `tail -f ~/Library/Logs/m
 Restart the daemon: `systemctl --user restart mewo-on-fire` on Linux,
 `launchctl kickstart -k gui/$(id -u)/com.torchcorp.mewo-on-fire` on macOS.
 
+## Operations console (`mewo dashboard`)
+
+```sh
+mewo dashboard            # opens http://127.0.0.1:47824 in your browser
+mewo dashboard 5050       # another port; --no-open to just print the URL
+```
+
+A page for your screen, Iron Man style: every session as a node around
+your PC, lit by state (working, needs you, finished, closed), with activity
+flowing along the edges; counts, phones, relay and the live feed of events
+and requests beside it. It is served by that command on this machine only
+(nothing listens beyond localhost) and reads the daemon over the control
+socket, so it also works with a daemon from before the rename, just without
+the feed. Honours the system's Reduce Motion setting.
+
 ## Firewall
 
 The phone connects to TCP port `47821`; discovery uses mDNS (UDP 5353).

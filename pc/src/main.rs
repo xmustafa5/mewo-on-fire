@@ -6,6 +6,7 @@ mod cli;
 mod config;
 mod control;
 mod daemon;
+mod dashboard;
 mod hook;
 mod install;
 mod listen;
@@ -36,6 +37,9 @@ Commands:
   devices        List paired phones
   revoke <id>    Unpair a phone
   status         Show daemon status
+  dashboard [port]
+                 Operations console in your browser: sessions as a live network,
+                 counts, feed (on this machine only; default port 47824)
   sessions       List Claude Code sessions (state, listening, queued phone messages)
   chat <session> Show the last 20 chat items of a session (id prefix from `sessions`)
   test           Send a test notification
@@ -93,6 +97,14 @@ fn main() {
             }
         },
         "status" => cli::status(),
+        "dashboard" => {
+            let port = args
+                .iter()
+                .skip(1)
+                .find_map(|a| a.parse::<u16>().ok())
+                .unwrap_or(dashboard::DEFAULT_PORT);
+            dashboard::run(port, !args.iter().any(|a| a == "--no-open"))
+        }
         "sessions" => cli::sessions(),
         "chat" => match args.get(1) {
             Some(prefix) => cli::chat(prefix),

@@ -4,6 +4,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,23 +34,29 @@ const CHAT_MAX_LIMIT: usize = 1000;
 /// Send one request and read one response line. `timeout` applies to both
 /// the write and the read.
 pub fn request(req: &Value, timeout: Duration) -> Result<Value> {
-    request_with(req, Some(timeout), timeout)
+    request_with(&paths::socket_path(), req, Some(timeout), timeout)
+}
+
+/// Like `request`, at a given socket (the dashboard also reads a legacy
+/// `ccnotify` daemon).
+pub fn request_at(path: &Path, req: &Value, timeout: Duration) -> Result<Value> {
+    request_with(path, req, Some(timeout), timeout)
 }
 
 /// Like `request`, but waits for the reply with no read timeout (`mewo ask` /
 /// `mewo listen` block until a phone answers). `write_timeout` bounds the
 /// send.
 pub fn request_blocking(req: &Value, write_timeout: Duration) -> Result<Value> {
-    request_with(req, None, write_timeout)
+    request_with(&paths::socket_path(), req, None, write_timeout)
 }
 
 fn request_with(
+    path: &Path,
     req: &Value,
     read_timeout: Option<Duration>,
     write_timeout: Duration,
 ) -> Result<Value> {
-    let path = paths::socket_path();
-    let mut stream = std::os::unix::net::UnixStream::connect(&path)
+    let mut stream = std::os::unix::net::UnixStream::connect(path)
         .with_context(|| format!("connecting to {}", path.display()))?;
     stream.set_read_timeout(read_timeout)?;
     stream.set_write_timeout(Some(write_timeout))?;
@@ -229,6 +236,13 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             }
         }
         "status" => state.status_json(),
+        // The dashboard's feed: the last events and the requests waiting.
+        "events" => {
+            let n = req.get("limit").and_then(Value::as_u64).unwrap_or(50).min(500);
+            let last = state.last_id();
+            json!({"ok": true, "last_id": last, "events": state.events_since(last.saturating_sub(n))})
+        }
+        "requests" => json!({"ok": true, "requests": state.pending_requests()}),
         _ => json!({"ok": false, "error": "unknown_cmd"}),
     }
 }
