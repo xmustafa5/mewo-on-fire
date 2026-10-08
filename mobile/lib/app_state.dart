@@ -96,6 +96,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   final Map<String, ChatState> _chats = <String, ChatState>{};
 
+  /// v1.7 (TORCH policy): features by PC, and the policy requests waiting
+  /// for the PC's answer, by client id.
+  final Map<String, FeaturesData> _features = <String, FeaturesData>{};
+  final Map<String, Completer<Map<String, dynamic>>> _policyWaits = <String, Completer<Map<String, dynamic>>>{};
+  final Map<String, ScanReport> _scans = <String, ScanReport>{};
+
   /// Artifact files on their way from a PC (v1.6), by client id.
   final Map<String, _ArtifactFetch> _artifactFetches = <String, _ArtifactFetch>{};
 
@@ -354,6 +360,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _onPrs(msg);
     } else if (type == 'artifact_file' || type == 'artifact_end') {
       _onArtifactFrame(msg);
+    } else if (type == 'features') {
+      _onFeatures(msg);
+    } else if (type is String && type.endsWith('_result') && type != 'new_session_result') {
+      final c = _policyWaits.remove('${msg['client_id']}');
+      c?.complete(msg);
     } else if (type == 'new_session_result') {
       final c = _newSessions.remove('${msg['client_id']}');
       c?.complete(msg['ok'] == true ? '' : (msg['error'] is String && (msg['error'] as String).isNotEmpty ? msg['error'] as String : 'The PC could not start it'));
@@ -584,6 +595,122 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _prsTimers.remove(key)?.cancel();
   }
 
+  // ---- the TORCH flow (v1.7) ----
+
+  FeaturesData? featuresOf(String pcId) => _features[pcId];
+
+  /// Every feature of every PC, newest activity first.
+  List<(String, TorchFeature)> get allFeatures {
+    final out = <(String, TorchFeature)>[];
+    for (final e in _features.entries) {
+      for (final f in e.value.features) {
+        out.add((e.key, f));
+      }
+    }
+    out.sort((a, b) {
+      final ra = a.$2.running ? 0 : 1;
+      final rb = b.$2.running ? 0 : 1;
+      if (ra != rb) return ra - rb;
+      return a.$2.key.compareTo(b.$2.key);
+    });
+    return out;
+  }
+
+  ScanReport? scanOf(String pcId, String sessionId) => _scans[sessionKey(pcId, sessionId)];
+
+  /// Asks every PC for its features.
+  Future<void> refreshFeatures() async {
+    for (final pc in pcs) {
+      try {
+        sendToTask(jsonEncode({'cmd': 'policy', 'pc_id': pc.id, 'frame': {'type': 'get_features', 'client_id': _clientId()}}));
+      } catch (_) {}
+    }
+  }
+
+  void _onFeatures(Map<String, dynamic> msg) {
+    final pcId = '${msg['pc_id']}';
+    if (pcId.isEmpty) return;
+    if (msg['ok'] == false && _features.containsKey(pcId)) {
+      // Keep what was known; the error shows on the list.
+      final old = _features[pcId]!;
+      _features[pcId] = FeaturesData(features: old.features, selfCheck: old.selfCheck, reviewCheck: old.reviewCheck, error: '${msg['error'] ?? ''}', ts: old.ts);
+    } else {
+      _features[pcId] = FeaturesData.fromJson(msg);
+    }
+    notifyListeners();
+  }
+
+  String _clientId() => DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+
+  /// A policy frame to [pcId], answered by its `*_result`. The map has
+  /// `ok` and, when false, `error`.
+  Future<Map<String, dynamic>> policy(String pcId, String type, Map<String, dynamic> params) async {
+    if (!await _isRunning()) return {'ok': false, 'error': 'The background service is stopped. Start it on Home.'};
+    final clientId = _clientId();
+    final c = Completer<Map<String, dynamic>>();
+    _policyWaits[clientId] = c;
+    try {
+      sendToTask(jsonEncode({'cmd': 'policy', 'pc_id': pcId, 'frame': {...params, 'type': type, 'client_id': clientId}}));
+    } catch (_) {
+      _policyWaits.remove(clientId);
+      return {'ok': false, 'error': 'Could not reach the background service'};
+    }
+    final r = await c.future.timeout(const Duration(seconds: 30), onTimeout: () => {'ok': false, 'error': 'No answer from ${pcNameFor(pcId)}'});
+    _policyWaits.remove(clientId);
+    return r;
+  }
+
+  /// Signs a gate; refreshes the features after.
+  Future<String> sign(String pcId, TorchFeature f, TorchGate g, String role, String name, List<bool> checks) async {
+    final r = await policy(pcId, 'sign', {'feature': f.key, 'workspace': f.workspace, 'gate': g.id, 'role': role, 'name': name, 'checks': checks});
+    if (r['ok'] == true) {
+      if (name.trim().isNotEmpty && name.trim() != settings.signerName) await updateSettings(settings.copyWith(signerName: name.trim()));
+      unawaited(refreshFeatures());
+      final note = '${r['note'] ?? ''}';
+      return note;
+    }
+    throw StateError('${r['error'] ?? 'The PC could not sign it'}');
+  }
+
+  Future<String> requestSign(String pcId, TorchFeature f, TorchGate g, String role) async {
+    final r = await policy(pcId, 'request_sign', {'feature': f.key, 'workspace': f.workspace, 'gate': g.id, 'role': role, 'name': settings.signerName});
+    return r['ok'] == true ? '' : '${r['error'] ?? 'Could not ask'}';
+  }
+
+  /// Starts a planned session in Claude Desktop on the PC.
+  Future<String> startPlanSession(String pcId, TorchFeature f, int n) async {
+    final r = await policy(pcId, 'start_session', {'feature': f.key, 'workspace': f.workspace, 'n': n});
+    if (r['ok'] == true) {
+      Timer(const Duration(seconds: 4), refreshSessions);
+      Timer(const Duration(seconds: 5), refreshFeatures);
+      return '';
+    }
+    return '${r['error'] ?? 'The PC could not start it'}';
+  }
+
+  Future<String> setPlanStatus(String pcId, TorchFeature f, int n, String status) async {
+    final r = await policy(pcId, 'plan_status', {'feature': f.key, 'workspace': f.workspace, 'n': n, 'status': status, 'pr': ''});
+    if (r['ok'] == true) {
+      unawaited(refreshFeatures());
+      return '';
+    }
+    return '${r['error'] ?? 'Could not write the plan'}';
+  }
+
+  /// The self-check scan of a session's changes.
+  Future<ScanReport> scan(String pcId, String sessionId) async {
+    final r = await policy(pcId, 'get_scan', {'session_id': sessionId});
+    final report = ScanReport.fromJson(r);
+    _scans[sessionKey(pcId, sessionId)] = report;
+    notifyListeners();
+    return report;
+  }
+
+  /// One line of a session's self-check; the session push brings it back.
+  Future<void> setCheck(String pcId, String sessionId, int index, bool checked) async {
+    await policy(pcId, 'set_check', {'session_id': sessionId, 'index': index, 'checked': checked});
+  }
+
   // ---- artifacts (v1.6) ----
 
   /// The files of [a] from [pcId], saved under the temp folder. Throws a
@@ -598,7 +725,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final fetch = _ArtifactFetch(dir.path);
     _artifactFetches[clientId] = fetch;
     try {
-      sendToTask(jsonEncode({'cmd': 'get_artifact', 'pc_id': pcId, 'client_id': clientId, 'session_id': sessionId, 'url': a.url}));
+      sendToTask(jsonEncode({'cmd': 'get_artifact', 'pc_id': pcId, 'client_id': clientId, 'session_id': sessionId, 'url': a.url, 'id': a.id, 'entry': a.entry, 'title': a.title}));
     } catch (_) {
       _artifactFetches.remove(clientId);
       throw StateError('Could not reach the background service');

@@ -5,6 +5,10 @@ class EventKind {
   static const stop = 'stop';
   static const needsInput = 'needs_input';
   static const sessionEnd = 'session_end';
+
+  /// v1.7 (TORCH policy): a guard rail spoke up, a signature is asked for.
+  static const warning = 'warning';
+  static const signoff = 'signoff';
 }
 
 int _asInt(Object? v, [int fallback = 0]) {
@@ -407,7 +411,22 @@ class CcSession {
     this.lastText = '',
     this.queued = 0,
     this.artifacts = const <SessionArtifact>[],
+    this.branch = '',
+    this.model = '',
+    this.tier = 0,
+    this.feature = '',
+    this.planSession = 0,
+    this.checks = const <bool>[],
   });
+
+  /// v1.7 (TORCH policy): the git branch, the model and its tier, the
+  /// feature (`app/slug`) and plan session, the owner's self-check.
+  final String branch;
+  final String model;
+  final int tier;
+  final String feature;
+  final int planSession;
+  final List<bool> checks;
 
   final String id; // full session id
   final String short;
@@ -443,6 +462,12 @@ class CcSession {
             for (final a in j['artifacts'] as List)
               if (a is Map) SessionArtifact.fromJson(Map<String, dynamic>.from(a)),
         ],
+        branch: _asString(j['branch']),
+        model: _asString(j['model']),
+        tier: _asInt(j['tier']),
+        feature: _asString(j['feature']),
+        planSession: _asInt(j['plan_session']),
+        checks: j['checks'] is List ? (j['checks'] as List).map((e) => e == true).toList() : const <bool>[],
       );
 
   Map<String, dynamic> toJson() => {
@@ -459,6 +484,12 @@ class CcSession {
         'last_text': lastText,
         'queued': queued,
         if (artifacts.isNotEmpty) 'artifacts': artifacts.map((a) => a.toJson()).toList(),
+        if (branch.isNotEmpty) 'branch': branch,
+        if (model.isNotEmpty) 'model': model,
+        if (tier != 0) 'tier': tier,
+        if (feature.isNotEmpty) 'feature': feature,
+        if (planSession != 0) 'plan_session': planSession,
+        if (checks.isNotEmpty) 'checks': checks,
       };
 
   bool get ended => state == SessionState.ended;
@@ -568,7 +599,11 @@ class AppSettings {
     this.keepAlive = false,
     this.voiceLanguage = '',
     this.mutedProjects = const <String>[],
+    this.signerName = '',
   });
+
+  /// v1.7: the name written into a record when signing from this phone.
+  final String signerName;
 
   final bool notifyStop;
   final bool notifyNeedsInput;
@@ -593,6 +628,7 @@ class AppSettings {
         keepAlive: j['keep_alive'] is bool ? j['keep_alive'] as bool : false,
         voiceLanguage: _asString(j['voice_language']),
         mutedProjects: _asStringList(j['muted_projects']),
+        signerName: _asString(j['signer_name']),
       );
 
   Map<String, dynamic> toJson() => {
@@ -603,6 +639,7 @@ class AppSettings {
         'keep_alive': keepAlive,
         'voice_language': voiceLanguage,
         'muted_projects': mutedProjects,
+        'signer_name': signerName,
       };
 
   AppSettings copyWith({
@@ -613,6 +650,7 @@ class AppSettings {
     bool? keepAlive,
     String? voiceLanguage,
     List<String>? mutedProjects,
+    String? signerName,
   }) =>
       AppSettings(
         notifyStop: notifyStop ?? this.notifyStop,
@@ -622,6 +660,7 @@ class AppSettings {
         keepAlive: keepAlive ?? this.keepAlive,
         voiceLanguage: voiceLanguage ?? this.voiceLanguage,
         mutedProjects: mutedProjects ?? this.mutedProjects,
+        signerName: signerName ?? this.signerName,
       );
 
   /// Whether an action notification may be shown for [r] (the request is
@@ -638,6 +677,9 @@ class AppSettings {
         return notifyNeedsInput;
       case EventKind.sessionEnd:
         return notifySessionEnd;
+      case EventKind.warning:
+      case EventKind.signoff:
+        return notifyNeedsInput;
       default:
         return true;
     }
@@ -815,5 +857,381 @@ class PrList {
         error: error ?? this.error,
         loading: loading ?? this.loading,
         loaded: loaded,
+      );
+}
+
+// ---- v1.7: the TORCH Agentic Development Policy ----
+
+/// Checklist F (session self-check), as the pull request template lists it.
+const List<String> kSelfCheck = <String>[
+  'I read the whole diff, and I can explain every line.',
+  'The session\'s "done when" checks pass.',
+  'Tests exist for the new behaviour and they test behaviour, not just that the code runs.',
+  'The change stays inside the session\'s goal.',
+  'Glare components and variables are used. No hardcoded design values.',
+  'The rule files listed in the session plan were followed.',
+  'No secrets, keys or personal data in the code or the commit.',
+  'Lint, type check and the full test suite pass locally.',
+];
+
+/// Checklists G and H (reviewer).
+const List<String> kReviewCheck = <String>[
+  'Does what the session goal says; the PRD items it touches are met.',
+  'Follows the architecture and patterns already in the repository.',
+  'Reuses Glare, platform services and existing modules instead of copying them.',
+  'Errors are handled properly and not hidden.',
+  'Permissions and data access are checked on the server where they need to be.',
+  'The tests would fail if the feature broke. No tests edited only so they pass.',
+  'Matches the handoff HTML on screen.',
+  'No duplicated code, unexplained dependencies, leftover TODOs, debug logs or placeholder text.',
+  'No comments that just restate the code; nothing much larger than the task needed.',
+  'Names match the domain language in the PRD and the existing code.',
+  'I would have accepted this code if a person had written it.',
+];
+
+class GateItem {
+  const GateItem({required this.text, required this.checked});
+  final String text;
+  final bool checked;
+}
+
+/// A sign-off point of a feature: a checklist and who signed it.
+class TorchGate {
+  const TorchGate({
+    required this.id,
+    required this.checklist,
+    required this.title,
+    required this.step,
+    required this.file,
+    required this.items,
+    required this.roles,
+    required this.signatures,
+    required this.date,
+    required this.signed,
+    required this.present,
+  });
+
+  final String id;
+  final String checklist;
+  final String title;
+  final int step;
+  final String file;
+  final List<GateItem> items;
+  final List<String> roles;
+
+  /// role → name.
+  final Map<String, String> signatures;
+  final String date;
+  final bool signed;
+  final bool present;
+
+  List<String> get openRoles => [for (final r in roles) if (!signatures.containsKey(r)) r];
+
+  factory TorchGate.fromJson(Map<String, dynamic> j) => TorchGate(
+        id: _asString(j['id']),
+        checklist: _asString(j['checklist']),
+        title: _asString(j['title']),
+        step: _asInt(j['step']),
+        file: _asString(j['file']),
+        items: [
+          if (j['items'] is List)
+            for (final i in j['items'] as List)
+              if (i is Map) GateItem(text: _asString(i['text']), checked: i['checked'] == true),
+        ],
+        roles: _asStringList(j['roles']),
+        signatures: {
+          if (j['signatures'] is List)
+            for (final s in j['signatures'] as List)
+              if (s is Map) _asString(s['role']): _asString(s['name']),
+        },
+        date: _asString(j['date']),
+        signed: j['signed'] == true,
+        present: j['present'] == true,
+      );
+}
+
+class LiveSession {
+  const LiveSession({required this.id, required this.short, required this.state, required this.tier, required this.title});
+  final String id;
+  final String short;
+  final String state;
+  final int tier;
+  final String title;
+}
+
+/// One session of a feature's plan, with what the PC knows about it.
+class PlanSession {
+  const PlanSession({
+    required this.n,
+    required this.goal,
+    required this.level,
+    required this.tier,
+    required this.dependsOn,
+    required this.owner,
+    required this.status,
+    required this.loadFirst,
+    required this.prompt,
+    required this.doneWhen,
+    required this.pr,
+    required this.repo,
+    required this.folder,
+    required this.effective,
+    required this.note,
+    required this.running,
+    required this.attempts,
+    required this.live,
+    required this.prState,
+    required this.prUrl,
+    required this.prNumber,
+    required this.warnings,
+  });
+
+  final int n;
+  final String goal;
+  final String level;
+  final int tier;
+  final List<int> dependsOn;
+  final String owner;
+  final String status;
+  final List<String> loadFirst;
+  final String prompt;
+  final List<String> doneWhen;
+  final String pr;
+  final String repo;
+  final String folder;
+
+  /// `merged`, `review`, `progress`, `blocked`, `waiting`, `ready`.
+  final String effective;
+  final String note;
+  final bool running;
+  final int attempts;
+  final List<LiveSession> live;
+  final String prState;
+  final String prUrl;
+  final int prNumber;
+  final List<String> warnings;
+
+  String get statusLabel {
+    switch (effective) {
+      case 'merged':
+        return 'Merged';
+      case 'review':
+        return 'In review';
+      case 'progress':
+        return 'In progress';
+      case 'blocked':
+        return 'Blocked';
+      case 'waiting':
+        return 'Waiting';
+      default:
+        return 'Ready';
+    }
+  }
+
+  factory PlanSession.fromJson(Map<String, dynamic> j) => PlanSession(
+        n: _asInt(j['n']),
+        goal: _asString(j['goal']),
+        level: _asString(j['level']),
+        tier: _asInt(j['tier']),
+        dependsOn: j['depends_on'] is List ? (j['depends_on'] as List).map((e) => _asInt(e)).toList() : const <int>[],
+        owner: _asString(j['owner']),
+        status: _asString(j['status']),
+        loadFirst: _asStringList(j['load_first']),
+        prompt: _asString(j['prompt']),
+        doneWhen: _asStringList(j['done_when']),
+        pr: _asString(j['pr']),
+        repo: _asString(j['repo']),
+        folder: _asString(j['folder']),
+        effective: _asString(j['effective']),
+        note: _asString(j['note']),
+        running: j['running'] == true,
+        attempts: _asInt(j['attempts']),
+        live: [
+          if (j['live'] is List)
+            for (final l in j['live'] as List)
+              if (l is Map)
+                LiveSession(id: _asString(l['id']), short: _asString(l['short']), state: _asString(l['state']), tier: _asInt(l['tier']), title: _asString(l['title'])),
+        ],
+        prState: _asString(j['pr_state']),
+        prUrl: _asString(j['pr_url']),
+        prNumber: _asInt(j['pr_number']),
+        warnings: _asStringList(j['warnings']),
+      );
+}
+
+class TorchPlan {
+  const TorchPlan({required this.file, required this.prd, required this.reviewedBy, required this.revised, required this.sessions});
+  final String file;
+  final String prd;
+  final String reviewedBy;
+  final List<String> revised;
+  final List<PlanSession> sessions;
+
+  factory TorchPlan.fromJson(Map<String, dynamic> j) => TorchPlan(
+        file: _asString(j['file']),
+        prd: _asString(j['prd']),
+        reviewedBy: _asString(j['reviewed_by']),
+        revised: _asStringList(j['revised']),
+        sessions: [
+          if (j['sessions'] is List)
+            for (final s in j['sessions'] as List)
+              if (s is Map) PlanSession.fromJson(Map<String, dynamic>.from(s)),
+        ],
+      );
+}
+
+/// A feature of a TORCH workspace and where it stands in the twelve steps.
+class TorchFeature {
+  const TorchFeature({
+    required this.key,
+    required this.app,
+    required this.slug,
+    required this.branch,
+    required this.light,
+    required this.workspace,
+    required this.step,
+    required this.stepLabel,
+    required this.released,
+    required this.gates,
+    required this.plan,
+    required this.handoffFiles,
+    required this.handoffId,
+    required this.openQuestions,
+    required this.repos,
+    required this.prd,
+    required this.prdSigned,
+    required this.warnings,
+    required this.sessionsMerged,
+    required this.sessionsTotal,
+  });
+
+  static const List<String> steps = <String>[
+    'PRD draft',
+    'Estimates',
+    'Alignment and sign-off',
+    'Design process',
+    'Prototype and test',
+    'Handoff session',
+    'Handoff intake',
+    'Session planning',
+    'Build sessions',
+    'Staging',
+    'UAT',
+    'Production',
+  ];
+
+  final String key;
+  final String app;
+  final String slug;
+  final String branch;
+  final bool light;
+  final String workspace;
+  final int step;
+  final String stepLabel;
+  final bool released;
+  final List<TorchGate> gates;
+  final TorchPlan? plan;
+  final List<String> handoffFiles;
+  final String handoffId;
+  final int openQuestions;
+  final List<String> repos;
+  final String prd;
+  final bool prdSigned;
+  final List<String> warnings;
+  final int sessionsMerged;
+  final int sessionsTotal;
+
+  bool get running => plan?.sessions.any((s) => s.running) ?? false;
+  int get warningCount => warnings.length + (plan?.sessions.fold<int>(0, (a, s) => a + s.warnings.length) ?? 0);
+
+  factory TorchFeature.fromJson(Map<String, dynamic> j) => TorchFeature(
+        key: _asString(j['key']),
+        app: _asString(j['app']),
+        slug: _asString(j['slug']),
+        branch: _asString(j['branch']),
+        light: j['light'] == true,
+        workspace: _asString(j['workspace']),
+        step: _asInt(j['step']),
+        stepLabel: _asString(j['step_label']),
+        released: j['released'] == true,
+        gates: [
+          if (j['gates'] is List)
+            for (final g in j['gates'] as List)
+              if (g is Map) TorchGate.fromJson(Map<String, dynamic>.from(g)),
+        ],
+        plan: j['plan'] is Map ? TorchPlan.fromJson(Map<String, dynamic>.from(j['plan'] as Map)) : null,
+        handoffFiles: _asStringList(j['handoff_files']),
+        handoffId: _asString(j['handoff_id']),
+        openQuestions: _asInt(j['open_questions']),
+        repos: _asStringList(j['repos']),
+        prd: _asString(j['prd']),
+        prdSigned: j['prd_signed'] == true,
+        warnings: _asStringList(j['warnings']),
+        sessionsMerged: _asInt(j['sessions_merged']),
+        sessionsTotal: _asInt(j['sessions_total']),
+      );
+}
+
+/// The features of one PC, with the policy's checklist texts.
+class FeaturesData {
+  const FeaturesData({required this.features, required this.selfCheck, required this.reviewCheck, this.error = '', this.ts = 0});
+  final List<TorchFeature> features;
+  final List<String> selfCheck;
+  final List<String> reviewCheck;
+  final String error;
+  final int ts;
+
+  factory FeaturesData.fromJson(Map<String, dynamic> j) => FeaturesData(
+        features: [
+          if (j['features'] is List)
+            for (final f in j['features'] as List)
+              if (f is Map) TorchFeature.fromJson(Map<String, dynamic>.from(f)),
+        ],
+        selfCheck: _asStringList(j['self_check']),
+        reviewCheck: _asStringList(j['review_check']),
+        error: _asString(j['error']),
+        ts: DateTime.now().millisecondsSinceEpoch,
+      );
+}
+
+class ScanFinding {
+  const ScanFinding({required this.rule, required this.file, required this.line, required this.text});
+  final String rule;
+  final String file;
+  final int line;
+  final String text;
+}
+
+/// The self-check scan of a session's changes (policy 8.5).
+class ScanReport {
+  const ScanReport({required this.ok, required this.error, required this.base, required this.files, required this.additions, required this.deletions, required this.findings, required this.counts});
+  final bool ok;
+  final String error;
+  final String base;
+  final int files;
+  final int additions;
+  final int deletions;
+  final List<ScanFinding> findings;
+
+  /// label → count.
+  final List<(String, int)> counts;
+
+  factory ScanReport.fromJson(Map<String, dynamic> j) => ScanReport(
+        ok: j['ok'] == true,
+        error: _asString(j['error']),
+        base: _asString(j['base']),
+        files: _asInt(j['files']),
+        additions: _asInt(j['additions']),
+        deletions: _asInt(j['deletions']),
+        findings: [
+          if (j['findings'] is List)
+            for (final f in j['findings'] as List)
+              if (f is Map) ScanFinding(rule: _asString(f['rule']), file: _asString(f['file']), line: _asInt(f['line']), text: _asString(f['text'])),
+        ],
+        counts: [
+          if (j['counts'] is List)
+            for (final c in j['counts'] as List)
+              if (c is Map) (_asString(c['label']), _asInt(c['n'])),
+        ],
       );
 }

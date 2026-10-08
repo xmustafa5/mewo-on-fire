@@ -64,6 +64,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
       push()
       return
     }
+    // {"cmd": "daemon", "id", "req"}: a control request for the daemon (the pipeline view).
+    if let m = message.body as? [String: Any], m["cmd"] as? String == "daemon",
+       let id = m["id"] as? String, let req = m["req"] as? [String: Any] {
+      queue.async { [weak self] in
+        let reply = DaemonClient.forward(req)
+        let json = (try? JSONSerialization.data(withJSONObject: reply)).flatMap { String(data: $0, encoding: .utf8) } ?? "{\"ok\":false}"
+        let safeId = id.filter { $0.isLetter || $0.isNumber }
+        DispatchQueue.main.async { self?.web.evaluateJavaScript("window.__reply('\(safeId)', \(json))", completionHandler: nil) }
+      }
+      return
+    }
     // {"cmd": "new_session", "cwd", "prompt"}: the console's New session form.
     if let m = message.body as? [String: Any], m["cmd"] as? String == "new_session" {
       let cwd = m["cwd"] as? String ?? ""

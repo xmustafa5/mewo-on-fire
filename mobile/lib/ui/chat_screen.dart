@@ -634,6 +634,8 @@ class _ChatScreenState extends State<ChatScreen> {
         ((chat?.title.isNotEmpty ?? false) ? chat!.title : 'Session ${_short(widget.sessionId)}');
     final sub = <String>[
       if (session != null && session.project.isNotEmpty) session.project,
+      if (session != null && session.planSession > 0) 'S${session.planSession}',
+      if (session != null && session.tier > 0) 'Tier ${session.tier}',
       entry?.pcName ?? _state.pcNameFor(widget.pcId),
     ].join(' · ');
 
@@ -815,6 +817,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
               ],
+              _SelfCheck(pcId: widget.pcId, sessionId: widget.sessionId),
               const SizedBox(height: 18),
               if (pr.ci == 'fail') ...[
                 EmberButton(
@@ -2831,6 +2834,160 @@ class _ErrorBanner extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The owner's self-check (policy Checklist F) and the scan of the
+/// session's changes (v1.7), on the pull request sheet.
+class _SelfCheck extends StatefulWidget {
+  const _SelfCheck({required this.pcId, required this.sessionId});
+
+  final String pcId;
+  final String sessionId;
+
+  @override
+  State<_SelfCheck> createState() => _SelfCheckState();
+}
+
+class _SelfCheckState extends State<_SelfCheck> {
+  final AppState _state = AppState.instance;
+  bool _scanning = false;
+  bool _review = false;
+
+  Future<void> _scan() async {
+    if (_scanning) return;
+    setState(() => _scanning = true);
+    try {
+      await _state.scan(widget.pcId, widget.sessionId);
+    } finally {
+      if (mounted) setState(() => _scanning = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: _state,
+      builder: (context, _) {
+        final t = Theme.of(context).textTheme;
+        final session = _state.findSession(widget.pcId, widget.sessionId)?.session;
+        final data = _state.featuresOf(widget.pcId);
+        final lines = (data?.selfCheck.isNotEmpty ?? false) ? data!.selfCheck : kSelfCheck;
+        final review = (data?.reviewCheck.isNotEmpty ?? false) ? data!.reviewCheck : kReviewCheck;
+        final checks = session?.checks ?? const <bool>[];
+        final done = checks.where((c) => c).length;
+        final scan = _state.scanOf(widget.pcId, widget.sessionId);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Text('SELF-CHECK · CHECKLIST F', style: t.labelSmall?.copyWith(color: Ember.text3, letterSpacing: 1.4)),
+                const Spacer(),
+                Text('$done/${lines.length}', style: t.labelSmall?.copyWith(color: done == lines.length ? Ember.ok : Ember.text3)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            GlassCard(
+              padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
+              radius: 16,
+              fill: Ember.surface2.withValues(alpha: 0.8),
+              child: Column(
+                children: [
+                  for (var i = 0; i < lines.length; i++)
+                    CheckboxListTile(
+                      value: i < checks.length && checks[i],
+                      onChanged: (v) {
+                        HapticFeedback.selectionClick();
+                        _state.setCheck(widget.pcId, widget.sessionId, i, v ?? false);
+                      },
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      activeColor: Ember.ok,
+                      title: Text(lines[i], style: t.bodySmall?.copyWith(color: Ember.text, fontSize: 12.5)),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (scan != null && scan.ok) ...[
+              Row(
+                children: [
+                  Icon(scan.findings.isEmpty ? Icons.check_circle_outline_rounded : Icons.search_rounded, size: 16, color: scan.findings.isEmpty ? Ember.ok : Ember.amber),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      scan.findings.isEmpty
+                          ? 'Nothing found against ${scan.base}: ${scan.files} files, +${scan.additions} −${scan.deletions}.'
+                          : '${scan.findings.length} finding${scan.findings.length == 1 ? '' : 's'} against ${scan.base}: ${scan.counts.map((c) => '${c.$2} ${c.$1.toLowerCase()}').join(', ')}.',
+                      style: t.bodySmall?.copyWith(color: Ember.text2),
+                    ),
+                  ),
+                ],
+              ),
+              for (final f in scan.findings.take(6))
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, left: 22),
+                  child: Text(
+                    '${f.file}${f.line > 0 ? ':${f.line}' : ''} · ${f.text}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.labelSmall?.copyWith(color: Ember.text3, fontFamily: Ember.mono(context), fontWeight: FontWeight.w400, letterSpacing: 0),
+                  ),
+                ),
+              if (scan.findings.length > 6)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, left: 22),
+                  child: Text('+${scan.findings.length - 6} more on the console', style: t.labelSmall?.copyWith(color: Ember.text3)),
+                ),
+              const SizedBox(height: 10),
+            ] else if (scan != null && scan.error.isNotEmpty) ...[
+              Text('Scan: ${scan.error}', style: t.bodySmall?.copyWith(color: Ember.text3)),
+              const SizedBox(height: 10),
+            ],
+            EmberButton(
+              label: scan == null ? 'Scan my changes for slop' : 'Scan again',
+              icon: Icons.search_rounded,
+              style: EmberButtonStyle.secondary,
+              expand: true,
+              busy: _scanning,
+              onPressed: _scanning ? null : _scan,
+            ),
+            const SizedBox(height: 14),
+            PressScale(
+              onTap: () => setState(() => _review = !_review),
+              child: Row(
+                children: [
+                  Text('REVIEW · CHECKLISTS G AND H', style: t.labelSmall?.copyWith(color: Ember.text3, letterSpacing: 1.4)),
+                  const Spacer(),
+                  Icon(_review ? Icons.expand_less_rounded : Icons.expand_more_rounded, size: 18, color: Ember.text3),
+                ],
+              ),
+            ),
+            if (_review) ...[
+              const SizedBox(height: 6),
+              Text('By another developer, never the session owner.', style: t.labelSmall?.copyWith(color: Ember.text3)),
+              const SizedBox(height: 6),
+              for (final line in review)
+                Padding(
+                  padding: const EdgeInsets.only(top: 5),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(padding: EdgeInsets.only(top: 3), child: Icon(Icons.circle, size: 5, color: Ember.amber)),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(line, style: t.bodySmall?.copyWith(color: Ember.text2, fontSize: 12.5))),
+                    ],
+                  ),
+                ),
+            ],
+          ],
+        );
+      },
     );
   }
 }

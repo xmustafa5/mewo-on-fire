@@ -16,6 +16,7 @@ use crate::requests::{self, AskReply, Request, Requests};
 use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session, Sessions};
 use crate::store::{Event, Store};
 use crate::transcript::{self, ChatItem};
+use crate::policy;
 use crate::{control, mdns, net, paths, prs, relay, server, uploads};
 
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
@@ -109,6 +110,64 @@ impl AppState {
 
     pub fn last_id(&self) -> u64 {
         lock(&self.store).last_id()
+    }
+
+    /// v1.7: one line of a session's self-check.
+    pub fn set_check(&self, session_id: &str, index: usize, checked: bool) -> Option<Session> {
+        let update = lock(&self.sessions).set_check(session_id, index, checked);
+        if let Some(s) = &update {
+            let _ = self.tx.send(Push::Session(s.clone()));
+        }
+        update
+    }
+
+    /// v1.7: every feature of the workspaces this PC's sessions work in,
+    /// with the live state of their plan sessions.
+    pub async fn features_json(&self) -> Value {
+        let mut workspaces = policy::workspaces();
+        for s in self.session_list() {
+            if let Some(ws) = policy::workspace_for(&s.cwd) {
+                if !workspaces.contains(&ws) {
+                    policy::remember_workspace(&ws);
+                    workspaces.push(ws);
+                }
+            }
+        }
+        let sessions = self.session_list();
+        let mut all: Vec<Value> = Vec::new();
+        for ws in workspaces {
+            let mut feats = if policy::git_blocked() {
+                policy::last_known(&ws)
+            } else {
+                let ws2 = ws.clone();
+                let work = tokio::task::spawn_blocking(move || policy::features(&ws2));
+                match tokio::time::timeout(Duration::from_secs(12), work).await {
+                    Ok(Ok(f)) => f,
+                    Ok(Err(_)) => Vec::new(),
+                    Err(_) => {
+                        policy::mark_blocked();
+                        policy::last_known(&ws)
+                    }
+                }
+            };
+            for f in &mut feats {
+                let mut prs: Vec<Value> = Vec::new();
+                for repo in &f.fetched_repos {
+                    let dir = ws.join(repo).to_string_lossy().into_owned();
+                    prs.extend(self.prs.list_base(&dir, &f.branch).await);
+                }
+                policy::enrich(f, &sessions, &prs);
+                all.push(serde_json::to_value(&*f).unwrap_or(Value::Null));
+            }
+        }
+        json!({
+            "ok": true,
+            "features": all,
+            "workspaces": policy::workspaces().iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+            "self_check": policy::SELF_CHECK,
+            "review_check": policy::REVIEW_CHECK,
+            "warning": if policy::git_blocked() { policy::FOLDER_ACCESS_HINT } else { "" },
+        })
     }
 
     pub fn events_since(&self, since: u64) -> Vec<Event> {
@@ -298,9 +357,16 @@ impl AppState {
         if targets.is_empty() {
             return;
         }
-        let results = tokio::task::spawn_blocking(move || sessions::scan(targets))
-            .await
-            .unwrap_or_default();
+        // A transcript scan may copy published files from a folder macOS
+        // holds the daemon out of: bounded, and remembered (v1.7).
+        let work = tokio::task::spawn_blocking(move || sessions::scan(targets));
+        let results = match tokio::time::timeout(Duration::from_secs(20), work).await {
+            Ok(r) => r.unwrap_or_default(),
+            Err(_) => {
+                policy::mark_blocked();
+                Vec::new()
+            }
+        };
         let mut sessions = lock(&self.sessions);
         for result in results {
             let update = sessions.apply_scan(result);
@@ -329,6 +395,8 @@ impl AppState {
                         title: tr.title,
                         agents_running: tr.agents_running,
                         artifacts: tr.artifacts,
+                        model: tr.model,
+                        first_prompt: tr.first_prompt,
                     };
                     self.push_session(lock(&self.sessions).apply_scan(result));
                 }
@@ -594,6 +662,7 @@ async fn run_async() -> Result<()> {
     tokio::spawn(server::serve(state.clone(), tcp_listener, acceptor));
     tokio::spawn(expire_loop(state.clone()));
     tokio::spawn(sessions_loop(state.clone()));
+    tokio::spawn(match_loop(state.clone()));
     tokio::spawn(relay::run(state.clone()));
 
     wait_for_shutdown().await;
@@ -605,6 +674,35 @@ async fn run_async() -> Result<()> {
 
 /// Periodically drop phone requests nobody answered (PROTOCOL.md: 24 h),
 /// and once an hour the images phones sent more than a week ago.
+/// v1.7: matches sessions to the features of their workspace, off the
+/// sessions lock, since that reads folders macOS may hold the daemon out
+/// of until the user allows it.
+async fn match_loop(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(Duration::from_millis(1500));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        if policy::git_blocked() {
+            continue;
+        }
+        let jobs = lock(&state.sessions).take_matches();
+        for (id, cwd, branch, first_prompt) in jobs {
+            let work = tokio::task::spawn_blocking(move || policy::match_session(&cwd, &branch, &first_prompt));
+            match tokio::time::timeout(Duration::from_secs(15), work).await {
+                Ok(Ok((feature, n))) => {
+                    let update = lock(&state.sessions).set_match(&id, feature, n);
+                    state.push_session(update);
+                }
+                Ok(Err(_)) => {}
+                Err(_) => {
+                    policy::mark_blocked();
+                    break;
+                }
+            }
+        }
+    }
+}
+
 async fn expire_loop(state: Arc<AppState>) {
     let mut tick = tokio::time::interval(EXPIRE_CHECK_INTERVAL);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);

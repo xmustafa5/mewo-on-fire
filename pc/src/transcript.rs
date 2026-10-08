@@ -83,6 +83,10 @@ pub struct Transcript {
     pub artifacts: Vec<Artifact>,
     /// Where each artifact's files were published from, by url.
     pub artifact_sources: HashMap<String, Vec<artifacts::Source>>,
+    /// The model of the last assistant line (v1.7).
+    pub model: String,
+    /// The first user message, for matching a session to its plan (v1.7).
+    pub first_prompt: String,
     /// Last `custom-title` entry's `customTitle` (a session renamed by the
     /// user; the Claude desktop app writes its titles this way too), else the
     /// last `ai-title` entry's `aiTitle`.
@@ -156,6 +160,8 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
     let mut pending_artifacts: HashMap<String, (String, String, Vec<artifacts::Source>)> = HashMap::new();
     let mut artifacts: Vec<Artifact> = Vec::new();
     let mut artifact_sources: HashMap<String, Vec<artifacts::Source>> = HashMap::new();
+    let mut model = String::new();
+    let mut first_prompt = String::new();
 
     for (n, line) in bytes.split(|&b| b == b'\n').enumerate() {
         if line.iter().all(u8::is_ascii_whitespace) {
@@ -214,6 +220,15 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
         } else {
             artifact_calls(content, &mut pending_artifacts, &mut artifacts, &mut artifact_sources, str_of(&v, "cwd"), last_ts);
             assistant_items(content, &mut found, &mut open_agents);
+            let m = v.get("message").map(|m| str_of(m, "model")).unwrap_or("");
+            if !m.is_empty() && !m.starts_with('<') {
+                model = m.to_string();
+            }
+        }
+        if first_prompt.is_empty() {
+            if let Some((_, text, _)) = found.iter().find(|f| f.0 == "user") {
+                first_prompt = truncate_chars(text, 400);
+            }
         }
 
         if limit == 0 {
@@ -253,6 +268,8 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
         items: items.into_iter().collect(),
         artifacts,
         artifact_sources,
+        model,
+        first_prompt,
         title: custom_title.or(ai_title),
         agents_running: !open_agents.is_empty(),
     }

@@ -26,6 +26,7 @@ use crate::store::Event;
 use crate::transcript;
 use crate::uploads;
 use crate::artifacts;
+use crate::control;
 use crate::desktop;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
@@ -375,6 +376,15 @@ async fn handle_frame(
         "get_prs" => handle_get_prs(state, sink, &msg).await,
         "get_artifact" => handle_get_artifact(state, sink, &msg).await,
         "new_session" => handle_new_session(device, sink, &msg).await,
+        // v1.7: the TORCH flow.
+        "get_features" => {
+            let mut v = state.features_json().await;
+            if let Some(o) = v.as_object_mut() {
+                o.insert("type".to_string(), json!("features"));
+            }
+            send_json(sink, &v).await
+        }
+        "sign" | "plan_status" | "start_session" | "request_sign" | "get_scan" | "set_check" => handle_policy(state, sink, &msg).await,
         _ => Ok(()),
     }
 }
@@ -420,6 +430,31 @@ async fn handle_get_prs(state: &AppState, sink: &mut WsSink, msg: &Value) -> Res
     send_json(sink, &v).await
 }
 
+/// The policy frames (v1.7): each answers with the same shape as the
+/// control command, typed `<frame>_result` and carrying `client_id` back.
+async fn handle_policy(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    let frame = str_field(msg, "type").to_string();
+    let client_id = str_field(msg, "client_id").to_string();
+    let mut req = msg.clone();
+    if let Some(o) = req.as_object_mut() {
+        let cmd = match frame.as_str() {
+            "get_scan" => "scan",
+            other => other,
+        };
+        o.insert("cmd".to_string(), json!(cmd));
+    }
+    let mut v = tokio::task::block_in_place(|| control::policy_request(state, &req));
+    if frame == "set_check" {
+        // The session push carries the checks; a small ack is enough.
+        v = json!({"ok": v.get("ok").and_then(Value::as_bool).unwrap_or(false)});
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.insert("type".to_string(), json!(format!("{}_result", frame.trim_start_matches("get_"))));
+        o.insert("client_id".to_string(), json!(client_id));
+    }
+    send_json(sink, &v).await
+}
+
 /// `get_artifact` → the files of an artifact the daemon kept a copy of:
 /// one `artifact_file` per chunk, then `artifact_end` (v1.6).
 async fn handle_get_artifact(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
@@ -427,12 +462,18 @@ async fn handle_get_artifact(state: &AppState, sink: &mut WsSink, msg: &Value) -
     let client_id = str_field(msg, "client_id").to_string();
     let session_id = str_field(msg, "session_id");
     let url = str_field(msg, "url");
-    let found = state
-        .session_list()
-        .into_iter()
-        .find(|s| s.id == session_id)
-        .and_then(|s| s.artifacts.into_iter().find(|a| a.url == url))
-        .filter(|a| a.local && !a.id.is_empty());
+    let by_id = str_field(msg, "id").to_string();
+    let found = if !by_id.is_empty() && by_id == artifacts::id_of(&format!("x/{by_id}")) && artifacts::dir(&by_id).is_dir() {
+        // A folder the daemon exposed itself (a feature's handoff, v1.7).
+        Some(transcript::Artifact { id: by_id.clone(), local: true, entry: str_field(msg, "entry").to_string(), kind: "page".to_string(), title: str_field(msg, "title").to_string(), ..transcript::Artifact::default() })
+    } else {
+        state
+            .session_list()
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .and_then(|s| s.artifacts.into_iter().find(|a| a.url == url))
+            .filter(|a| a.local && !a.id.is_empty())
+    };
     let Some(a) = found else {
         let v = json!({"type": "artifact_end", "client_id": client_id, "ok": false, "error": "The files are no longer on the PC"});
         return send_json(sink, &v).await;

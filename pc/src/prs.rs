@@ -16,9 +16,16 @@ const LIMIT: &str = "20";
 const FIELDS: &str =
     "number,title,headRefName,additions,deletions,url,isDraft,reviewDecision,statusCheckRollup,updatedAt,author";
 
-#[derive(Default)]
 pub struct PrCache {
     entries: Mutex<HashMap<String, (Instant, Value)>>,
+    /// The base-branch lists, shared with their background refreshes.
+    shared: std::sync::Arc<Mutex<HashMap<String, (Instant, Value)>>>,
+}
+
+impl Default for PrCache {
+    fn default() -> Self {
+        PrCache { entries: Mutex::new(HashMap::new()), shared: std::sync::Arc::new(Mutex::new(HashMap::new())) }
+    }
 }
 
 impl PrCache {
@@ -41,6 +48,79 @@ impl PrCache {
             .insert(cwd.to_string(), (Instant::now(), fetched.clone()));
         fetched
     }
+}
+
+impl PrCache {
+    /// Pull requests (open, merged, closed) into `base` in the repository at
+    /// `dir`: what is cached, refreshed in the background when stale. The
+    /// first call answers with nothing and starts the fetch.
+    pub async fn list_base(&self, dir: &str, base: &str) -> Vec<Value> {
+        let key = format!("{dir}#{base}");
+        let cached = self.shared.lock().unwrap_or_else(|p| p.into_inner()).get(&key).map(|(at, v)| (at.elapsed(), v.clone()));
+        let (stale, value) = match cached {
+            Some((age, v)) => (age >= TTL, v),
+            None => (true, json!({"prs": [], "loading": true})),
+        };
+        if stale {
+            // Mark it fresh now so one fetch runs at a time.
+            self.shared
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(key.clone(), (Instant::now(), value.clone()));
+            let dir = dir.to_string();
+            let base = base.to_string();
+            let entries = self.entries_arc();
+            tokio::spawn(async move {
+                let fetched = tokio::time::timeout(GH_TIMEOUT, tokio::task::spawn_blocking(move || fetch_base(&dir, &base)))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_else(|| json!({"prs": [], "error": "GitHub took too long to answer"}));
+                entries.lock().unwrap_or_else(|p| p.into_inner()).insert(key, (Instant::now(), fetched));
+            });
+        }
+        value.get("prs").and_then(Value::as_array).cloned().unwrap_or_default()
+    }
+
+    fn entries_arc(&self) -> std::sync::Arc<Mutex<HashMap<String, (Instant, Value)>>> {
+        self.shared.clone()
+    }
+}
+
+const BASE_FIELDS: &str = "number,title,state,url,mergedAt,headRefName,isDraft,reviewDecision,author,body,updatedAt";
+
+/// `gh pr list --base <base> --state all`, trimmed to what the plan needs.
+fn fetch_base(dir: &str, base: &str) -> Value {
+    if dir.is_empty() || !Path::new(dir).is_dir() {
+        return json!({"prs": [], "error": "not on this PC"});
+    }
+    let Some(gh) = gh_path() else {
+        return json!({"prs": [], "error": "GitHub CLI (gh) is not installed on the PC"});
+    };
+    let raw = match run(dir, &gh, &["pr", "list", "--base", base, "--state", "all", "--limit", "60", "--json", BASE_FIELDS]) {
+        Ok(r) => r,
+        Err(e) => return json!({"prs": [], "error": friendly(&e)}),
+    };
+    let list: Vec<Value> = serde_json::from_str(&raw).unwrap_or_default();
+    let prs: Vec<Value> = list
+        .iter()
+        .map(|pr| {
+            let body: String = s(pr, "body").chars().take(400).collect();
+            json!({
+                "number": pr.get("number").and_then(Value::as_u64).unwrap_or(0),
+                "title": s(pr, "title"),
+                "state": s(pr, "state"),
+                "url": s(pr, "url"),
+                "merged_at": s(pr, "mergedAt"),
+                "branch": s(pr, "headRefName"),
+                "draft": pr.get("isDraft").and_then(Value::as_bool).unwrap_or(false),
+                "review": s(pr, "reviewDecision"),
+                "author": pr.get("author").map(|a| s(a, "login")).unwrap_or_default(),
+                "body": body,
+            })
+        })
+        .collect();
+    json!({"prs": prs, "error": ""})
 }
 
 fn empty(error: &str) -> Value {

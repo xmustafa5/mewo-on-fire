@@ -18,6 +18,7 @@ use crate::ask;
 use crate::daemon::AppState;
 use crate::hook;
 use crate::paths;
+use crate::policy;
 use crate::requests::{AskReply, Request};
 use crate::sessions::{ListenReply, ListenStart, Meta};
 use crate::store::Event;
@@ -157,6 +158,8 @@ async fn handle_conn(state: Arc<AppState>, stream: tokio::net::UnixStream) -> Re
                     json!({"ok": true, "sessions": state.session_list()})
                 }
                 "chat" => handle_chat(&state, &req).await,
+                // v1.7: the TORCH flow.
+                "features" => state.features_json().await,
                 _ => handle_request(&state, &req),
             }
         }
@@ -177,7 +180,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
                 Some(Ok(ev)) => ev,
                 _ => return json!({"ok": false, "error": "bad_event"}),
             };
-            if !matches!(ev.kind.as_str(), "stop" | "needs_input" | "session_end") {
+            if !matches!(ev.kind.as_str(), "stop" | "needs_input" | "session_end" | "warning" | "signoff") {
                 return json!({"ok": false, "error": "bad_kind"});
             }
             let mut ev = ev;
@@ -244,6 +247,12 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             json!({"ok": true, "last_id": last, "events": state.events_since(last.saturating_sub(n))})
         }
         "requests" => json!({"ok": true, "requests": state.pending_requests()}),
+        // v1.7 (TORCH policy): signatures, plan status, the self-check scan,
+        // starting a planned session, asking for a signature.
+        "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign" => {
+            // git and gh run here: off the async threads.
+            tokio::task::block_in_place(|| policy_request(state, req))
+        }
         // v1.6: a new session in Claude Desktop (the console's "New session").
         "new_session" => {
             let cwd = req.get("cwd").and_then(Value::as_str).unwrap_or("");
@@ -255,6 +264,118 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
         }
         _ => json!({"ok": false, "error": "unknown_cmd"}),
     }
+}
+
+/// The policy commands (v1.7). `workspace` names the workspace; when
+/// absent, the one feature `feature` is in.
+pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
+    let s = |k: &str| req.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let cmd = s("cmd");
+    if cmd == "scan" {
+        let session_id = s("session_id");
+        let (dir, feature) = if !session_id.is_empty() {
+            state
+                .session_list()
+                .into_iter()
+                .find(|x| x.id == session_id)
+                .map(|x| (x.cwd, x.feature))
+                .unwrap_or_default()
+        } else {
+            (s("dir"), String::new())
+        };
+        let base = s("base");
+        let feature_branch = if !base.is_empty() {
+            base
+        } else {
+            feature_branch_of(&dir, &feature)
+        };
+        return serde_json::to_value(policy::scan(&dir, &feature_branch)).unwrap_or(Value::Null);
+    }
+    if cmd == "set_check" {
+        let index = req.get("index").and_then(Value::as_u64).unwrap_or(99) as usize;
+        let checked = req.get("checked").and_then(Value::as_bool).unwrap_or(false);
+        return match state.set_check(&s("session_id"), index, checked) {
+            Some(session) => json!({"ok": true, "checks": session.checks}),
+            None => json!({"ok": false, "error": "unknown session or line"}),
+        };
+    }
+    let key = s("feature");
+    let Some(ws) = workspace_of(&s("workspace"), &key) else {
+        return json!({"ok": false, "error": format!("No workspace with the feature {key}")});
+    };
+    match cmd.as_str() {
+        "sign" => {
+            let checks: Vec<bool> = req.get("checks").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(false)).collect()).unwrap_or_default();
+            match policy::sign(&ws, &key, &s("gate"), &s("role"), &s("name"), &checks) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            }
+        }
+        "plan_status" => {
+            let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as u32;
+            match policy::set_plan_status(&ws, &key, n, &s("status"), &s("pr")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            }
+        }
+        "start_session" => {
+            let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let Some(f) = policy::features(&ws).into_iter().find(|f| f.key == key) else {
+                return json!({"ok": false, "error": "unknown feature"});
+            };
+            let Some(ps) = f.plan.as_ref().and_then(|p| p.sessions.iter().find(|x| x.n == n).cloned()) else {
+                return json!({"ok": false, "error": format!("The plan has no session {n}")});
+            };
+            if ps.prompt.is_empty() {
+                return json!({"ok": false, "error": format!("Session {n} has no prompt in the plan yet")});
+            }
+            match desktop::open_new_session(&ps.folder, &ps.prompt) {
+                Ok(()) => {
+                    let _ = policy::set_plan_status(&ws, &key, n, "In progress", "");
+                    json!({"ok": true, "folder": ps.folder})
+                }
+                Err(e) => json!({"ok": false, "error": e}),
+            }
+        }
+        "request_sign" => {
+            let gate = s("gate");
+            let role = s("role");
+            let by = s("name");
+            let Some(f) = policy::features(&ws).into_iter().find(|f| f.key == key) else {
+                return json!({"ok": false, "error": "unknown feature"});
+            };
+            let title = f.gates.iter().find(|g| g.id == gate).map(|g| g.title.clone()).unwrap_or(gate.clone());
+            let ev = Event {
+                kind: "signoff".to_string(),
+                project: f.app.clone(),
+                cwd: ws.to_string_lossy().into_owned(),
+                message: format!("{title} for {} / {}: {} to sign{}", f.app, f.slug, if role.is_empty() { "a lead".to_string() } else { role.clone() }, if by.is_empty() { String::new() } else { format!(" (asked by {by})") }),
+                detail: format!("{key}|{gate}|{role}"),
+                ..Event::default()
+            };
+            match state.emit(ev, &Meta::default()) {
+                Some(_) => json!({"ok": true}),
+                None => json!({"ok": false, "error": "not sent"}),
+            }
+        }
+        _ => json!({"ok": false, "error": "unknown_cmd"}),
+    }
+}
+
+/// The feature branch a session's changes go into, from its feature.
+fn feature_branch_of(dir: &str, feature: &str) -> String {
+    if feature.is_empty() {
+        return String::new();
+    }
+    let Some(ws) = policy::workspace_for(dir) else { return String::new() };
+    policy::features(&ws).into_iter().find(|f| f.key == feature).map(|f| f.branch).unwrap_or_default()
+}
+
+fn workspace_of(workspace: &str, key: &str) -> Option<std::path::PathBuf> {
+    if !workspace.is_empty() {
+        return policy::workspace_for(workspace);
+    }
+    policy::workspaces().into_iter().find(|ws| policy::features(ws).iter().any(|f| f.key == key))
 }
 
 /// `ask`: forward a prompt to the connected phones and block until one

@@ -143,6 +143,16 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                   ),
                 ),
               ]),
+              const SectionLabel('Signatures'),
+              group([
+                _Row(
+                  icon: Icons.draw_rounded,
+                  color: Ember.amber,
+                  title: 'Your name',
+                  subtitle: s.signerName.isEmpty ? 'Written into a record when you sign a checkpoint from this phone' : s.signerName,
+                  onTap: () => _editName(context, state),
+                ),
+              ]),
               const SectionLabel('Muted projects'),
               if (s.mutedProjects.isEmpty)
                 group([
@@ -267,6 +277,29 @@ class _Group extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<void> _editName(BuildContext context, AppState state) async {
+  final c = TextEditingController(text: state.settings.signerName);
+  final name = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Your name'),
+      content: TextField(
+        controller: c,
+        autofocus: true,
+        textCapitalization: TextCapitalization.words,
+        decoration: const InputDecoration(hintText: 'As it goes into the records'),
+        onSubmitted: (v) => Navigator.pop(ctx, v),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Save')),
+      ],
+    ),
+  );
+  if (name == null) return;
+  await state.updateSettings(state.settings.copyWith(signerName: name.trim()));
 }
 
 class _Row extends StatelessWidget {

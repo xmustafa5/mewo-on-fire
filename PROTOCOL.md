@@ -556,3 +556,79 @@ their own, and a document has a `<name>.md.html` page beside it.
 - `mewo dashboard` serves the copies at `/artifact/<id>/<path>`; the Mac
   console reads them through its `mewo-artifact://a/<id>/<path>` scheme.
 
+## The TORCH flow (v1.7)
+
+Support for the TORCH Agentic Development Policy: a *workspace* is a folder
+with `app-notebooks/` and `context/templates/SESSION_PLAN.md`; the daemon
+remembers every workspace a session ran in (`workspaces.json` in its
+state folder) and reads each feature's records from
+`app-notebooks/{app}/features/{slug}/`.
+
+### Session additions
+
+`branch` (from the hook, `git branch --show-current` in `cwd`), `model`
+and `tier` (1 strongest, 3 lightest, from the transcript), `feature`
+(`app/slug`, from a `feature/{app}-{slug}` or `fix/{app}-{slug}` branch),
+`plan_session` (the plan's session whose prompt the first message
+matches), `checks` (the owner's self-check, Checklist F).
+
+### Frames (phone ↔ PC)
+
+- `get_features` → `features {ok, features: [...], workspaces, self_check,
+  review_check, warning}`. A feature carries `key, app, slug, branch,
+  light, workspace, dir, step (1..12), step_label, released, gates,
+  plan, handoff_files, handoff_id, open_questions, repos, prd,
+  prd_signed, warnings, sessions_merged, sessions_total`. A gate: `id`
+  (`handoff1`, `handoff2`, `intake`, `plan`, `staging`, `uat`,
+  `production`, `light`), `checklist` (D, E, I, J, K, L), `title`,
+  `step`, `file`, `items [{text, checked}]`, `roles`, `signatures
+  [{role, name}]`, `date`, `signed`, `present`. A plan session: the
+  template's fields plus `effective` (`merged`, `review`, `progress`,
+  `blocked`, `waiting`, `ready`), `note`, `running`, `attempts`, `live`,
+  `pr_state`, `pr_url`, `pr_number`, `warnings`.
+- `sign {client_id, feature, workspace, gate, role, name, checks:[bool]}`
+  → `sign_result {ok, file, committed, signed, note, error}`. Ticks the
+  confirmed items and writes the name and date into the record's
+  signature table; commits when the workspace is on the feature branch.
+- `plan_status {feature, n, status, pr}` → `plan_status_result`.
+- `start_session {feature, n}` → `start_session_result`: Claude Desktop
+  starts the plan's session with its prompt in its repository, and the
+  plan's table says "In progress".
+- `request_sign {feature, gate, role, name}` → `request_sign_result`,
+  and a `signoff` event to every phone.
+- `get_scan {session_id}` → `scan_result {ok, base, files, additions,
+  deletions, findings [{rule, file, line, text}], counts}`: the session's
+  changes against the feature branch (or main) checked for leftover
+  TODOs, debug output, commented-out code, placeholder text, new
+  dependencies, hardcoded colours, swallowed errors, large files and
+  weakened tests (Checklists F and H).
+- `set_check {session_id, index, checked}` → `set_check_result`; the
+  session push carries `checks`.
+- `get_artifact` also takes `id` (+ `entry`, `title`) for a folder the
+  daemon exposed itself: a feature's handoff (`handoff_id`).
+
+### Events
+
+`warning` (a guard rail: a commit or push to main of a code repository
+refused by the PreToolUse hook, or a session on main / an off-pattern
+branch at SessionStart) and `signoff` (a signature asked for; `detail`
+is `feature|gate|role`).
+
+### Hooks
+
+`mewo install` adds `SessionStart` (async) and `PreToolUse` with matcher
+`Bash` (blocking, 10 s): the latter answers
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":…}}`
+for a `git commit`, `merge`, `cherry-pick`, `revert` on main, a switch to
+main followed by one, or a push to main, inside a workspace's code
+repository.
+
+### Control socket
+
+`features`, `sign`, `plan_status`, `start_session`, `request_sign`,
+`scan {session_id | dir, base}`, `set_check`, with the same fields.
+`mewo dashboard` forwards them from `POST /api/daemon`; the Mac console
+through its `daemon` message. On macOS the daemon needs Files and
+Folders access to the workspace; while macOS holds it out, `features`
+answers with the last known records and `warning` says so.
+

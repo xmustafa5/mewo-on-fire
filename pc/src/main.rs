@@ -15,6 +15,7 @@ mod listen;
 mod mdns;
 mod net;
 mod paths;
+mod policy;
 mod prs;
 mod relay;
 mod requests;

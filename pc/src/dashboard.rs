@@ -96,6 +96,14 @@ fn handle(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
                 None => ("404 Not Found", "text/plain; charset=utf-8", b"not found".to_vec()),
             }
         }
+        // v1.7: the policy commands, forwarded to the daemon.
+        ("POST", "/api/daemon") => {
+            let mut raw = vec![0u8; content_length];
+            std::io::Read::read_exact(&mut reader, &mut raw)?;
+            let req: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+            let reply = forward(&req);
+            ("200 OK", "application/json; charset=utf-8", reply.to_string().into_bytes())
+        }
         ("POST", "/api/new_session") => {
             let mut raw = vec![0u8; content_length];
             std::io::Read::read_exact(&mut reader, &mut raw)?;
@@ -145,6 +153,25 @@ fn state_json(cache: &Cache) -> String {
     let s = collect().to_string();
     *cache.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), s.clone()));
     s
+}
+
+/// A control request of the page, to this daemon only, commands the page
+/// is meant to send.
+fn forward(req: &Value) -> Value {
+    let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("");
+    if !matches!(cmd, "features" | "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign") {
+        return json!({"ok": false, "error": "not a console command"});
+    }
+    for (path, legacy) in sockets() {
+        if !path.exists() || legacy {
+            continue;
+        }
+        match control::request_at(&path, req, Duration::from_secs(20)) {
+            Ok(v) => return v,
+            Err(e) => return json!({"ok": false, "error": e.to_string()}),
+        }
+    }
+    json!({"ok": false, "error": "The daemon is not running"})
 }
 
 /// The console's "New session": through the daemon when it is this one
@@ -201,12 +228,14 @@ fn collect() -> Value {
                 desktop::tag(&mut sessions);
                 let events = field(&path, json!({"cmd": "events", "limit": 120}), "events");
                 let requests = field(&path, json!({"cmd": "requests"}), "requests");
+                let features = if legacy { Value::Array(Vec::new()) } else { field(&path, json!({"cmd": "features"}), "features") };
                 return json!({
                     "ok": true,
                     "daemon": status,
                     "sessions": sessions,
                     "events": events,
                     "requests": requests,
+                    "features": features,
                     "legacy": legacy,
                     "socket": path,
                     "now": now_ms(),

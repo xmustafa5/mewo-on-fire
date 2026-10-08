@@ -61,6 +61,65 @@ header {
 .pc .state { font-size: 10px; letter-spacing: 0.3em; color: var(--ok); margin-top: 2px; }
 .pc .state.off { color: var(--heat); }
 .pc .state::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 8px; box-shadow: 0 0 10px currentColor; vertical-align: 1px; animation: blink 2.4s ease-in-out infinite; }
+.views { display: flex; gap: 6px; margin-left: 26px; }
+.views button { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); font: 10px var(--mono); letter-spacing: 0.28em; padding: 7px 12px; }
+.views button.on { border-color: var(--cyan); color: var(--cyan); background: rgba(79,209,255,0.08); box-shadow: 0 0 14px rgba(79,209,255,0.18); }
+/* ---------- pipeline (TORCH policy) ---------- */
+#pipe { position: absolute; inset: 0; display: none; grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.4fr); gap: 0; }
+#pipe.on { display: grid; }
+#plist { overflow: auto; border-right: 1px solid var(--cyan-dim); padding: 14px; }
+#plist .f { cursor: pointer; border: 1px solid var(--cyan-dim); padding: 12px 14px; margin-bottom: 10px; background: rgba(79,209,255,0.03); position: relative; }
+#plist .f:hover { border-color: var(--cyan-line); }
+#plist .f.on { border-color: var(--amber); background: rgba(255,179,71,0.06); }
+#plist .f .t { font-weight: 700; color: #fff; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+#plist .f .t .badge, .badge { font-family: var(--mono); font-size: 9px; letter-spacing: 0.2em; border: 1px solid currentColor; padding: 2px 6px; color: var(--amber); }
+#plist .f .m { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--dim); margin-top: 4px; }
+.steps { display: flex; gap: 3px; margin-top: 10px; }
+.steps i { flex: 1; height: 5px; background: rgba(79,209,255,0.12); }
+.steps i.done { background: var(--ok); box-shadow: 0 0 8px rgba(61,214,140,.5); }
+.steps i.now { background: var(--amber); box-shadow: 0 0 10px var(--amber); animation: blink 2s ease-in-out infinite; }
+.steps i.late { background: var(--heat); }
+#plist .f .st { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; margin-top: 8px; color: var(--text); }
+#plist .f .st .w { color: var(--heat); }
+#pdetail { overflow: auto; padding: 16px 18px; }
+#pdetail .hd { display: flex; align-items: flex-start; gap: 12px; }
+#pdetail .hd .t { font-weight: 800; color: #fff; font-size: 17px; flex: 1; }
+#pdetail .hd .m { font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; color: var(--dim); margin-top: 4px; }
+#pdetail .sec { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.3em; color: var(--dim2); margin: 18px 0 8px; display: flex; justify-content: space-between; }
+#pdetail .warn { border: 1px solid rgba(255,61,31,.5); background: rgba(255,61,31,.08); color: #ffb4a6; padding: 8px 10px; font-size: 12px; margin-bottom: 8px; }
+.stepper { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; }
+.stepper div { border: 1px solid var(--cyan-dim); padding: 6px 4px; font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.04em; color: var(--dim2); text-align: center; line-height: 1.3; min-height: 44px; }
+.stepper div.done { border-color: rgba(61,214,140,.5); color: var(--ok); }
+.stepper div.now { border-color: var(--amber); color: var(--amber); background: rgba(255,179,71,.08); }
+.srow { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--cyan-dim); padding: 9px 12px; margin-bottom: 6px; }
+.srow .n { font-family: var(--mono); font-size: 13px; color: var(--cyan); }
+.srow .g { color: #fff; font-size: 12.5px; }
+.srow .i { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--dim); margin-top: 3px; }
+.srow .i .w { color: var(--heat); }
+.pill { font-family: var(--mono); font-size: 9px; letter-spacing: 0.2em; padding: 3px 8px; border: 1px solid currentColor; white-space: nowrap; }
+.pill.merged { color: var(--ok); } .pill.review { color: var(--cyan); } .pill.progress { color: var(--fire); } .pill.waiting, .pill.blocked { color: var(--ash); } .pill.ready { color: var(--amber); }
+.srow .a { display: flex; gap: 6px; align-items: center; }
+.btn { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--text); font: 10px var(--mono); letter-spacing: 0.18em; padding: 6px 9px; }
+.btn:hover { border-color: var(--cyan); }
+.btn.go { color: var(--bg); background: linear-gradient(135deg, #ff3d1f, #ff6b35, #ffb347); border: 0; font-weight: 700; }
+.btn:disabled { opacity: .4; cursor: default; }
+.gate { border: 1px solid var(--cyan-dim); padding: 10px 12px; margin-bottom: 6px; }
+.gate .h { display: flex; align-items: center; gap: 10px; }
+.gate .h .t { color: #fff; font-size: 12.5px; flex: 1; }
+.gate .h .k { font-family: var(--mono); font-size: 9px; letter-spacing: 0.2em; color: var(--cyan); }
+.gate .h .ok { color: var(--ok); font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.16em; }
+.gate .sig { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--dim); margin-top: 5px; }
+.gate .sig b { color: var(--text); font-weight: 500; }
+.gate form { margin-top: 10px; border-top: 1px dashed var(--cyan-dim); padding-top: 10px; display: none; }
+.gate form.on { display: block; }
+.gate label.it { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--text); margin: 4px 0; cursor: pointer; }
+.gate label.it.done { color: var(--dim); text-decoration: line-through; }
+.gate .roles { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 8px; }
+.gate .roles button.on { border-color: var(--amber); color: var(--amber); }
+.gate input[type=text] { width: 100%; box-sizing: border-box; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 12.5px var(--sans); padding: 7px 9px; outline: none; margin: 6px 0; }
+.gate .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--amber); margin-top: 6px; min-height: 12px; }
+.gate .msg.bad { color: var(--heat); }
+.files { display: flex; flex-wrap: wrap; gap: 6px; }
 .clock { text-align: right; font-family: var(--mono); }
 .clock .time { font-size: 22px; letter-spacing: 0.08em; color: #fff; font-variant-numeric: tabular-nums; }
 .clock .date { font-size: 10px; letter-spacing: 0.3em; color: var(--dim); }
@@ -173,6 +232,13 @@ main {
 #preview .stage.fill iframe { width: 100%; height: 100%; }
 #preview .stage.board iframe { transform-origin: top left; border-radius: 22px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
 #preview .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); padding: 20px 14px; }
+#preview .doc { position: absolute; inset: 0; overflow: auto; padding: 18px 22px; color: var(--text); font: 14px/1.6 var(--sans); background: rgba(12,10,9,.6); }
+#preview .doc h1, #preview .doc h2, #preview .doc h3 { color: #fff; line-height: 1.25; margin: 1.2em 0 .4em; } #preview .doc h1 { font-size: 22px; margin-top: .2em; } #preview .doc h2 { font-size: 17px; } #preview .doc h3 { font-size: 14px; }
+#preview .doc a { color: var(--amber); } #preview .doc code { font-family: var(--mono); font-size: .92em; background: rgba(79,209,255,.08); border: 1px solid var(--cyan-dim); padding: 1px 5px; }
+#preview .doc pre { background: rgba(0,0,0,.35); border: 1px solid var(--cyan-dim); padding: 12px; overflow: auto; } #preview .doc pre code { border: 0; background: none; padding: 0; }
+#preview .doc blockquote { border-left: 3px solid var(--fire); margin-left: 0; padding: 2px 12px; color: var(--dim); }
+#preview .doc table { border-collapse: collapse; width: 100%; font-size: 12.5px; } #preview .doc th, #preview .doc td { border: 1px solid var(--cyan-dim); padding: 5px 8px; text-align: left; vertical-align: top; } #preview .doc th { color: var(--dim); }
+#preview .doc li::marker { color: var(--amber); } #preview .doc img { max-width: 100%; }
 #detail {
   position: absolute; right: 14px; bottom: 44px; width: 330px; display: none; z-index: 6;
   background: rgba(6, 12, 20, 0.95); border: 1px solid var(--cyan-line); padding: 14px 16px 14px;
@@ -276,6 +342,7 @@ footer .seg { display: flex; gap: 22px; }
       <div class="s">OPERATIONS CONSOLE</div>
     </div>
   </div>
+  <div class="views"><button id="v-net" class="on" type="button">NETWORK</button><button id="v-pipe" type="button">PIPELINE</button></div>
   <div class="pc">
     <div class="name" id="pcname">—</div>
     <div class="state off" id="pcstate">LINKING</div>
@@ -315,6 +382,7 @@ footer .seg { display: flex; gap: 22px; }
   <section class="panel" id="center">
     <span class="c tl"></span><span class="c tr"></span><span class="c bl"></span><span class="c br"></span>
     <canvas id="net"></canvas>
+    <div id="pipe"><div id="plist"></div><div id="pdetail"><div class="msg" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);padding:20px">PICK A FEATURE</div></div></div>
     <div id="tip"></div>
     <button id="newbtn" type="button">+ NEW SESSION</button>
     <div id="newsess">
@@ -501,6 +569,124 @@ $('ns-go').addEventListener('click', async () => {
     catch (e) { newSessionResult({ ok: false, error: 'The console process did not answer' }); }
   }
 });
+// A control request of the daemon: through the Mac app, or `mewo dashboard`'s /api/daemon.
+const replies = new Map(); let replySeq = 0;
+window.__reply = (id, v) => { const r = replies.get(id); if (r) { replies.delete(id); r(v); } };
+function daemon(req) {
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo) {
+    return new Promise((res) => {
+      const id = 'r' + (++replySeq); replies.set(id, res);
+      window.webkit.messageHandlers.mewo.postMessage({ cmd: 'daemon', id, req });
+      setTimeout(() => { if (replies.has(id)) { replies.delete(id); res({ ok: false, error: 'No answer from the Mac app' }); } }, 25000);
+    });
+  }
+  return fetch('/api/daemon', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) })
+    .then((r) => r.json()).catch(() => ({ ok: false, error: 'The console process did not answer' }));
+}
+
+// ---------- the pipeline (TORCH Agentic Development Policy) ----------
+const STEPS = ['PRD draft', 'Estimates', 'Alignment', 'Design', 'Prototype', 'Handoff', 'Intake', 'Session plan', 'Build', 'Staging', 'UAT', 'Production'];
+let view = 'net', features = [], picked = null, signerName = '';
+try { signerName = localStorage.getItem('mewo.signer') || ''; } catch (e) {}
+function setView(v) {
+  view = v; $('v-net').classList.toggle('on', v === 'net'); $('v-pipe').classList.toggle('on', v === 'pipe');
+  $('pipe').classList.toggle('on', v === 'pipe'); $('net').style.visibility = v === 'pipe' ? 'hidden' : ''; $('newbtn').style.display = v === 'pipe' ? 'none' : '';
+  if (v === 'pipe') renderPipeline();
+}
+$('v-net').addEventListener('click', () => setView('net')); $('v-pipe').addEventListener('click', () => setView('pipe'));
+const stepBar = (f) => `<div class="steps">${STEPS.map((_, i) => `<i class="${f.released || i + 1 < f.step ? 'done' : i + 1 === f.step ? 'now' : ''}"></i>`).join('')}</div>`;
+function renderPipeline() {
+  const list = $('plist');
+  if (!features.length) { list.innerHTML = `<div class="msg" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);padding:10px">NO FEATURES YET · RUN A SESSION INSIDE A TORCH WORKSPACE (app-notebooks/, context/templates/) AND THEY APPEAR HERE</div>`; return; }
+  list.innerHTML = features.map((f) => {
+    const running = f.plan && f.plan.sessions.some((s) => s.running);
+    const warn = (f.warnings || []).length + (f.plan ? f.plan.sessions.reduce((a, s) => a + (s.warnings || []).length, 0) : 0);
+    return `<div class="f${picked === f.key ? ' on' : ''}" data-key="${esc(f.key)}">
+      <div class="t">${esc(f.app)} / ${esc(f.slug)}${f.light ? '<span class="badge">LIGHT PATH</span>' : ''}${running ? '<span class="badge" style="color:var(--fire)">RUNNING</span>' : ''}</div>
+      <div class="m">${esc(f.branch)}</div>
+      ${f.light ? '' : stepBar(f)}
+      <div class="st"><span>${f.released ? 'RELEASED' : `STEP ${f.step} · ${esc((f.step_label || '').toUpperCase())}`}</span><span>${f.sessions_total ? `${f.sessions_merged}/${f.sessions_total} MERGED` : ''}${f.open_questions ? ` · ${f.open_questions} OPEN Q` : ''}${warn ? ` · <span class="w">${warn} WARNING${warn > 1 ? 'S' : ''}</span>` : ''}</span></div>
+    </div>`;
+  }).join('');
+  for (const el of list.querySelectorAll('.f')) el.onclick = () => { picked = el.dataset.key; renderPipeline(); renderFeature(); };
+  if (picked) renderFeature();
+}
+function gateHtml(f, g) {
+  const sigs = (g.signatures || []).map((s) => `<b>${esc(s.name)}</b> (${esc(s.role)})`).join(', ');
+  const open = (g.roles || []).filter((r) => !(g.signatures || []).some((s) => s.role === r));
+  const items = g.items || [];
+  return `<div class="gate" data-gate="${esc(g.id)}">
+    <div class="h"><span class="k">${g.checklist ? 'CHECKLIST ' + esc(g.checklist) : 'REVIEW'}</span><span class="t">${esc(g.title)}</span>${g.signed ? '<span class="ok">SIGNED</span>' : g.present ? `<button class="btn sign" type="button">SIGN…</button><button class="btn ask" type="button" title="Notify the phones">ASK</button>` : '<span class="k" style="color:var(--dim2)">NO RECORD FILE</span>'}</div>
+    ${items.length ? `<div class="sig">${items.filter((i) => i.checked).length}/${items.length} ITEMS TICKED${g.roles && g.roles.length ? ' · ' : ''}${(g.roles || []).join(' · ').toUpperCase()}</div>` : ''}
+    ${sigs ? `<div class="sig">SIGNED BY ${sigs}${g.date ? ' · ' + esc(g.date) : ''}</div>` : ''}
+    <form onsubmit="return false">
+      ${items.map((it, i) => `<label class="it${it.checked ? ' done' : ''}"><input type="checkbox" data-i="${i}" ${it.checked ? 'checked disabled' : ''}> <span>${esc(it.text)}</span></label>`).join('')}
+      ${open.length ? `<div class="roles">${open.map((r, i) => `<button type="button" class="btn role${i === 0 ? ' on' : ''}" data-role="${esc(r)}">${esc(r.toUpperCase())}</button>`).join('')}</div>` : ''}
+      <input type="text" class="name" placeholder="Your name, as it goes in the record" value="${esc(signerName)}">
+      <div class="a"><button type="button" class="btn go do">SIGN AS ${esc((open[0] || 'reviewer').toUpperCase())}</button> <button type="button" class="btn cancel">CANCEL</button></div>
+      <div class="msg"></div>
+    </form>
+  </div>`;
+}
+function renderFeature() {
+  const f = features.find((x) => x.key === picked); const box = $('pdetail');
+  if (!f) { box.innerHTML = ''; return; }
+  const plan = f.plan;
+  const h = [];
+  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}` : ' · NO PRD FOUND'}</div></div>${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
+  for (const w of (f.warnings || [])) h.push(`<div class="warn" style="margin-top:10px">${esc(w)}</div>`);
+  if (!f.light) h.push(`<div class="sec"><span>THE TWELVE STEPS</span></div><div class="stepper">${STEPS.map((s, i) => `<div class="${f.released || i + 1 < f.step ? 'done' : i + 1 === f.step ? 'now' : ''}">${i + 1}<br>${esc(s)}</div>`).join('')}</div>`);
+  if (plan) {
+    h.push(`<div class="sec"><span>SESSION PLAN · ${esc(plan.file)}</span><span>${plan.reviewed_by ? 'REVIEWED BY ' + esc(plan.reviewed_by.toUpperCase()) : 'NOT REVIEWED YET'}</span></div>`);
+    for (const r of (plan.revised || [])) h.push(`<div class="warn" style="border-color:var(--amber);background:rgba(255,179,71,.06);color:var(--amber)">REVISED ${esc(r)}</div>`);
+    for (const s of plan.sessions) {
+      const live = (s.live || []).map((l) => `${esc(l.short)} ${l.state.toUpperCase()}${l.tier ? ' T' + l.tier : ''}`).join(', ');
+      h.push(`<div class="srow"><div class="n">S${s.n}</div><div><div class="g">${esc(s.goal)}</div><div class="i">${esc((s.level || '').toUpperCase())} · TIER ${s.tier || '?'} · ${esc(s.repo || f.repos[0] || '')}${s.owner ? ' · ' + esc(s.owner.toUpperCase()) : ''}${s.depends_on && s.depends_on.length ? ' · AFTER ' + s.depends_on.join(', ') : ''}${s.attempts ? ` · ${s.attempts} ATTEMPT${s.attempts > 1 ? 'S' : ''}` : ''}${live ? ' · ' + live : ''}${s.note ? ' · ' + esc(s.note.toUpperCase()) : ''}${(s.warnings || []).map((w) => ` <span class="w">· ${esc(w)}</span>`).join('')}</div></div>
+        <div class="a"><span class="pill ${esc(s.effective)}">${esc((s.effective === 'review' ? 'IN REVIEW' : s.effective === 'progress' ? 'IN PROGRESS' : s.effective).toUpperCase())}</span>${s.pr_url || s.pr ? `<button class="btn" type="button" data-url="${esc(s.pr_url || s.pr)}">PR${s.pr_number ? ' #' + s.pr_number : ''}</button>` : ''}${(s.live || []).filter((l) => l.desktop).slice(0, 1).map((l) => `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(l.desktop)}">OPEN</button>`).join('')}${s.effective === 'ready' || s.effective === 'progress' ? `<button class="btn go start" type="button" data-n="${s.n}" ${s.prompt ? '' : 'disabled title="No prompt in the plan"'}>START</button>` : ''}</div></div>`);
+    }
+  } else if (!f.light) {
+    h.push(`<div class="sec"><span>SESSION PLAN</span></div><div class="i" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim)">NO SESSION_PLAN.md YET · WRITE IT IN CLAUDE COWORK WITH THE session-plan SKILL</div>`);
+  }
+  h.push(`<div class="sec"><span>SIGN-OFFS</span></div>`);
+  for (const g of f.gates) h.push(gateHtml(f, g));
+  if (f.handoff_files && f.handoff_files.length) {
+    h.push(`<div class="sec"><span>HANDOFF · ${f.handoff_files.length} FILE${f.handoff_files.length > 1 ? 'S' : ''}</span></div><div class="files">${f.handoff_files.map((x) => `<button class="btn hf" type="button" data-file="${esc(x)}">${esc(x)}</button>`).join('')}</div>`);
+  }
+  box.innerHTML = h.join('');
+  for (const b of box.querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
+  for (const b of box.querySelectorAll('button.start')) b.onclick = async () => {
+    b.disabled = true; b.textContent = 'STARTING…';
+    const r = await daemon({ cmd: 'start_session', feature: f.key, n: +b.dataset.n });
+    b.textContent = r.ok ? 'STARTED' : 'FAILED'; if (!r.ok) alert(r.error || 'Could not start it');
+    setTimeout(refreshFeatures, 1500);
+  };
+  for (const b of box.querySelectorAll('button.hf')) b.onclick = () => preview({ id: f.handoff_id, entry: b.dataset.file, kind: 'page', title: `${f.app} / ${f.slug} · ${b.dataset.file}`, url: '' });
+  for (const gate of box.querySelectorAll('.gate')) {
+    const form = gate.querySelector('form'); const id = gate.dataset.gate; const g = f.gates.find((x) => x.id === id);
+    const signBtn = gate.querySelector('button.sign'); if (signBtn) signBtn.onclick = () => { form.classList.add('on'); form.querySelector('.name').focus(); };
+    const askBtn = gate.querySelector('button.ask'); if (askBtn) askBtn.onclick = async () => {
+      askBtn.disabled = true; const role = (g.roles || []).find((r) => !(g.signatures || []).some((s) => s.role === r)) || '';
+      const r = await daemon({ cmd: 'request_sign', feature: f.key, gate: id, role, name: signerName }); askBtn.textContent = r.ok ? 'ASKED' : 'FAILED';
+    };
+    gate.querySelector('button.cancel').onclick = () => form.classList.remove('on');
+    let role = (form.querySelector('button.role.on') || {}).dataset ? form.querySelector('button.role.on').dataset.role : '';
+    for (const rb of form.querySelectorAll('button.role')) rb.onclick = () => { for (const o of form.querySelectorAll('button.role')) o.classList.remove('on'); rb.classList.add('on'); role = rb.dataset.role; form.querySelector('button.do').textContent = 'SIGN AS ' + role.toUpperCase(); };
+    form.querySelector('button.do').onclick = async () => {
+      const name = form.querySelector('.name').value.trim(); const msg = form.querySelector('.msg');
+      if (!name) { msg.className = 'msg bad'; msg.textContent = 'YOUR NAME GOES INTO THE RECORD'; return; }
+      signerName = name; try { localStorage.setItem('mewo.signer', name); } catch (e) {}
+      const checks = [...form.querySelectorAll('input[type=checkbox]')].map((c) => c.checked);
+      msg.className = 'msg'; msg.textContent = 'WRITING…';
+      const r = await daemon({ cmd: 'sign', feature: f.key, gate: id, role: role || (g.roles || [])[0] || '', name, checks });
+      if (r.ok) { msg.textContent = (r.committed ? 'SIGNED AND COMMITTED' : 'SIGNED · ' + (r.note || '').toUpperCase()); setTimeout(refreshFeatures, 400); }
+      else { msg.className = 'msg bad'; msg.textContent = (r.error || 'FAILED').toUpperCase(); }
+    };
+  }
+}
+async function refreshFeatures() {
+  const r = await daemon({ cmd: 'features' });
+  if (r && r.ok) { features = r.features || []; if (view === 'pipe') renderPipeline(); }
+}
 // What a session made, shown in place: the daemon's copy of the files, through the Mac app's
 // mewo-artifact:// scheme, or `mewo dashboard`'s /artifact/<id>/. A design shows board by board.
 const pv = { box: $('preview'), kind: $('pv-kind'), title: $('pv-title'), boards: $('pv-boards'), stage: $('pv-stage') };
@@ -551,9 +737,45 @@ async function preview(a) {
     return;
   }
   if (entry.endsWith('.dc.html')) { showBoard(base, entry, 390, 844); return; }
+  if (entry.endsWith('.md')) {
+    // A document: the markdown itself, rendered here.
+    let text = '';
+    try { text = await (await fetch(base + entry)).text(); } catch (e) { text = ''; }
+    if (pvCurrent !== a) return;
+    const d = document.createElement('div'); d.className = 'doc'; d.innerHTML = text ? md(text) : '<p>Could not read the document.</p>';
+    pv.stage.appendChild(d);
+    return;
+  }
   const f = document.createElement('iframe'); f.title = pv.title.textContent;
-  f.src = base + entry + (entry.endsWith('.md') ? '.html' : '');
+  f.src = base + entry;
   pv.stage.appendChild(f);
+}
+// Markdown, enough for a document: headings, lists, code, quotes, tables, links.
+function md(src) {
+  const e = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const inline = (s) => e(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*\w])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img alt="$1" src="$2">')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  const lines = src.replace(/\r/g, '').split('\n'), out = []; let i = 0, m;
+  const block = /^(#{1,6}\s|```|\s*[-*+]\s|\s*\d+[.)]\s|>|\|)/;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^```/.test(l)) { const b = []; i++; while (i < lines.length && !/^```/.test(lines[i])) b.push(lines[i++]); i++; out.push('<pre><code>' + e(b.join('\n')) + '</code></pre>'); continue; }
+    if ((m = /^(#{1,6})\s+(.*)/.exec(l))) { out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push('<hr>'); i++; continue; }
+    if (/^\s*[-*+]\s+/.test(l)) { const it = []; while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) it.push(inline(lines[i++].replace(/^\s*[-*+]\s+/, ''))); out.push('<ul><li>' + it.join('</li><li>') + '</li></ul>'); continue; }
+    if (/^\s*\d+[.)]\s+/.test(l)) { const it = []; while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) it.push(inline(lines[i++].replace(/^\s*\d+[.)]\s+/, ''))); out.push('<ol><li>' + it.join('</li><li>') + '</li></ol>'); continue; }
+    if (/^>\s?/.test(l)) { const q = []; while (i < lines.length && /^>\s?/.test(lines[i])) q.push(lines[i++].replace(/^>\s?/, '')); out.push('<blockquote>' + md(q.join('\n')) + '</blockquote>'); continue; }
+    if (/^\|/.test(l)) { const rows = []; while (i < lines.length && /^\|/.test(lines[i])) rows.push(lines[i++]); const cells = (r) => r.replace(/^\||\|$/g, '').split('|').map((c) => inline(c.trim())); const head = cells(rows[0]); const body = rows.slice(1).filter((r) => !/^\|?\s*:?-{2,}/.test(r)); out.push('<table><thead><tr><th>' + head.join('</th><th>') + '</th></tr></thead><tbody>' + body.map((r) => '<tr><td>' + cells(r).join('</td><td>') + '</td></tr>').join('') + '</tbody></table>'); continue; }
+    if (!l.trim()) { i++; continue; }
+    const p = []; while (i < lines.length && lines[i].trim() && !block.test(lines[i])) p.push(lines[i++]);
+    if (!p.length) p.push(lines[i++]);
+    out.push('<p>' + inline(p.join(' ')) + '</p>');
+  }
+  return out.join('\n');
 }
 // A click on a session shows its card: open it in Claude Desktop, open what it made.
 const bursts = [];
@@ -562,7 +784,7 @@ const kindLabel = (k) => k === 'design' ? 'DESIGN' : k === 'document' ? 'DOC' : 
 function showDetail(s) {
   const arts = [...(s.artifacts || [])].reverse();
   detail.innerHTML = `<div class="hd"><div class="t">${esc(s.title || s.project || s.id)}</div><button class="x" aria-label="Close">×</button></div>
-    <div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}</div>
+    <div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}${s.tier ? ` · TIER ${s.tier}` : ''}${s.branch ? ` · ${esc(s.branch)}` : ''}${s.feature ? ` · ${esc(s.feature.toUpperCase())}${s.plan_session ? ' S' + s.plan_session : ''}` : ''}</div>
     ${s.last_text ? `<div class="last">${esc(s.last_text)}</div>` : ''}
     ${s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
     ${arts.length ? `<div class="sec">MADE BY CLAUDE</div>` + arts.map((a, i) => `<button class="act" style="--c:${a.kind === 'design' ? 'var(--amber)' : 'var(--cyan)'}" data-url="${esc(a.url)}" data-art="${i}"><span class="k">${kindLabel(a.kind)}</span><span class="n">${esc(a.title || 'Untitled ' + a.kind)}</span>${a.local ? '<span class="k" style="width:auto">VIEW</span>' : ''}</button>`).join('') : ''}`;
@@ -794,7 +1016,7 @@ function renderFeed(events, requests, now) {
     const key = `${e.id}:${e.ts}`;
     d.className = 'ev' + (!firstFeed && !seenEv.has(key) ? ' new' : '');
     seenEv.add(key);
-    const [k, c] = e.kind === 'needs_input' ? ['NEEDS YOU', 'var(--amber)'] : e.kind === 'session_end' ? ['CLOSED', 'var(--ash)'] : ['FINISHED', 'var(--ok)'];
+    const [k, c] = e.kind === 'needs_input' ? ['NEEDS YOU', 'var(--amber)'] : e.kind === 'session_end' ? ['CLOSED', 'var(--ash)'] : e.kind === 'warning' ? ['POLICY', 'var(--heat)'] : e.kind === 'signoff' ? ['SIGN-OFF', 'var(--mewo)'] : ['FINISHED', 'var(--ok)'];
     const text = e.message || e.detail || '';
     d.innerHTML = `<div class="tm">${hm(e.ts)}</div><div><div class="hd" style="--c:${c}"><span class="k">${k}</span><span class="p">${esc(e.project || '')}</span></div>${text ? `<div class="tx">${esc(text)}</div>` : ''}</div>`;
     frag.appendChild(d);
@@ -816,6 +1038,7 @@ function apply(s) {
   $('offline').style.display = 'none';
   const d = s.daemon, sessions = s.sessions || [], events = s.events || [], requests = s.requests || [];
   model = { sessions, daemon: d, legacy: !!s.legacy };
+  if (Array.isArray(s.features)) { features = s.features; if (view === 'pipe') renderPipeline(); }
   $('legacy').style.display = s.legacy ? 'block' : 'none';
   $('pcname').textContent = (d.name || 'PC').toUpperCase();
   $('pcstate').textContent = `ONLINE · ${d.connected || 0} PHONE${d.connected === 1 ? '' : 'S'} LIVE`; $('pcstate').className = 'state';

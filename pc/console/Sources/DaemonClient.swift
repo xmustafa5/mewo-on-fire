@@ -134,6 +134,18 @@ enum DaemonClient {
     return opened ? ["ok": true] : ["ok": false, "error": "Claude Desktop did not take the link"]
   }
 
+  /// A control request from the page, to this daemon (not a legacy one):
+  /// the pipeline view's commands only.
+  static func forward(_ req: [String: Any]) -> [String: Any] {
+    let allowed = ["features", "sign", "plan_status", "scan", "set_check", "start_session", "request_sign"]
+    guard let cmd = req["cmd"] as? String, allowed.contains(cmd) else { return ["ok": false, "error": "not a console command"] }
+    for c in candidates where !c.legacy && FileManager.default.fileExists(atPath: c.path) {
+      if let r = try? request(at: c.path, req, timeout: 20) { return r }
+      return ["ok": false, "error": "The daemon did not answer"]
+    }
+    return ["ok": false, "error": "The daemon is not running"]
+  }
+
   /// Everything the page shows, from the first daemon that answers; the
   /// same shape as `mewo dashboard`'s `/api/state`.
   static func collect() -> [String: Any] {
@@ -149,6 +161,7 @@ enum DaemonClient {
           "sessions": tagged(list(at: c.path, ["cmd": "sessions"], "sessions")),
           "events": list(at: c.path, ["cmd": "events", "limit": 120], "events"),
           "requests": list(at: c.path, ["cmd": "requests"], "requests"),
+          "features": c.legacy ? [] : list(at: c.path, ["cmd": "features"], "features"),
           "legacy": c.legacy,
           "now": now,
           "version": version,

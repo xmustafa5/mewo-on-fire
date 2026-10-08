@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../models.dart';
 import 'chat_screen.dart';
+import 'features_tab.dart';
 import 'new_session_sheet.dart';
 import 'history_tab.dart' show relativeTime;
 import 'home_screen.dart' show EmberTabBar;
@@ -22,6 +23,17 @@ class SessionsTab extends StatefulWidget {
 
 class _SessionsTabState extends State<SessionsTab> {
   Timer? _tick;
+  Timer? _featureTick;
+  bool _features = false;
+
+  void _setMode(bool features) {
+    setState(() => _features = features);
+    _featureTick?.cancel();
+    if (features) {
+      AppState.instance.refreshFeatures();
+      _featureTick = Timer.periodic(const Duration(seconds: 20), (_) => AppState.instance.refreshFeatures());
+    }
+  }
 
   @override
   void initState() {
@@ -35,6 +47,7 @@ class _SessionsTabState extends State<SessionsTab> {
   @override
   void dispose() {
     _tick?.cancel();
+    _featureTick?.cancel();
     super.dispose();
   }
 
@@ -64,13 +77,16 @@ class _SessionsTabState extends State<SessionsTab> {
             color: Ember.amber,
             backgroundColor: Ember.surface2,
             edgeOffset: MediaQuery.paddingOf(context).top + 8,
-            onRefresh: state.refreshSessions,
+            onRefresh: () async {
+              await state.refreshSessions();
+              if (_features) await state.refreshFeatures();
+            },
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
               slivers: [
                 SliverToBoxAdapter(
                   child: ScreenHeader(
-                    title: 'Sessions',
+                    title: _features ? 'Features' : 'Sessions',
                     subtitle: AnimatedSwitcher(
                       duration: Motion.base,
                       transitionBuilder: fadeUpTransition,
@@ -91,7 +107,19 @@ class _SessionsTabState extends State<SessionsTab> {
                     ],
                   ),
                 ),
-                if (sessions.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                    child: SegmentedGlass<bool>(
+                      segments: const <(bool, String)>[(false, 'Sessions'), (true, 'Features')],
+                      value: _features,
+                      onChanged: _setMode,
+                    ),
+                  ),
+                ),
+                if (_features)
+                  ...featureSlivers(context, state)
+                else if (sessions.isEmpty)
                   SliverToBoxAdapter(
                     child: EmptyState(
                       flame: true,
