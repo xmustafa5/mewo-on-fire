@@ -68,13 +68,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     inFlight = true
     queue.async { [weak self] in
       let state = DaemonClient.collect()
-      // Handed over as a JSON string, parsed on the page: no escaping surprises.
-      let wrapped = (try? JSONSerialization.data(withJSONObject: [state]))
-        .flatMap { String(data: $0, encoding: .utf8) } ?? "[{\"ok\":false,\"error\":\"could not encode the state\"}]"
+      // A JSON object is a JavaScript object literal: handed over as is.
+      let json = (try? JSONSerialization.data(withJSONObject: state))
+        .flatMap { String(data: $0, encoding: .utf8) } ?? "{\"ok\":false,\"error\":\"could not encode the state\"}"
       DispatchQueue.main.async {
         guard let self else { return }
         self.inFlight = false
-        self.web.evaluateJavaScript("window.__apply(JSON.parse(\(wrapped))[0])", completionHandler: nil)
+        self.web.evaluateJavaScript("window.__apply(\(json))") { _, error in
+          if let error { NSLog("mewo-console: page rejected the state: %@", error.localizedDescription) }
+        }
       }
     }
   }
