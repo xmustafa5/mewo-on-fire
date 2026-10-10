@@ -810,7 +810,7 @@ pub fn app_display(ws: &Path, app: &str) -> String {
 /// (`{App}_{Feature}_PRD_V…`), else the app's own (`{App}_App_PRD_V…`),
 /// since a full-app PRD covers its features (policy 5.2).
 pub fn prd_file(ws: &Path, app: &str, slug: &str, named: &str) -> Option<(PathBuf, u32, u32, &'static str)> {
-    let mut all: Vec<(PathBuf, String, u32, u32)> = Vec::new();
+    let mut all: Vec<(PathBuf, String, u32, u32, u32)> = Vec::new();
     walk_prds(&ws.join("torch-product"), 0, &mut |path| {
         let name = path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         if !name.contains("_prd_v") {
@@ -820,21 +820,23 @@ pub fn prd_file(ws: &Path, app: &str, slug: &str, named: &str) -> Option<(PathBu
         let mut it = ver.split('.');
         let major: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         let minor: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        all.push((path.to_path_buf(), name, major, minor));
+        // A third number when there is one; a suffix like `_delta` ranks below the plain file.
+        let patch: u32 = it.next().and_then(|s| s.split('_').next()).and_then(|s| s.parse().ok()).map(|p: u32| if ver.contains('_') { p * 2 } else { p * 2 + 1 }).unwrap_or(1);
+        all.push((path.to_path_buf(), name, major, minor, patch));
     });
-    all.sort_by_key(|(_, _, a, b)| std::cmp::Reverse((*a, *b)));
+    all.sort_by_key(|(_, _, a, b, c)| std::cmp::Reverse((*a, *b, *c)));
     let named_l = named.trim().trim_matches('`').to_ascii_lowercase();
     if !named_l.is_empty() {
-        if let Some((p, _, a, b)) = all.iter().find(|(_, n, _, _)| *n == named_l) {
+        if let Some((p, _, a, b, _)) = all.iter().find(|(_, n, _, _, _)| *n == named_l) {
             return Some((p.clone(), *a, *b, "plan"));
         }
     }
     let feature_needle = format!("_{}_prd_v", slug.to_ascii_lowercase().replace('-', "_"));
-    if let Some((p, _, a, b)) = all.iter().find(|(_, n, _, _)| n.contains(&feature_needle)) {
+    if let Some((p, _, a, b, _)) = all.iter().find(|(_, n, _, _, _)| n.contains(&feature_needle)) {
         return Some((p.clone(), *a, *b, "feature"));
     }
     let app_needle = format!("{}_app_prd_v", app_display(ws, app).to_ascii_lowercase().replace(' ', "_").replace('&', "and"));
-    if let Some((p, _, a, b)) = all.iter().find(|(_, n, _, _)| n.contains(&app_needle)) {
+    if let Some((p, _, a, b, _)) = all.iter().find(|(_, n, _, _, _)| n.contains(&app_needle)) {
         return Some((p.clone(), *a, *b, "app"));
     }
     None

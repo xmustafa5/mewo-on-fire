@@ -61,6 +61,8 @@ pub struct PlaneConfig {
     pub items_path: String,
     /// State ids by group: backlog, unstarted, started, completed.
     pub states: HashMap<String, String>,
+    /// Every state of the project: `{id, name, group}`.
+    pub all_states: Vec<Value>,
     pub people: Vec<Person>,
 }
 
@@ -318,23 +320,87 @@ pub fn projects(c: &PlaneConfig) -> Result<Vec<Value>, String> {
     Ok(list.iter().map(|p| json!({"id": p.get("id").and_then(Value::as_str).unwrap_or(""), "name": p.get("name").and_then(Value::as_str).unwrap_or(""), "identifier": p.get("identifier").and_then(Value::as_str).unwrap_or("")})).collect())
 }
 
-/// The project's states by group, into the config.
+/// The project's states, into the config. A project without any (one
+/// made by API, say) gets the five standard ones first.
 pub fn load_states(c: &mut PlaneConfig) -> Result<(), String> {
-    let list = list_all(c, &format!("/workspaces/{}/projects/{}/states/", c.workspace, c.project_id))?;
-    let mut states = HashMap::new();
-    for s in list {
+    let path = format!("/workspaces/{}/projects/{}/states/", c.workspace, c.project_id);
+    let mut list = list_all(c, &path)?;
+    if list.is_empty() {
+        for (name, group, color) in [("Backlog", "backlog", "#60646C"), ("Todo", "unstarted", "#3B82F6"), ("In Progress", "started", "#F59E0B"), ("Done", "completed", "#46A758"), ("Cancelled", "cancelled", "#9AA4BC")] {
+            let (st, v) = request("POST", &api(c, &path), &c.token, Some(&json!({"name": name, "group": group, "color": color})))?;
+            if st != 200 && st != 201 {
+                return Err(format!("The project has no states and one could not be made: {}", err_of(st, &v)));
+            }
+            list.push(v);
+        }
+    }
+    let mut states: HashMap<String, String> = HashMap::new();
+    let mut all = Vec::new();
+    for s in &list {
         let group = s.get("group").and_then(Value::as_str).unwrap_or("").to_string();
         let id = s.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-        if !group.is_empty() && !id.is_empty() {
-            // The first (default) state of each group wins.
-            states.entry(group).or_insert(id);
+        let name = s.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+        if group.is_empty() || id.is_empty() {
+            continue;
+        }
+        all.push(json!({"id": id, "name": name, "group": group}));
+        // The group's plain state (Todo, In Progress, Done) stands for it;
+        // the first one seen otherwise.
+        let plain = matches!(name.to_ascii_lowercase().as_str(), "backlog" | "todo" | "to do" | "in progress" | "doing" | "done" | "completed" | "cancelled" | "canceled");
+        if plain || !states.contains_key(&group) {
+            states.insert(group, id);
         }
     }
     if states.is_empty() {
         return Err("The project has no states".to_string());
     }
     c.states = states;
+    c.all_states = all;
     Ok(())
+}
+
+/// The feature's own item follows its step: PRD, Build, Staging, UAT by
+/// name when the board has them, Done when released.
+fn parent_state(c: &PlaneConfig, f: &Feature) -> String {
+    if f.released {
+        return c.states.get("completed").cloned().unwrap_or_default();
+    }
+    let hint = match f.step {
+        1..=3 => "prd",
+        4..=9 => "build",
+        10 => "staging",
+        11 => "uat",
+        _ => "",
+    };
+    if !hint.is_empty() {
+        if let Some(s) = c.all_states.iter().find(|s| s.get("name").and_then(Value::as_str).map(|n| n.eq_ignore_ascii_case(hint)).unwrap_or(false)) {
+            if let Some(id) = s.get("id").and_then(Value::as_str) {
+                return id.to_string();
+            }
+        }
+    }
+    c.states.get("started").or_else(|| c.states.get("unstarted")).cloned().unwrap_or_default()
+}
+
+/// The state for an item: one named after its step when the board has
+/// it (PRD, Build, Staging, UAT…), else the group's plain state.
+fn state_for(c: &PlaneConfig, item_key: &str, group: &str) -> String {
+    let hint: Option<&str> = match (item_key, group) {
+        (_, "completed") | (_, "backlog") | (_, "unstarted") => None,
+        ("prd", _) | ("estimates", _) => Some("prd"),
+        (k, _) if k.starts_with("session:") => Some("build"),
+        ("gate:staging", _) => Some("staging"),
+        ("gate:uat", _) => Some("uat"),
+        _ => None,
+    };
+    if let Some(h) = hint {
+        if let Some(s) = c.all_states.iter().find(|s| s.get("name").and_then(Value::as_str).map(|n| n.eq_ignore_ascii_case(h)).unwrap_or(false)) {
+            if let Some(id) = s.get("id").and_then(Value::as_str) {
+                return id.to_string();
+            }
+        }
+    }
+    c.states.get(group).cloned().unwrap_or_default()
 }
 
 fn items_path(c: &PlaneConfig) -> String {
@@ -591,17 +657,24 @@ pub fn sync_once(features: Vec<(PathBuf, Feature)>) -> Result<usize, String> {
         let st = flow::get(ws, &f.key);
         let mk = map_key(ws, &f.key);
         let fm = map.features.entry(mk.clone()).or_default();
-        // The feature itself.
+        // The feature itself, in the column of its step.
+        let parent_state_id = parent_state(&c, f);
         if fm.parent.is_empty() || !by_id.contains_key(&fm.parent) {
             let name = format!("{} / {}", policy::app_display(ws, &f.app), f.slug);
             let desc = format!("<p>{} · branch {} · records in {}</p>", html_escape(&name), html_escape(&f.branch), html_escape(&f.dir));
-            let body = json!({"name": name, "description_html": desc, "state": c.states.get("started").or_else(|| c.states.get("unstarted")).cloned().unwrap_or_default()});
+            let body = json!({"name": name, "description_html": desc, "state": parent_state_id});
             let v = create_item(&mut c, body)?;
             fm.parent = v.get("id").and_then(Value::as_str).unwrap_or("").to_string();
             touched += 1;
+        } else if let Some(live) = by_id.get(&fm.parent) {
+            let live_state = live.get("state").and_then(Value::as_str).unwrap_or("");
+            if live_state != parent_state_id && group_of(live_state) != "cancelled" && !parent_state_id.is_empty() {
+                update_item(&c, &fm.parent, json!({"state": parent_state_id}))?;
+                touched += 1;
+            }
         }
         for (item_key, name, desc, group, who) in desired(ws, f, &st) {
-            let state_id = c.states.get(&group).cloned().unwrap_or_default();
+            let state_id = state_for(&c, &item_key, &group);
             let assignee = plane_user_for(&c, ws, &who);
             match fm.items.get_mut(&item_key) {
                 Some(it) if by_id.contains_key(&it.id) => {
