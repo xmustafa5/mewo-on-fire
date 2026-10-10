@@ -278,6 +278,9 @@ async fn subscriber_loop(
     } = sub;
     let mut last_sent = since.min(last_id);
     for ev in backlog {
+        if !ev.to.is_empty() && ev.to != device.name {
+            continue;
+        }
         send_event(sink, &ev).await?;
         last_sent = ev.id;
     }
@@ -295,8 +298,11 @@ async fn subscriber_loop(
                 match received {
                     Ok(Push::Event(ev)) => {
                         if ev.id > last_sent {
-                            send_event(sink, &ev).await?;
                             last_sent = ev.id;
+                            // v1.8: an event for one phone goes to that phone only.
+                            if ev.to.is_empty() || ev.to == device.name {
+                                send_event(sink, &ev).await?;
+                            }
                         }
                     }
                     Ok(Push::Request(req)) => send_request(sink, &req).await?,
@@ -384,7 +390,8 @@ async fn handle_frame(
             }
             send_json(sink, &v).await
         }
-        "sign" | "plan_status" | "start_session" | "request_sign" | "get_scan" | "set_check" => handle_policy(state, sink, &msg).await,
+        "sign" | "plan_status" | "start_session" | "request_sign" | "get_scan" | "set_check"
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" => handle_policy(state, device, sink, &msg).await,
         _ => Ok(()),
     }
 }
@@ -432,7 +439,7 @@ async fn handle_get_prs(state: &AppState, sink: &mut WsSink, msg: &Value) -> Res
 
 /// The policy frames (v1.7): each answers with the same shape as the
 /// control command, typed `<frame>_result` and carrying `client_id` back.
-async fn handle_policy(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
+async fn handle_policy(state: &AppState, device: &Device, sink: &mut WsSink, msg: &Value) -> Result<()> {
     let frame = str_field(msg, "type").to_string();
     let client_id = str_field(msg, "client_id").to_string();
     let mut req = msg.clone();
@@ -442,6 +449,10 @@ async fn handle_policy(state: &AppState, sink: &mut WsSink, msg: &Value) -> Resu
             other => other,
         };
         o.insert("cmd".to_string(), json!(cmd));
+        // A role set from a phone reaches that phone (v1.8).
+        if frame == "set_role" && str_field(msg, "phone").is_empty() {
+            o.insert("phone".to_string(), json!(device.name));
+        }
     }
     let mut v = tokio::task::block_in_place(|| control::policy_request(state, &req));
     if frame == "set_check" {

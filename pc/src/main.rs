@@ -9,6 +9,7 @@ mod control;
 mod daemon;
 mod dashboard;
 mod desktop;
+mod flow;
 mod hook;
 mod install;
 mod listen;

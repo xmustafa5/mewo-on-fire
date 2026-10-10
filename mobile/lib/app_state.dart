@@ -633,7 +633,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (msg['ok'] == false && _features.containsKey(pcId)) {
       // Keep what was known; the error shows on the list.
       final old = _features[pcId]!;
-      _features[pcId] = FeaturesData(features: old.features, selfCheck: old.selfCheck, reviewCheck: old.reviewCheck, error: '${msg['error'] ?? ''}', ts: old.ts);
+      _features[pcId] = FeaturesData(features: old.features, selfCheck: old.selfCheck, reviewCheck: old.reviewCheck, error: '${msg['error'] ?? ''}', ts: old.ts, workspaces: old.workspaces, roles: old.roles, apps: old.apps, roleNames: old.roleNames, warning: old.warning);
     } else {
       _features[pcId] = FeaturesData.fromJson(msg);
     }
@@ -696,6 +696,52 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     return '${r['error'] ?? 'Could not write the plan'}';
   }
+
+  // ---- the flow runner (v1.8) ----
+
+  Future<String> _flowCmd(String pcId, String type, Map<String, dynamic> params, {bool refresh = true}) async {
+    final r = await policy(pcId, type, params);
+    if (r['ok'] == true) {
+      if (refresh) Timer(const Duration(milliseconds: 600), refreshFeatures);
+      return '';
+    }
+    return '${r['error'] ?? 'The PC could not do it'}';
+  }
+
+  /// Does the flow's next action for [f] now. Empty string on success.
+  Future<String> flowNext(String pcId, TorchFeature f) => _flowCmd(pcId, 'flow_next', {'feature': f.key, 'workspace': f.workspace, 'name': settings.signerName});
+
+  Future<String> flowSet(String pcId, TorchFeature f, bool autopilot) => _flowCmd(pcId, 'flow_set', {'feature': f.key, 'workspace': f.workspace, 'autopilot': autopilot});
+
+  Future<String> estimate(String pcId, TorchFeature f, String role, double days, String assumptions) =>
+      _flowCmd(pcId, 'estimate', {'feature': f.key, 'workspace': f.workspace, 'role': role, 'name': settings.signerName, 'days': days, 'assumptions': assumptions});
+
+  Future<String> estimatesDone(String pcId, TorchFeature f) => _flowCmd(pcId, 'estimates_done', {'feature': f.key, 'workspace': f.workspace});
+
+  Future<String> exportHandoff(String pcId, TorchFeature f) => _flowCmd(pcId, 'export_handoff', {'feature': f.key, 'workspace': f.workspace});
+
+  Future<Map<String, dynamic>> uatUser(String pcId, TorchFeature f, String user, String role, bool unaided, String notes) async {
+    final r = await policy(pcId, 'uat_user', {'feature': f.key, 'workspace': f.workspace, 'user': user, 'role': role, 'unaided': unaided, 'notes': notes});
+    if (r['ok'] == true) Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return r;
+  }
+
+  Future<String> release(String pcId, TorchFeature f) => _flowCmd(pcId, 'release', {'feature': f.key, 'workspace': f.workspace, 'name': settings.signerName});
+
+  Future<Map<String, dynamic>> closeBranches(String pcId, TorchFeature f) async {
+    final r = await policy(pcId, 'close_branches', {'feature': f.key, 'workspace': f.workspace});
+    Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return r;
+  }
+
+  Future<Map<String, dynamic>> newFeature(String pcId, String workspace, String app, String slug, bool light) async {
+    final r = await policy(pcId, 'new_feature', {'workspace': workspace, 'app': app, 'slug': slug, 'light': light});
+    if (r['ok'] == true) Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return r;
+  }
+
+  /// Claims a role for the signer of this phone (the PC fills in the phone).
+  Future<String> setRole(String pcId, String workspace, String role, String name) => _flowCmd(pcId, 'set_role', {'workspace': workspace, 'role': role, 'name': name, 'phone': ''});
 
   /// The self-check scan of a session's changes.
   Future<ScanReport> scan(String pcId, String sessionId) async {

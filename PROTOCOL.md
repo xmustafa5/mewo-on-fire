@@ -632,3 +632,50 @@ through its `daemon` message. On macOS the daemon needs Files and
 Folders access to the workspace; while macOS holds it out, `features`
 answers with the last known records and `warning` says so.
 
+## The flow runner (v1.8)
+
+The daemon drives a feature through the policy's twelve steps: Claude's
+work runs as Claude Desktop sessions it starts with the right prompt and
+skill (prd-writer, the design, handoff-intake, session-plan, the
+planned build sessions), people's decisions come back as signatures.
+Per feature, `flow.json` in the state folder keeps `autopilot`, the
+runs (`step`, `started`), what was asked of whom and when, the
+estimates and a short log.
+
+A feature now carries `flow: {autopilot, estimates, estimates_done, log,
+released_at, closed_at, action}`. `action` is what the flow does next:
+`kind` (`run`, `ask`, `estimates`, `export`, `start`, `release`,
+`close`, `wait`, `done`), `step`, `title`, `detail`, `gate`, `roles`,
+`session`, `auto` (autopilot may do it by itself). The PRD's signature
+is a gate of its own (`id: prd`, roles `[CEO]`): `sign` with gate `prd`
+writes the newest draft as `…_PRD_V1.0.md` (status Signed, changelog
+row) and the Register's §2 row. Step 2 (estimates) shows while the
+three estimates are missing or not yet in the PRD.
+
+`features` also returns `workspaces`, `roles` (workspace →
+`[{role, name, phone}]`, from `context/roles.md`), `apps` (workspace →
+notebooks) and `role_names`. A `signoff` event for a role whose row
+names a phone carries `to: <device name>` and reaches that phone only.
+
+Frames and control commands, all answered as `<name>_result`:
+
+- `flow_next {feature, workspace, name}`: does the next action now.
+- `flow_set {feature, autopilot}`: autopilot on or off. With it on, the
+  daemon does every `auto` action every half minute, asking each role
+  at most once a day.
+- `estimate {feature, role, name, days, assumptions}` (design, FE or BE
+  lead) and `estimates_done {feature}` (the estimates are in the PRD).
+- `export_handoff {feature}`: the feature's design artifacts (the
+  daemon's rendered copies) become `handoff/<board>.html` and the README.
+- `uat_user {feature, user, role, unaided, notes}`: a row of RELEASE.md's
+  UAT table and the pass-bar line; answers `{total, unaided, percent,
+  pass}`.
+- `release {feature, name}`: PRD status Released, changelog row, the
+  Register's "Released on".
+- `close_branches {feature}`: merges the feature branch into main in
+  torch-main and every fetched code repository on it, pushes, deletes it.
+- `new_feature {workspace, app, slug, light}`: `new-feature.sh`, or the
+  same work done by the daemon when the Mac's bash is too old for it.
+- `set_role {workspace, role, name, phone}`: a row of `context/roles.md`;
+  from a phone, an empty `phone` means that phone.
+

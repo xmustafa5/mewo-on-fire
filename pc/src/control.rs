@@ -23,6 +23,7 @@ use crate::requests::{AskReply, Request};
 use crate::sessions::{ListenReply, ListenStart, Meta};
 use crate::store::Event;
 use crate::desktop;
+use crate::flow;
 
 const MAX_REQUEST_BYTES: u64 = 1 << 20;
 /// `mewo chat`: default and maximum number of items.
@@ -249,7 +250,8 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
         "requests" => json!({"ok": true, "requests": state.pending_requests()}),
         // v1.7 (TORCH policy): signatures, plan status, the self-check scan,
         // starting a planned session, asking for a signature.
-        "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign" => {
+        "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -299,11 +301,34 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
             None => json!({"ok": false, "error": "unknown session or line"}),
         };
     }
+    // Workspace-level commands (v1.8).
+    if cmd == "set_role" || cmd == "new_feature" {
+        let Some(ws) = (if s("workspace").is_empty() { policy::workspaces().into_iter().next() } else { policy::workspace_for(&s("workspace")) }) else {
+            return json!({"ok": false, "error": "No workspace known yet"});
+        };
+        return match cmd.as_str() {
+            "set_role" => match flow::set_role(&ws, &s("role"), &s("name"), &s("phone")) {
+                Ok(list) => json!({"ok": true, "roles": list}),
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            _ => {
+                let light = req.get("light").and_then(Value::as_bool).unwrap_or(false);
+                flow::new_feature(&ws, &s("app"), &s("slug"), light)
+            }
+        };
+    }
     let key = s("feature");
     let Some(ws) = workspace_of(&s("workspace"), &key) else {
         return json!({"ok": false, "error": format!("No workspace with the feature {key}")});
     };
     match cmd.as_str() {
+        "sign" if s("gate") == "prd" => match state.feature(&ws, &key) {
+            Some(f) => match flow::sign_prd(&ws, &f, &s("name")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
         "sign" => {
             let checks: Vec<bool> = req.get("checks").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(false)).collect()).unwrap_or_default();
             match policy::sign(&ws, &key, &s("gate"), &s("role"), &s("name"), &checks) {
@@ -311,6 +336,64 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                 Err(e) => json!({"ok": false, "error": e}),
             }
         }
+        // v1.8: the flow runner.
+        "flow_next" => match state.feature(&ws, &key) {
+            Some(f) => state.flow_execute(&ws, &f, None, &s("name")),
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
+        "flow_set" => {
+            let on = req.get("autopilot").and_then(Value::as_bool).unwrap_or(false);
+            let st = flow::update(&ws, &key, |st| {
+                st.autopilot = on;
+                st.note(if on { "Autopilot on" } else { "Autopilot off" });
+            });
+            json!({"ok": true, "autopilot": st.autopilot})
+        }
+        "estimate" => {
+            let days = req.get("days").and_then(Value::as_f64).unwrap_or(0.0);
+            let role = s("role");
+            if !flow::ESTIMATE_ROLES.iter().any(|r| r.eq_ignore_ascii_case(&role)) {
+                return json!({"ok": false, "error": format!("Estimates come from {}", flow::ESTIMATE_ROLES.join(", "))});
+            }
+            let st = flow::update(&ws, &key, |st| {
+                st.estimates.retain(|e| !e.role.eq_ignore_ascii_case(&role));
+                st.estimates.push(flow::Estimate { role: role.clone(), name: s("name"), days, assumptions: s("assumptions"), ts: crate::config::now_ms() });
+                st.note(format!("Estimate from {}: {} days", role, days));
+            });
+            json!({"ok": true, "estimates": st.estimates})
+        }
+        "estimates_done" => {
+            flow::update(&ws, &key, |st| {
+                st.estimates_done = true;
+                st.note("Estimates recorded in the PRD");
+            });
+            json!({"ok": true})
+        }
+        "export_handoff" => match state.feature(&ws, &key) {
+            Some(f) => match flow::export_handoff(&ws, &f, &state.session_list()) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
+        "uat_user" => match state.feature(&ws, &key) {
+            Some(f) => match flow::uat_user(&ws, &f, &s("user"), &s("role"), req.get("unaided").and_then(Value::as_bool).unwrap_or(false), &s("notes")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
+        "release" => match state.feature(&ws, &key) {
+            Some(f) => match flow::release(&ws, &f, &s("name")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
+        "close_branches" => match state.feature(&ws, &key) {
+            Some(f) => flow::close_branches(&ws, &f),
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
         "plan_status" => {
             let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as u32;
             match policy::set_plan_status(&ws, &key, n, &s("status"), &s("pr")) {
@@ -337,27 +420,10 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                 Err(e) => json!({"ok": false, "error": e}),
             }
         }
-        "request_sign" => {
-            let gate = s("gate");
-            let role = s("role");
-            let by = s("name");
-            let Some(f) = policy::features(&ws).into_iter().find(|f| f.key == key) else {
-                return json!({"ok": false, "error": "unknown feature"});
-            };
-            let title = f.gates.iter().find(|g| g.id == gate).map(|g| g.title.clone()).unwrap_or(gate.clone());
-            let ev = Event {
-                kind: "signoff".to_string(),
-                project: f.app.clone(),
-                cwd: ws.to_string_lossy().into_owned(),
-                message: format!("{title} for {} / {}: {} to sign{}", f.app, f.slug, if role.is_empty() { "a lead".to_string() } else { role.clone() }, if by.is_empty() { String::new() } else { format!(" (asked by {by})") }),
-                detail: format!("{key}|{gate}|{role}"),
-                ..Event::default()
-            };
-            match state.emit(ev, &Meta::default()) {
-                Some(_) => json!({"ok": true}),
-                None => json!({"ok": false, "error": "not sent"}),
-            }
-        }
+        "request_sign" => match state.feature(&ws, &key) {
+            Some(f) => state.ask_signature(&ws, &f, &s("gate"), &s("role"), &s("name")),
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
         _ => json!({"ok": false, "error": "unknown_cmd"}),
     }
 }

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -17,6 +18,8 @@ use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session,
 use crate::store::{Event, Store};
 use crate::transcript::{self, ChatItem};
 use crate::policy;
+use crate::desktop;
+use crate::flow;
 use crate::{control, mdns, net, paths, prs, relay, server, uploads};
 
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
@@ -121,6 +124,183 @@ impl AppState {
         update
     }
 
+    /// v1.8: one feature with its live state, from what is cached (no
+    /// GitHub call), for the flow's synchronous commands.
+    pub fn feature(&self, ws: &Path, key: &str) -> Option<policy::Feature> {
+        let mut f = policy::features(ws).into_iter().find(|f| f.key == key)?;
+        let sessions = self.session_list();
+        let mut prs: Vec<Value> = Vec::new();
+        for repo in &f.fetched_repos {
+            let dir = ws.join(repo).to_string_lossy().into_owned();
+            prs.extend(self.prs.cached_base(&dir, &f.branch));
+        }
+        policy::enrich(&mut f, &sessions, &prs);
+        Some(f)
+    }
+
+    /// The feature as the phones and the console see it: the records plus
+    /// the flow (autopilot, next action, estimates, log) and the PRD gate.
+    fn feature_json(&self, ws: &Path, f: &policy::Feature, sessions: &[Session]) -> Value {
+        let st = flow::get(ws, &f.key);
+        let action = flow::next_action(ws, f, &st, sessions);
+        let mut v = serde_json::to_value(f).unwrap_or(Value::Null);
+        if let Some(o) = v.as_object_mut() {
+            // Estimates (step 2) sit between the draft and the signature.
+            if action.step == 2 && !f.light && !f.released {
+                o.insert("step".to_string(), json!(2));
+                o.insert("step_label".to_string(), json!(policy::STEPS[1]));
+            }
+            // The PRD's signature as a gate of its own (v1.8).
+            if !f.light {
+                let prd_gate = json!({
+                    "id": "prd", "checklist": "A", "title": "PRD signed (V1.0)", "step": 3,
+                    "file": f.prd, "items": [], "roles": ["CEO"],
+                    "signatures": if f.prd_signed { json!([{"role": "CEO", "name": "signed"}]) } else { json!([]) },
+                    "date": "", "signed": f.prd_signed, "present": !f.prd.is_empty(),
+                });
+                if let Some(gates) = o.get_mut("gates").and_then(Value::as_array_mut) {
+                    gates.insert(0, prd_gate);
+                }
+            }
+            o.insert(
+                "flow".to_string(),
+                json!({
+                    "autopilot": st.autopilot,
+                    "estimates": st.estimates,
+                    "estimates_done": st.estimates_done,
+                    "log": st.log,
+                    "released_at": st.released_at,
+                    "closed_at": st.closed_at,
+                    "action": action,
+                }),
+            );
+        }
+        v
+    }
+
+    /// v1.8: asks a role (its phone, or every phone) to sign a gate.
+    pub fn ask_signature(&self, ws: &Path, f: &policy::Feature, gate: &str, role: &str, by: &str) -> Value {
+        let title = if gate == "prd" {
+            "PRD signature".to_string()
+        } else {
+            f.gates.iter().find(|g| g.id == gate).map(|g| g.title.clone()).unwrap_or_else(|| gate.to_string())
+        };
+        let who = flow::role_named(ws, role);
+        let to = who.as_ref().map(|r| r.phone.clone()).unwrap_or_default();
+        let name = who.as_ref().map(|r| r.name.clone()).filter(|n| !n.is_empty());
+        let ev = Event {
+            kind: "signoff".to_string(),
+            project: f.app.clone(),
+            cwd: ws.to_string_lossy().into_owned(),
+            message: format!(
+                "{title} for {} / {}: {} to sign{}",
+                f.app,
+                f.slug,
+                match (&name, role.is_empty()) {
+                    (Some(n), _) => format!("{n} ({role})"),
+                    (None, false) => role.to_string(),
+                    (None, true) => "a lead".to_string(),
+                },
+                if by.is_empty() { String::new() } else { format!(" (asked by {by})") }
+            ),
+            detail: format!("{}|{gate}|{role}", f.key),
+            to,
+            ..Event::default()
+        };
+        flow::update(ws, &f.key, |st| {
+            st.asked.insert(format!("{gate}|{role}"), now_ms());
+            st.note(format!("Asked {} to sign {title}", if role.is_empty() { "the leads" } else { role }));
+        });
+        match self.emit(ev, &Meta::default()) {
+            Some(_) => json!({"ok": true, "to": who.map(|r| r.phone).unwrap_or_default()}),
+            None => json!({"ok": false, "error": "not sent"}),
+        }
+    }
+
+    /// v1.8: performs the flow's next action for a feature (or `action`
+    /// when given): starts the session, asks for the signatures, exports
+    /// the design, releases.
+    pub fn flow_execute(&self, ws: &Path, f: &policy::Feature, action: Option<flow::Action>, by: &str) -> Value {
+        let sessions = self.session_list();
+        let st = flow::get(ws, &f.key);
+        let a = action.unwrap_or_else(|| flow::next_action(ws, f, &st, &sessions));
+        match a.kind.as_str() {
+            "run" | "start" => {
+                // Sessions of the flow run on the feature branch of torch-main.
+                let ws_s = ws.to_string_lossy().into_owned();
+                if a.kind == "run" && policy::branch_of(&ws_s) != f.branch {
+                    let clean = policy::git(ws, &["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"]).map(|s| s.is_empty()).unwrap_or(false);
+                    let switched = clean && policy::git(ws, &["switch", &f.branch]).is_some();
+                    if !switched {
+                        return json!({"ok": false, "error": format!("torch-main is on '{}' and could not be switched to {} (commit or stash its changes first).", policy::branch_of(&ws_s), f.branch)});
+                    }
+                }
+                match desktop::open_new_session(&a.folder, &a.prompt) {
+                    Ok(()) => {
+                        if a.kind == "start" {
+                            let _ = policy::set_plan_status(ws, &f.key, a.session, "In progress", "");
+                        }
+                        let note = if a.kind == "start" { a.session.to_string() } else { f.prd.clone() };
+                        flow::update(ws, &f.key, |st| {
+                            st.runs.push(flow::Run { step: a.step, started: now_ms(), note });
+                            st.note(format!("Started: {}", a.title));
+                        });
+                        json!({"ok": true, "did": a.kind, "title": a.title})
+                    }
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+            "ask" => {
+                let roles = if a.roles.is_empty() { vec![String::new()] } else { a.roles.clone() };
+                let mut sent = 0;
+                for role in &roles {
+                    if self.ask_signature(ws, f, &a.gate, role, by).get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                        sent += 1;
+                    }
+                }
+                json!({"ok": sent > 0, "did": "ask", "title": a.title, "sent": sent})
+            }
+            "estimates" => {
+                let mut sent = 0;
+                for role in &a.roles {
+                    let who = flow::role_named(ws, role);
+                    let ev = Event {
+                        kind: "signoff".to_string(),
+                        project: f.app.clone(),
+                        cwd: ws.to_string_lossy().into_owned(),
+                        message: format!("Estimate for {} / {}: {} to give person-days and assumptions (policy step 2)", f.app, f.slug, who.as_ref().map(|r| format!("{} ({role})", r.name)).unwrap_or_else(|| role.clone())),
+                        detail: format!("{}|estimate|{role}", f.key),
+                        to: who.map(|r| r.phone).unwrap_or_default(),
+                        ..Event::default()
+                    };
+                    if self.emit(ev, &Meta::default()).is_some() {
+                        sent += 1;
+                    }
+                }
+                flow::update(ws, &f.key, |st| {
+                    for role in &a.roles {
+                        st.asked.insert(format!("estimate|{role}"), now_ms());
+                    }
+                    st.note("Asked for the estimates");
+                });
+                json!({"ok": sent > 0, "did": "estimates", "sent": sent})
+            }
+            "export" => match flow::export_handoff(ws, f, &sessions) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            "release" => {
+                let name = if by.is_empty() { flow::role_named(ws, "CEO").map(|r| r.name).unwrap_or_else(|| "CEO".to_string()) } else { by.to_string() };
+                match flow::release(ws, f, &name) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+            "close" => flow::close_branches(ws, f),
+            _ => json!({"ok": true, "did": "nothing", "title": a.title, "detail": a.detail}),
+        }
+    }
+
     /// v1.7: every feature of the workspaces this PC's sessions work in,
     /// with the live state of their plan sessions.
     pub async fn features_json(&self) -> Value {
@@ -157,9 +337,11 @@ impl AppState {
                     prs.extend(self.prs.list_base(&dir, &f.branch).await);
                 }
                 policy::enrich(f, &sessions, &prs);
-                all.push(serde_json::to_value(&*f).unwrap_or(Value::Null));
+                all.push(self.feature_json(&ws, f, &sessions));
             }
         }
+        let roles: serde_json::Map<String, Value> = policy::workspaces().iter().map(|ws| (ws.to_string_lossy().into_owned(), serde_json::to_value(flow::roles(ws)).unwrap_or(Value::Null))).collect();
+        let apps: serde_json::Map<String, Value> = policy::workspaces().iter().map(|ws| (ws.to_string_lossy().into_owned(), json!(policy::apps(ws)))).collect();
         json!({
             "ok": true,
             "features": all,
@@ -167,6 +349,9 @@ impl AppState {
             "self_check": policy::SELF_CHECK,
             "review_check": policy::REVIEW_CHECK,
             "warning": if policy::git_blocked() { policy::FOLDER_ACCESS_HINT } else { "" },
+            "roles": roles,
+            "apps": apps,
+            "role_names": flow::ROLES,
         })
     }
 
@@ -663,6 +848,7 @@ async fn run_async() -> Result<()> {
     tokio::spawn(expire_loop(state.clone()));
     tokio::spawn(sessions_loop(state.clone()));
     tokio::spawn(match_loop(state.clone()));
+    tokio::spawn(flow_loop(state.clone()));
     tokio::spawn(relay::run(state.clone()));
 
     wait_for_shutdown().await;
@@ -674,6 +860,67 @@ async fn run_async() -> Result<()> {
 
 /// Periodically drop phone requests nobody answered (PROTOCOL.md: 24 h),
 /// and once an hour the images phones sent more than a week ago.
+/// v1.8: autopilot. Every half minute, each feature with it on gets its
+/// next action done: a session started, signatures asked for (once a
+/// day per role), the design exported, the release recorded.
+async fn flow_loop(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(Duration::from_secs(30));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        if policy::git_blocked() {
+            continue;
+        }
+        let sessions = state.session_list();
+        for ws in policy::workspaces() {
+            let ws2 = ws.clone();
+            let feats = match tokio::time::timeout(Duration::from_secs(12), tokio::task::spawn_blocking(move || policy::features(&ws2))).await {
+                Ok(Ok(f)) => f,
+                _ => continue,
+            };
+            for mut f in feats {
+                let st = flow::get(&ws, &f.key);
+                if !st.autopilot {
+                    continue;
+                }
+                let mut prs: Vec<Value> = Vec::new();
+                for repo in &f.fetched_repos {
+                    let dir = ws.join(repo).to_string_lossy().into_owned();
+                    prs.extend(state.prs.list_base(&dir, &f.branch).await);
+                }
+                policy::enrich(&mut f, &sessions, &prs);
+                let a = flow::next_action(&ws, &f, &st, &sessions);
+                if !a.auto {
+                    continue;
+                }
+                if a.kind == "ask" || a.kind == "estimates" {
+                    let day = 24 * 60 * 60 * 1000;
+                    let key = |role: &str| format!("{}|{role}", if a.kind == "ask" { a.gate.clone() } else { "estimate".to_string() });
+                    let pending: Vec<String> = a.roles.iter().filter(|r| st.asked.get(&key(r)).map(|t| now_ms().saturating_sub(*t) > day).unwrap_or(true)).cloned().collect();
+                    if pending.is_empty() {
+                        continue;
+                    }
+                    let mut a2 = a.clone();
+                    a2.roles = pending;
+                    let state2 = state.clone();
+                    let ws2 = ws.clone();
+                    let f2 = f.clone();
+                    let _ = tokio::task::spawn_blocking(move || state2.flow_execute(&ws2, &f2, Some(a2), "autopilot")).await;
+                    continue;
+                }
+                let state2 = state.clone();
+                let ws2 = ws.clone();
+                let f2 = f.clone();
+                let r = tokio::task::spawn_blocking(move || state2.flow_execute(&ws2, &f2, Some(a), "autopilot")).await.unwrap_or(Value::Null);
+                if r.get("ok").and_then(Value::as_bool) == Some(false) {
+                    let err = r.get("error").and_then(Value::as_str).unwrap_or("").to_string();
+                    flow::update(&ws, &f.key, |st| st.note(format!("Autopilot could not continue: {err}")));
+                }
+            }
+        }
+    }
+}
+
 /// v1.7: matches sessions to the features of their workspace, off the
 /// sessions lock, since that reads folders macOS may hold the daemon out
 /// of until the user allows it.

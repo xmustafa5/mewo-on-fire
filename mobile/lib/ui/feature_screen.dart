@@ -6,6 +6,7 @@ import '../app_state.dart';
 import '../models.dart';
 import 'artifact_screen.dart';
 import 'chat_screen.dart';
+import 'flow_sheets.dart';
 import 'sign_sheet.dart';
 import 'theme/ember.dart';
 import 'theme/flame.dart';
@@ -28,6 +29,36 @@ class FeatureScreen extends StatefulWidget {
 class _FeatureScreenState extends State<FeatureScreen> {
   final AppState _state = AppState.instance;
   final Set<int> _starting = <int>{};
+  bool _flowBusy = false;
+
+  Future<void> _doNext(TorchFeature f) async {
+    if (_flowBusy) return;
+    final a = f.flow.action;
+    if (a.kind == 'close') {
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Merge and close the branches?'),
+          content: Text('Merges ${f.branch} into main in torch-main and every code repository on it, pushes, and deletes the branch.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Merge and close')),
+          ],
+        ),
+      );
+      if (yes != true || !mounted) return;
+    }
+    if (a.kind == 'estimates') {
+      await showEstimateSheet(context, pcId: widget.pcId, feature: f);
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    setState(() => _flowBusy = true);
+    final error = await _state.flowNext(widget.pcId, f);
+    if (!mounted) return;
+    setState(() => _flowBusy = false);
+    _toast(error.isEmpty ? 'Done: ${a.title}' : error);
+  }
 
   TorchFeature? get _feature => _state.featuresOf(widget.pcId)?.features.where((f) => f.key == widget.featureKey).firstOrNull;
 
@@ -135,6 +166,19 @@ class _FeatureScreenState extends State<FeatureScreen> {
     for (final w in f.warnings) {
       out.add(enter(_warning(context, w)));
     }
+
+    out.add(enter(_FlowCard(
+      feature: f,
+      busy: _flowBusy,
+      onNext: () => _doNext(f),
+      onAutopilot: (v) async {
+        final e = await _state.flowSet(widget.pcId, f, v);
+        if (e.isNotEmpty && mounted) _toast(e);
+      },
+      onEstimate: () => showEstimateSheet(context, pcId: widget.pcId, feature: f),
+      onEstimatesDone: () => _state.estimatesDone(widget.pcId, f),
+      onUat: () => showUatSheet(context, pcId: widget.pcId, feature: f),
+    )));
 
     if (!f.light) {
       out.add(enter(_StepStrip(feature: f)));
@@ -534,5 +578,133 @@ class _MiniButton extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Where the flow stands and what Mewo does next, with autopilot.
+class _FlowCard extends StatelessWidget {
+  const _FlowCard({
+    required this.feature,
+    required this.busy,
+    required this.onNext,
+    required this.onAutopilot,
+    required this.onEstimate,
+    required this.onEstimatesDone,
+    required this.onUat,
+  });
+
+  final TorchFeature feature;
+  final bool busy;
+  final VoidCallback onNext;
+  final ValueChanged<bool> onAutopilot;
+  final VoidCallback onEstimate;
+  final VoidCallback onEstimatesDone;
+  final VoidCallback onUat;
+
+  static String buttonFor(FlowAction a) {
+    switch (a.kind) {
+      case 'run':
+        return 'Start the session';
+      case 'ask':
+        return a.roles.length > 1 ? 'Ask for the signatures' : 'Ask for the signature';
+      case 'estimates':
+        return 'Add my estimate';
+      case 'export':
+        return 'Export to handoff';
+      case 'start':
+        return 'Start session ${a.session}';
+      case 'release':
+        return 'Record the release';
+      case 'close':
+        return 'Merge and close the branches';
+      default:
+        return '';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final fl = feature.flow;
+    final a = fl.action;
+    final button = buttonFor(a);
+    final estimatesPhase = a.step == 2 && !fl.estimatesDone && !feature.light;
+    final color = a.kind == 'wait' ? Ember.text2 : Ember.amber;
+    return GlassCard(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      radius: 18,
+      borderColor: Ember.amber.withValues(alpha: fl.autopilot ? 0.6 : 0.3),
+      glow: fl.autopilot ? Ember.amber : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(fl.autopilot ? Icons.auto_mode_rounded : Icons.route_rounded, size: 18, color: Ember.amber),
+              const SizedBox(width: 8),
+              Expanded(child: Text('THE FLOW${a.step > 0 ? ' · STEP ${a.step}' : ''}', style: t.labelSmall?.copyWith(color: Ember.amber, letterSpacing: 1.4))),
+              Text('Autopilot', style: t.labelSmall?.copyWith(color: Ember.text3)),
+              const SizedBox(width: 8),
+              EmberSwitch(value: fl.autopilot, onChanged: onAutopilot),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(a.title.isEmpty ? 'Nothing to do' : a.title, style: t.titleSmall?.copyWith(fontSize: 15, color: color == Ember.text2 ? Ember.text : Ember.text)),
+          if (a.detail.isNotEmpty || a.roles.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                [if (a.detail.isNotEmpty) a.detail, if (a.roles.isNotEmpty && a.kind != 'estimates') a.roles.join(', ')].join(' · '),
+                style: t.bodySmall?.copyWith(color: Ember.text2),
+              ),
+            ),
+          if (fl.estimates.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Estimates: ${fl.estimates.map((e) => '${e.role} ${e.days} d').join(' · ')}${fl.estimatesDone ? ' · in the PRD' : ''}',
+                style: t.labelSmall?.copyWith(color: Ember.text3),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (button.isNotEmpty)
+                  EmberButton(
+                    label: button,
+                    icon: a.kind == 'run' || a.kind == 'start' ? Icons.play_arrow_rounded : a.kind == 'ask' ? Icons.notifications_active_outlined : Icons.bolt_rounded,
+                    small: true,
+                    busy: busy,
+                    onPressed: busy ? null : onNext,
+                  ),
+                if (estimatesPhase && a.kind != 'estimates') EmberButton(label: 'Add my estimate', icon: Icons.timelapse_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onEstimate),
+                if (estimatesPhase && fl.estimates.length >= 3) EmberButton(label: 'Estimates are in the PRD', small: true, style: EmberButtonStyle.ghost, onPressed: onEstimatesDone),
+                if (a.gate == 'uat' || a.step >= 11 && a.step <= 12 && !feature.released) EmberButton(label: 'Add a UAT user', icon: Icons.groups_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onUat),
+              ],
+            ),
+          ),
+          if (fl.log.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            for (final e in fl.log.reversed.take(3))
+              Text(
+                '${_clock(e.$1)} · ${e.$2}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: t.labelSmall?.copyWith(color: Ember.text3, fontWeight: FontWeight.w400, letterSpacing: 0),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static String _clock(int ts) {
+    if (ts <= 0) return '';
+    final d = DateTime.fromMillisecondsSinceEpoch(ts);
+    return '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
   }
 }

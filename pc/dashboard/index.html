@@ -120,6 +120,29 @@ header {
 .gate .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--amber); margin-top: 6px; min-height: 12px; }
 .gate .msg.bad { color: var(--heat); }
 .files { display: flex; flex-wrap: wrap; gap: 6px; }
+.flow { border: 1px solid rgba(255,179,71,.45); background: rgba(255,179,71,.05); padding: 12px 14px; margin-top: 12px; }
+.flow .h { display: flex; align-items: center; gap: 10px; }
+.flow .h .k { font-family: var(--mono); font-size: 9px; letter-spacing: 0.26em; color: var(--amber); flex: 1; }
+.flow .h label { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em; color: var(--dim); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.flow .t { color: #fff; font-size: 14px; font-weight: 700; margin-top: 8px; }
+.flow .d { color: var(--text); font-size: 12px; opacity: .85; margin-top: 4px; }
+.flow .a { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.flow .log { margin-top: 10px; border-top: 1px dashed rgba(255,179,71,.3); padding-top: 8px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; color: var(--dim); }
+.flow .log div { padding: 2px 0; }
+.form { border: 1px solid var(--cyan-dim); padding: 10px 12px; margin-top: 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.form label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.2em; color: var(--dim2); display: block; margin-bottom: 3px; }
+.form input, .form select, .form textarea { width: 100%; box-sizing: border-box; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 12px var(--sans); padding: 6px 8px; outline: none; }
+.form .full { grid-column: 1 / -1; }
+.form .msg { grid-column: 1 / -1; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--amber); min-height: 12px; }
+.form .msg.bad { color: var(--heat); }
+#plist .tools { display: flex; gap: 6px; margin-bottom: 10px; }
+#plist .tools .btn { flex: 1; text-align: center; }
+#plist .box { border: 1px solid var(--cyan-dim); padding: 10px 12px; margin-bottom: 10px; display: none; }
+#plist .box.on { display: block; }
+#plist .box .t { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.26em; color: var(--cyan); margin-bottom: 8px; }
+.roles-row { display: grid; grid-template-columns: 92px 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 5px; }
+.roles-row .r { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; color: var(--dim); }
+.roles-row input { background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 11.5px var(--sans); padding: 5px 7px; outline: none; min-width: 0; }
 .clock { text-align: right; font-family: var(--mono); }
 .clock .time { font-size: 22px; letter-spacing: 0.08em; color: #fff; font-variant-numeric: tabular-nums; }
 .clock .date { font-size: 10px; letter-spacing: 0.3em; color: var(--dim); }
@@ -595,10 +618,45 @@ function setView(v) {
 }
 $('v-net').addEventListener('click', () => setView('net')); $('v-pipe').addEventListener('click', () => setView('pipe'));
 const stepBar = (f) => `<div class="steps">${STEPS.map((_, i) => `<i class="${f.released || i + 1 < f.step ? 'done' : i + 1 === f.step ? 'now' : ''}"></i>`).join('')}</div>`;
+let meta = { roles: {}, apps: {}, role_names: [], workspaces: [] };
+let openBox = '';
+function toolsHtml() {
+  const ws = meta.workspaces[0] || '';
+  const apps = (meta.apps[ws] || []);
+  const roles = meta.roles[ws] || [];
+  const names = meta.role_names.length ? meta.role_names : ['CEO', 'Product lead', 'Design lead', 'Tech lead', 'FE lead', 'BE lead'];
+  return `<div class="tools"><button class="btn tool" data-box="new" type="button">+ NEW FEATURE</button><button class="btn tool" data-box="roles" type="button">ROLES</button></div>
+  <div class="box${openBox === 'new' ? ' on' : ''}" id="box-new"><div class="t">NEW FEATURE · context/scripts/new-feature.sh</div>
+    <div class="form" style="margin-top:0;border:0;padding:0"><div><label>APP</label><select id="nf-app">${apps.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}</select></div><div><label>SLUG</label><input id="nf-slug" placeholder="bank-reconciliation"></div>
+    <div class="full"><label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="nf-light" style="width:auto"> LIGHT PATH (a fix, no PRD)</label></div>
+    <div class="full"><button class="btn go" id="nf-go" type="button">CREATE THE BRANCH AND THE RECORDS</button></div><div class="msg" id="nf-msg"></div></div></div>
+  <div class="box${openBox === 'roles' ? ' on' : ''}" id="box-roles"><div class="t">ROLES · context/roles.md · WHO SIGNS, AND WHICH PHONE REACHES THEM</div>
+    ${names.map((n) => { const r = roles.find((x) => (x.role || '').toLowerCase() === n.toLowerCase()) || {}; return `<div class="roles-row" data-role="${esc(n)}"><span class="r">${esc(n.toUpperCase())}</span><input class="name" placeholder="Name" value="${esc(r.name || '')}"><input class="phone" placeholder="Phone (paired name)" value="${esc(r.phone || '')}"><button class="btn save" type="button">SAVE</button></div>`; }).join('')}
+    <div class="msg" id="roles-msg" style="font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;color:var(--amber);min-height:12px"></div></div>`;
+}
+function wireTools(list) {
+  for (const b of list.querySelectorAll('button.tool')) b.onclick = () => { openBox = openBox === b.dataset.box ? '' : b.dataset.box; renderPipeline(); };
+  const go = list.querySelector('#nf-go');
+  if (go) go.onclick = async () => {
+    const msg = list.querySelector('#nf-msg'); const app = list.querySelector('#nf-app').value, slug = list.querySelector('#nf-slug').value.trim();
+    if (!app || !slug) { msg.className = 'msg bad'; msg.textContent = 'APP AND SLUG, PLEASE'; return; }
+    go.disabled = true; msg.className = 'msg'; msg.textContent = 'CREATING…';
+    const r = await daemon({ cmd: 'new_feature', workspace: meta.workspaces[0] || '', app, slug, light: list.querySelector('#nf-light').checked });
+    go.disabled = false;
+    if (r.ok) { msg.textContent = (r.output || 'CREATED').toUpperCase().slice(0, 140); openBox = ''; picked = r.key; setTimeout(refreshFeatures, 500); }
+    else { msg.className = 'msg bad'; msg.textContent = (r.error || 'FAILED').toUpperCase().slice(0, 160); }
+  };
+  for (const row of list.querySelectorAll('.roles-row')) row.querySelector('button.save').onclick = async () => {
+    const msg = list.querySelector('#roles-msg');
+    const r = await daemon({ cmd: 'set_role', workspace: meta.workspaces[0] || '', role: row.dataset.role, name: row.querySelector('.name').value, phone: row.querySelector('.phone').value });
+    msg.textContent = r.ok ? `SAVED ${row.dataset.role.toUpperCase()}` : (r.error || 'FAILED').toUpperCase();
+    if (r.ok) { meta.roles[meta.workspaces[0] || ''] = r.roles; }
+  };
+}
 function renderPipeline() {
   const list = $('plist');
-  if (!features.length) { list.innerHTML = `<div class="msg" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);padding:10px">NO FEATURES YET · RUN A SESSION INSIDE A TORCH WORKSPACE (app-notebooks/, context/templates/) AND THEY APPEAR HERE</div>`; return; }
-  list.innerHTML = features.map((f) => {
+  if (!features.length) { list.innerHTML = toolsHtml() + `<div class="msg" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);padding:10px">NO FEATURES YET · START ONE ABOVE, OR RUN A SESSION INSIDE A TORCH WORKSPACE (app-notebooks/, context/templates/)</div>`; wireTools(list); return; }
+  list.innerHTML = toolsHtml() + features.map((f) => {
     const running = f.plan && f.plan.sessions.some((s) => s.running);
     const warn = (f.warnings || []).length + (f.plan ? f.plan.sessions.reduce((a, s) => a + (s.warnings || []).length, 0) : 0);
     return `<div class="f${picked === f.key ? ' on' : ''}" data-key="${esc(f.key)}">
@@ -609,7 +667,46 @@ function renderPipeline() {
     </div>`;
   }).join('');
   for (const el of list.querySelectorAll('.f')) el.onclick = () => { picked = el.dataset.key; renderPipeline(); renderFeature(); };
+  wireTools(list);
   if (picked) renderFeature();
+}
+// The flow card: where the feature stands, what Mewo does next, autopilot.
+function flowHtml(f) {
+  const fl = f.flow || {}; const a = fl.action || {};
+  const btn = { run: 'START THE SESSION', ask: 'ASK FOR THE SIGNATURE' + (a.roles && a.roles.length > 1 ? 'S' : ''), estimates: 'ASK THE LEADS', export: 'EXPORT TO HANDOFF', start: `START SESSION ${a.session || ''}`, release: 'RECORD THE RELEASE', close: 'MERGE AND CLOSE THE BRANCHES' }[a.kind];
+  const log = (fl.log || []).slice(-4).reverse().map((e) => `<div>${hm(e.ts)} · ${esc(e.text)}</div>`).join('');
+  const est = (fl.estimates || []).map((e) => `${esc(e.role)}: ${e.days} d`).join(' · ');
+  return `<div class="flow"><div class="h"><span class="k">THE FLOW · ${a.step ? 'STEP ' + a.step : ''}</span><label><input type="checkbox" id="fl-auto" ${fl.autopilot ? 'checked' : ''}> AUTOPILOT</label></div>
+    <div class="t">${esc(a.title || '')}</div><div class="d">${esc(a.detail || '')}${a.roles && a.roles.length && a.kind !== 'estimates' ? ` · ${esc(a.roles.join(', '))}` : ''}</div>
+    ${est ? `<div class="d">ESTIMATES · ${est}${fl.estimates_done ? ' · IN THE PRD' : ''}</div>` : ''}
+    <div class="a">${btn ? `<button class="btn go" id="fl-go" type="button">${btn}</button>` : ''}${a.kind === 'estimates' || (a.step === 2 && !fl.estimates_done) ? '<button class="btn" id="fl-est" type="button">ADD AN ESTIMATE</button>' : ''}${a.step === 2 && !fl.estimates_done && (fl.estimates || []).length >= 3 ? '<button class="btn" id="fl-estdone" type="button">ESTIMATES ARE IN THE PRD</button>' : ''}${a.step >= 11 || a.gate === 'uat' ? '<button class="btn" id="fl-uat" type="button">ADD A UAT USER</button>' : ''}</div>
+    <div class="form" id="fl-estform" style="display:none"><div><label>ROLE</label><select id="es-role"><option>Design lead</option><option>FE lead</option><option>BE lead</option></select></div><div><label>PERSON-DAYS</label><input id="es-days" type="number" min="0" step="0.5"></div><div class="full"><label>ASSUMPTIONS</label><input id="es-ass" placeholder="What the estimate assumes"></div><div class="full"><button class="btn go" id="es-go" type="button">RECORD MY ESTIMATE</button></div><div class="msg" id="es-msg"></div></div>
+    <div class="form" id="fl-uatform" style="display:none"><div><label>USER</label><input id="ua-user"></div><div><label>THEIR ROLE</label><input id="ua-role"></div><div class="full"><label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="ua-ok" style="width:auto"> COMPLETED THE CORE FLOWS UNAIDED</label></div><div class="full"><label>NOTES</label><input id="ua-notes"></div><div class="full"><button class="btn go" id="ua-go" type="button">RECORD</button></div><div class="msg" id="ua-msg"></div></div>
+    ${log ? `<div class="log">${log}</div>` : ''}</div>`;
+}
+function wireFlow(box, f) {
+  const auto = box.querySelector('#fl-auto'); if (auto) auto.onchange = async () => { await daemon({ cmd: 'flow_set', feature: f.key, workspace: f.workspace, autopilot: auto.checked }); refreshFeatures(); };
+  const go = box.querySelector('#fl-go'); if (go) go.onclick = async () => {
+    const a = (f.flow || {}).action || {};
+    if (a.kind === 'close' && !confirm(`Merge ${f.branch} into main in torch-main and every code repository on it, push, and delete the branch?`)) return;
+    go.disabled = true; go.textContent = 'WORKING…';
+    const r = await daemon({ cmd: 'flow_next', feature: f.key, workspace: f.workspace, name: signerName });
+    go.textContent = r.ok ? 'DONE' : 'FAILED'; if (!r.ok) alert(r.error || 'Could not do it'); setTimeout(refreshFeatures, 800);
+  };
+  const est = box.querySelector('#fl-est'); if (est) est.onclick = () => { const fm = box.querySelector('#fl-estform'); fm.style.display = fm.style.display === 'none' ? 'grid' : 'none'; };
+  const esgo = box.querySelector('#es-go'); if (esgo) esgo.onclick = async () => {
+    const msg = box.querySelector('#es-msg'); const days = parseFloat(box.querySelector('#es-days').value);
+    if (!(days >= 0)) { msg.className = 'msg bad'; msg.textContent = 'PERSON-DAYS, PLEASE'; return; }
+    const r = await daemon({ cmd: 'estimate', feature: f.key, workspace: f.workspace, role: box.querySelector('#es-role').value, name: signerName, days, assumptions: box.querySelector('#es-ass').value });
+    msg.className = r.ok ? 'msg' : 'msg bad'; msg.textContent = r.ok ? 'RECORDED' : (r.error || 'FAILED').toUpperCase(); if (r.ok) setTimeout(refreshFeatures, 500);
+  };
+  const estdone = box.querySelector('#fl-estdone'); if (estdone) estdone.onclick = async () => { await daemon({ cmd: 'estimates_done', feature: f.key, workspace: f.workspace }); refreshFeatures(); };
+  const uat = box.querySelector('#fl-uat'); if (uat) uat.onclick = () => { const fm = box.querySelector('#fl-uatform'); fm.style.display = fm.style.display === 'none' ? 'grid' : 'none'; };
+  const uago = box.querySelector('#ua-go'); if (uago) uago.onclick = async () => {
+    const msg = box.querySelector('#ua-msg');
+    const r = await daemon({ cmd: 'uat_user', feature: f.key, workspace: f.workspace, user: box.querySelector('#ua-user').value, role: box.querySelector('#ua-role').value, unaided: box.querySelector('#ua-ok').checked, notes: box.querySelector('#ua-notes').value });
+    msg.className = r.ok ? 'msg' : 'msg bad'; msg.textContent = r.ok ? `${r.unaided} / ${r.total} UNAIDED = ${r.percent}%${r.pass ? ' · PASSES' : ''}` : (r.error || 'FAILED').toUpperCase(); if (r.ok) setTimeout(refreshFeatures, 500);
+  };
 }
 function gateHtml(f, g) {
   const sigs = (g.signatures || []).map((s) => `<b>${esc(s.name)}</b> (${esc(s.role)})`).join(', ');
@@ -635,6 +732,7 @@ function renderFeature() {
   const h = [];
   h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}` : ' · NO PRD FOUND'}</div></div>${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
   for (const w of (f.warnings || [])) h.push(`<div class="warn" style="margin-top:10px">${esc(w)}</div>`);
+  h.push(flowHtml(f));
   if (!f.light) h.push(`<div class="sec"><span>THE TWELVE STEPS</span></div><div class="stepper">${STEPS.map((s, i) => `<div class="${f.released || i + 1 < f.step ? 'done' : i + 1 === f.step ? 'now' : ''}">${i + 1}<br>${esc(s)}</div>`).join('')}</div>`);
   if (plan) {
     h.push(`<div class="sec"><span>SESSION PLAN · ${esc(plan.file)}</span><span>${plan.reviewed_by ? 'REVIEWED BY ' + esc(plan.reviewed_by.toUpperCase()) : 'NOT REVIEWED YET'}</span></div>`);
@@ -653,6 +751,7 @@ function renderFeature() {
     h.push(`<div class="sec"><span>HANDOFF · ${f.handoff_files.length} FILE${f.handoff_files.length > 1 ? 'S' : ''}</span></div><div class="files">${f.handoff_files.map((x) => `<button class="btn hf" type="button" data-file="${esc(x)}">${esc(x)}</button>`).join('')}</div>`);
   }
   box.innerHTML = h.join('');
+  wireFlow(box, f);
   for (const b of box.querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
   for (const b of box.querySelectorAll('button.start')) b.onclick = async () => {
     b.disabled = true; b.textContent = 'STARTING…';
@@ -685,7 +784,7 @@ function renderFeature() {
 }
 async function refreshFeatures() {
   const r = await daemon({ cmd: 'features' });
-  if (r && r.ok) { features = r.features || []; if (view === 'pipe') renderPipeline(); }
+  if (r && r.ok) { features = r.features || []; meta = { roles: r.roles || {}, apps: r.apps || {}, role_names: r.role_names || [], workspaces: r.workspaces || [] }; if (view === 'pipe') renderPipeline(); }
 }
 // What a session made, shown in place: the daemon's copy of the files, through the Mac app's
 // mewo-artifact:// scheme, or `mewo dashboard`'s /artifact/<id>/. A design shows board by board.
@@ -1038,7 +1137,7 @@ function apply(s) {
   $('offline').style.display = 'none';
   const d = s.daemon, sessions = s.sessions || [], events = s.events || [], requests = s.requests || [];
   model = { sessions, daemon: d, legacy: !!s.legacy };
-  if (Array.isArray(s.features)) { features = s.features; if (view === 'pipe') renderPipeline(); }
+  if (Array.isArray(s.features)) { features = s.features; if (s.features_meta) meta = s.features_meta; if (view === 'pipe') renderPipeline(); }
   $('legacy').style.display = s.legacy ? 'block' : 'none';
   $('pcname').textContent = (d.name || 'PC').toUpperCase();
   $('pcstate').textContent = `ONLINE · ${d.connected || 0} PHONE${d.connected === 1 ? '' : 'S'} LIVE`; $('pcstate').className = 'state';

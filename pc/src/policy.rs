@@ -122,13 +122,29 @@ pub fn remember_workspace(ws: &Path) -> bool {
 // git
 // ---------------------------------------------------------------------------
 
-fn git_bin() -> PathBuf {
-    let p = Path::new("/usr/bin/git");
-    if p.is_file() {
-        p.to_path_buf()
-    } else {
-        PathBuf::from("git")
+/// A git binary reached directly: `/usr/bin/git` on macOS is the xcrun
+/// shim, which can take long on a cold cache from a background daemon.
+pub fn git_bin() -> PathBuf {
+    static FOUND: Mutex<Option<PathBuf>> = Mutex::new(None);
+    if let Some(p) = FOUND.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+        return p;
     }
+    let mut candidates: Vec<PathBuf> = vec![
+        PathBuf::from("/Library/Developer/CommandLineTools/usr/bin/git"),
+        PathBuf::from("/opt/homebrew/bin/git"),
+        PathBuf::from("/usr/local/bin/git"),
+    ];
+    if let Ok(dev) = fs::read_to_string("/var/db/xcode_select_link").map(|s| s.trim().to_string()) {
+        candidates.push(Path::new(&dev).join("usr").join("bin").join("git"));
+    }
+    if let Ok(link) = fs::read_link("/var/db/xcode_select_link") {
+        candidates.push(link.join("usr").join("bin").join("git"));
+    }
+    candidates.push(PathBuf::from("/Applications/Xcode.app/Contents/Developer/usr/bin/git"));
+    candidates.push(PathBuf::from("/usr/bin/git"));
+    let found = candidates.into_iter().find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("git"));
+    *FOUND.lock().unwrap_or_else(|p| p.into_inner()) = Some(found.clone());
+    found
 }
 
 /// How long a git command may take before it counts as blocked (macOS
@@ -1260,7 +1276,7 @@ pub fn enrich(f: &mut Feature, sessions: &[Session], prs: &[Value]) {
 // writing records
 // ---------------------------------------------------------------------------
 
-fn today() -> String {
+pub fn today() -> String {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) as i64;
     let days = secs.div_euclid(86_400);
     // Howard Hinnant's civil-from-days.
@@ -1372,7 +1388,7 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
             } else {
                 lines.insert(target, new_line);
             }
-        } else if gate_id != "intake" {
+        } else if gate_id != "intake" && gate_id != "handoff1" {
             return Err("No signature table under this checklist".to_string());
         }
     }

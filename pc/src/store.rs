@@ -24,6 +24,9 @@ pub struct Event {
     pub message: String,
     pub detail: String,
     pub session_id: String,
+    /// v1.8: the one phone (device name) this is for; empty for every phone.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub to: String,
 }
 
 #[derive(Deserialize)]

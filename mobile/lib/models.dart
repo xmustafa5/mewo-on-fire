@@ -1080,6 +1080,79 @@ class TorchPlan {
       );
 }
 
+/// What the flow does next for a feature (v1.8).
+class FlowAction {
+  const FlowAction({required this.kind, required this.step, required this.title, required this.detail, required this.gate, required this.roles, required this.session, required this.auto});
+  final String kind;
+  final int step;
+  final String title;
+  final String detail;
+  final String gate;
+  final List<String> roles;
+  final int session;
+  final bool auto;
+
+  factory FlowAction.fromJson(Map<String, dynamic> j) => FlowAction(
+        kind: _asString(j['kind']),
+        step: _asInt(j['step']),
+        title: _asString(j['title']),
+        detail: _asString(j['detail']),
+        gate: _asString(j['gate']),
+        roles: _asStringList(j['roles']),
+        session: _asInt(j['session']),
+        auto: j['auto'] == true,
+      );
+
+  static const empty = FlowAction(kind: '', step: 0, title: '', detail: '', gate: '', roles: <String>[], session: 0, auto: false);
+}
+
+class FlowEstimate {
+  const FlowEstimate({required this.role, required this.name, required this.days, required this.assumptions});
+  final String role;
+  final String name;
+  final double days;
+  final String assumptions;
+}
+
+/// The flow runner's state for a feature (v1.8).
+class FlowInfo {
+  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action});
+  final bool autopilot;
+  final List<FlowEstimate> estimates;
+  final bool estimatesDone;
+  final List<(int, String)> log;
+  final int releasedAt;
+  final int closedAt;
+  final FlowAction action;
+
+  static const empty = FlowInfo(autopilot: false, estimates: <FlowEstimate>[], estimatesDone: false, log: <(int, String)>[], releasedAt: 0, closedAt: 0, action: FlowAction.empty);
+
+  factory FlowInfo.fromJson(Map<String, dynamic> j) => FlowInfo(
+        autopilot: j['autopilot'] == true,
+        estimates: [
+          if (j['estimates'] is List)
+            for (final e in j['estimates'] as List)
+              if (e is Map) FlowEstimate(role: _asString(e['role']), name: _asString(e['name']), days: e['days'] is num ? (e['days'] as num).toDouble() : 0, assumptions: _asString(e['assumptions'])),
+        ],
+        estimatesDone: j['estimates_done'] == true,
+        log: [
+          if (j['log'] is List)
+            for (final e in j['log'] as List)
+              if (e is Map) (_asInt(e['ts']), _asString(e['text'])),
+        ],
+        releasedAt: _asInt(j['released_at']),
+        closedAt: _asInt(j['closed_at']),
+        action: j['action'] is Map ? FlowAction.fromJson(Map<String, dynamic>.from(j['action'] as Map)) : FlowAction.empty,
+      );
+}
+
+class RoleEntry {
+  const RoleEntry({required this.role, required this.name, required this.phone});
+  final String role;
+  final String name;
+  final String phone;
+}
+
 /// A feature of a TORCH workspace and where it stands in the twelve steps.
 class TorchFeature {
   const TorchFeature({
@@ -1103,7 +1176,10 @@ class TorchFeature {
     required this.warnings,
     required this.sessionsMerged,
     required this.sessionsTotal,
+    this.flow = FlowInfo.empty,
   });
+
+  final FlowInfo flow;
 
   static const List<String> steps = <String>[
     'PRD draft',
@@ -1169,17 +1245,36 @@ class TorchFeature {
         warnings: _asStringList(j['warnings']),
         sessionsMerged: _asInt(j['sessions_merged']),
         sessionsTotal: _asInt(j['sessions_total']),
+        flow: j['flow'] is Map ? FlowInfo.fromJson(Map<String, dynamic>.from(j['flow'] as Map)) : FlowInfo.empty,
       );
 }
 
 /// The features of one PC, with the policy's checklist texts.
 class FeaturesData {
-  const FeaturesData({required this.features, required this.selfCheck, required this.reviewCheck, this.error = '', this.ts = 0});
+  const FeaturesData({
+    required this.features,
+    required this.selfCheck,
+    required this.reviewCheck,
+    this.error = '',
+    this.ts = 0,
+    this.workspaces = const <String>[],
+    this.roles = const <String, List<RoleEntry>>{},
+    this.apps = const <String, List<String>>{},
+    this.roleNames = const <String>[],
+    this.warning = '',
+  });
   final List<TorchFeature> features;
   final List<String> selfCheck;
   final List<String> reviewCheck;
   final String error;
   final int ts;
+  final List<String> workspaces;
+
+  /// workspace → who holds each role.
+  final Map<String, List<RoleEntry>> roles;
+  final Map<String, List<String>> apps;
+  final List<String> roleNames;
+  final String warning;
 
   factory FeaturesData.fromJson(Map<String, dynamic> j) => FeaturesData(
         features: [
@@ -1191,6 +1286,22 @@ class FeaturesData {
         reviewCheck: _asStringList(j['review_check']),
         error: _asString(j['error']),
         ts: DateTime.now().millisecondsSinceEpoch,
+        workspaces: _asStringList(j['workspaces']),
+        roles: {
+          if (j['roles'] is Map)
+            for (final e in (j['roles'] as Map).entries)
+              '${e.key}': [
+                if (e.value is List)
+                  for (final r in e.value as List)
+                    if (r is Map) RoleEntry(role: _asString(r['role']), name: _asString(r['name']), phone: _asString(r['phone'])),
+              ],
+        },
+        apps: {
+          if (j['apps'] is Map)
+            for (final e in (j['apps'] as Map).entries) '${e.key}': _asStringList(e.value),
+        },
+        roleNames: _asStringList(j['role_names']),
+        warning: _asString(j['warning']),
       );
 }
 

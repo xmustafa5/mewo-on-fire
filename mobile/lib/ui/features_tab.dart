@@ -15,6 +15,8 @@ List<Widget> featureSlivers(BuildContext context, AppState state) {
   final errors = [
     for (final pc in state.pcs)
       if ((state.featuresOf(pc.id)?.error ?? '').isNotEmpty) '${pc.name}: ${state.featuresOf(pc.id)!.error}',
+    for (final pc in state.pcs)
+      if ((state.featuresOf(pc.id)?.warning ?? '').isNotEmpty) '${pc.name}: ${state.featuresOf(pc.id)!.warning}',
   ];
   if (all.isEmpty) {
     return [

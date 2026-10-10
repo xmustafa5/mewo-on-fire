@@ -159,7 +159,7 @@ fn state_json(cache: &Cache) -> String {
 /// is meant to send.
 fn forward(req: &Value) -> Value {
     let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("");
-    if !matches!(cmd, "features" | "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign") {
+    if !matches!(cmd, "features" | "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign" | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role") {
         return json!({"ok": false, "error": "not a console command"});
     }
     for (path, legacy) in sockets() {
@@ -228,7 +228,9 @@ fn collect() -> Value {
                 desktop::tag(&mut sessions);
                 let events = field(&path, json!({"cmd": "events", "limit": 120}), "events");
                 let requests = field(&path, json!({"cmd": "requests"}), "requests");
-                let features = if legacy { Value::Array(Vec::new()) } else { field(&path, json!({"cmd": "features"}), "features") };
+                let features_all = if legacy { Value::Null } else { control::request_at(&path, &json!({"cmd": "features"}), Duration::from_secs(20)).unwrap_or(Value::Null) };
+                let features = features_all.get("features").cloned().unwrap_or(Value::Array(Vec::new()));
+                let features_meta = json!({"roles": features_all.get("roles").cloned().unwrap_or(json!({})), "apps": features_all.get("apps").cloned().unwrap_or(json!({})), "role_names": features_all.get("role_names").cloned().unwrap_or(json!([])), "workspaces": features_all.get("workspaces").cloned().unwrap_or(json!([]))});
                 return json!({
                     "ok": true,
                     "daemon": status,
@@ -236,6 +238,7 @@ fn collect() -> Value {
                     "events": events,
                     "requests": requests,
                     "features": features,
+                    "features_meta": features_meta,
                     "legacy": legacy,
                     "socket": path,
                     "now": now_ms(),

@@ -6,6 +6,7 @@ import '../app_state.dart';
 import '../models.dart';
 import 'chat_screen.dart';
 import 'features_tab.dart';
+import 'flow_sheets.dart';
 import 'new_session_sheet.dart';
 import 'history_tab.dart' show relativeTime;
 import 'home_screen.dart' show EmberTabBar;
@@ -92,19 +93,38 @@ class _SessionsTabState extends State<SessionsTab> {
                       transitionBuilder: fadeUpTransition,
                       child: Text(summary, key: ValueKey<String>(summary)),
                     ),
-                    actions: [
-                      GhostIconButton(
-                        icon: Icons.refresh_rounded,
-                        tooltip: 'Refresh',
-                        onPressed: state.refreshSessions,
-                      ),
-                      GhostIconButton(
-                        icon: Icons.add_rounded,
-                        tooltip: 'New session',
-                        color: Ember.amber,
-                        onPressed: state.pcs.isEmpty ? null : () => showNewSessionSheet(context),
-                      ),
-                    ],
+                    actions: _features
+                        ? [
+                            GhostIconButton(
+                              icon: Icons.badge_outlined,
+                              tooltip: 'Roles',
+                              onPressed: state.pcs.isEmpty ? null : () => showRolesSheet(context),
+                            ),
+                            GhostIconButton(
+                              icon: Icons.refresh_rounded,
+                              tooltip: 'Refresh',
+                              onPressed: state.refreshFeatures,
+                            ),
+                            GhostIconButton(
+                              icon: Icons.add_rounded,
+                              tooltip: 'New feature',
+                              color: Ember.amber,
+                              onPressed: state.pcs.isEmpty ? null : () => showNewFeatureSheet(context),
+                            ),
+                          ]
+                        : [
+                            GhostIconButton(
+                              icon: Icons.refresh_rounded,
+                              tooltip: 'Refresh',
+                              onPressed: state.refreshSessions,
+                            ),
+                            GhostIconButton(
+                              icon: Icons.add_rounded,
+                              tooltip: 'New session',
+                              color: Ember.amber,
+                              onPressed: state.pcs.isEmpty ? null : () => showNewSessionSheet(context),
+                            ),
+                          ],
                   ),
                 ),
                 SliverToBoxAdapter(

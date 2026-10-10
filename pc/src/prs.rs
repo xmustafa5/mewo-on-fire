@@ -82,6 +82,17 @@ impl PrCache {
         value.get("prs").and_then(Value::as_array).cloned().unwrap_or_default()
     }
 
+    /// What is cached for `base` in `dir`, without a refresh.
+    pub fn cached_base(&self, dir: &str, base: &str) -> Vec<Value> {
+        let key = format!("{dir}#{base}");
+        self.shared
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+            .and_then(|(_, v)| v.get("prs").and_then(Value::as_array).cloned())
+            .unwrap_or_default()
+    }
+
     fn entries_arc(&self) -> std::sync::Arc<Mutex<HashMap<String, (Instant, Value)>>> {
         self.shared.clone()
     }
@@ -180,8 +191,7 @@ fn fetch(cwd: &str) -> Value {
     if cwd.is_empty() || !Path::new(cwd).is_dir() {
         return empty("The session's folder is not on this PC");
     }
-    let git = Path::new("/usr/bin/git");
-    let git = if git.is_file() { git.to_path_buf() } else { PathBuf::from("git") };
+    let git = crate::policy::git_bin();
     let branch = match run(cwd, &git, &["rev-parse", "--abbrev-ref", "HEAD"]) {
         Ok(b) => b,
         Err(_) => return empty("Not a git repository"),
