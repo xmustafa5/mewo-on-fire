@@ -996,6 +996,7 @@ async fn run_async() -> Result<()> {
     tokio::spawn(peers::run(state.clone()));
     tokio::spawn(fetch_loop(state.clone()));
     tokio::spawn(plane_loop(state.clone()));
+    watchdog();
     tokio::spawn(relay::run(state.clone()));
 
     wait_for_shutdown().await;
@@ -1007,6 +1008,32 @@ async fn run_async() -> Result<()> {
 
 /// Periodically drop phone requests nobody answered (PROTOCOL.md: 24 h),
 /// and once an hour the images phones sent more than a week ago.
+/// A plain thread that asks this daemon's own control socket for its
+/// status every 20 s. Three misses in a row mean something inside is
+/// wedged: the daemon exits and launchd starts a fresh one.
+fn watchdog() {
+    std::thread::Builder::new()
+        .name("mewo-watchdog".to_string())
+        .spawn(|| {
+            let mut misses = 0u32;
+            loop {
+                std::thread::sleep(Duration::from_secs(20));
+                let ok = control::request(&json!({"cmd": "status"}), Duration::from_secs(10)).map(|v| v.get("ok").and_then(Value::as_bool).unwrap_or(false)).unwrap_or(false);
+                if ok {
+                    misses = 0;
+                    continue;
+                }
+                misses += 1;
+                eprintln!("mewo: watchdog: no answer from the control socket ({misses}/3)");
+                if misses >= 3 {
+                    eprintln!("mewo: watchdog: restarting the daemon");
+                    std::process::exit(70);
+                }
+            }
+        })
+        .ok();
+}
+
 /// v2.1: the board. Every minute, when Plane is connected, the features
 /// and their items are brought in line.
 async fn plane_loop(state: Arc<AppState>) {

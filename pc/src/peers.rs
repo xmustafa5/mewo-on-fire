@@ -121,9 +121,9 @@ impl Peers {
 
     /// The peers with their live state, for the console and the phones.
     pub fn summary(&self) -> Vec<Value> {
+        let list = self.list();
         let live = lock(&self.live);
-        self.list()
-            .iter()
+        list.iter()
             .map(|p| {
                 let l = live.get(&p.pc_id).cloned().unwrap_or_default();
                 let working = l.sessions.iter().filter(|s| s.state == "working").count();
@@ -142,9 +142,10 @@ impl Peers {
 
     /// Every peer's sessions, tagged with the PC.
     pub fn sessions(&self) -> Vec<(String, String, Session)> {
+        let list = self.list();
         let live = lock(&self.live);
         let mut out = Vec::new();
-        for p in self.list() {
+        for p in list {
             if let Some(l) = live.get(&p.pc_id) {
                 for s in &l.sessions {
                     out.push((p.pc_id.clone(), p.name.clone(), s.clone()));

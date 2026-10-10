@@ -428,8 +428,8 @@ pub(crate) fn plane_request(state: &AppState, req: &Value) -> Value {
 /// The workspace's members, kept five minutes (Plane allows 60 calls a minute).
 fn cached_members(refresh: bool) -> Vec<Value> {
     static CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<Value>)>> = std::sync::Mutex::new(None);
-    let mut g = CACHE.lock().unwrap_or_else(|p| p.into_inner());
     if !refresh {
+        let g = CACHE.lock().unwrap_or_else(|p| p.into_inner());
         if let Some((at, list)) = g.as_ref() {
             if at.elapsed() < std::time::Duration::from_secs(300) {
                 return list.clone();
@@ -440,8 +440,9 @@ fn cached_members(refresh: bool) -> Vec<Value> {
     if c.base_url.is_empty() || c.workspace.is_empty() || c.token.is_empty() {
         return Vec::new();
     }
+    // The network call runs with no lock held.
     let list = plane::members(&c).unwrap_or_default();
-    *g = Some((std::time::Instant::now(), list.clone()));
+    *CACHE.lock().unwrap_or_else(|p| p.into_inner()) = Some((std::time::Instant::now(), list.clone()));
     list
 }
 
