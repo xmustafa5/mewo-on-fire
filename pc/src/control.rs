@@ -313,6 +313,10 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
 
 /// A request carrying another PC's `pc_id` (v2.0).
 fn is_for_peer(state: &AppState, req: &Value) -> bool {
+    // The peer list itself is managed here, never forwarded.
+    if matches!(req.get("cmd").and_then(Value::as_str).unwrap_or(""), "peers" | "peer_scan" | "peer_pair" | "peer_remove") {
+        return false;
+    }
     match req.get("pc_id").and_then(Value::as_str) {
         Some(id) if !id.is_empty() && id != state.config.pc_id => state.peers.is_peer(id),
         _ => false,
