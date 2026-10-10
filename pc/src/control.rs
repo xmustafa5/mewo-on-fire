@@ -18,6 +18,7 @@ use crate::ask;
 use crate::daemon::AppState;
 use crate::hook;
 use crate::paths;
+use crate::peers;
 use crate::policy;
 use crate::requests::{AskReply, Request};
 use crate::sessions::{ListenReply, ListenStart, Meta};
@@ -159,6 +160,48 @@ async fn handle_conn(state: Arc<AppState>, stream: tokio::net::UnixStream) -> Re
                     json!({"ok": true, "sessions": state.session_list()})
                 }
                 "chat" => handle_chat(&state, &req).await,
+                // v2.0: a command for another PC of the network goes through this hub.
+                cmd if is_for_peer(&state, &req) => {
+                    let pc_id = req.get("pc_id").and_then(Value::as_str).unwrap_or("").to_string();
+                    let mut frame = req.clone();
+                    if let Some(o) = frame.as_object_mut() {
+                        let ty = match cmd {
+                            "features" => "get_features".to_string(),
+                            "scan" => "get_scan".to_string(),
+                            other => other.to_string(),
+                        };
+                        o.remove("cmd");
+                        o.insert("type".to_string(), json!(ty));
+                    }
+                    state.peers.forward(&pc_id, frame).await
+                }
+                "peers" => json!({"ok": true, "pc_id": state.config.pc_id, "name": state.config.name, "account": crate::daemon::account_name(), "peers": state.peers.summary()}),
+                "peer_scan" => {
+                    let secs = req.get("seconds").and_then(Value::as_u64).unwrap_or(3);
+                    json!({"ok": true, "found": peers::scan(secs).await})
+                }
+                "peer_pair" => {
+                    let payload: Option<peers::PairPayload> = match req.get("payload") {
+                        Some(Value::String(s)) => serde_json::from_str(s).ok(),
+                        Some(v @ Value::Object(_)) => serde_json::from_value(v.clone()).ok(),
+                        _ => serde_json::from_value(req.clone()).ok(),
+                    };
+                    match payload {
+                        Some(p) => match peers::pair(&state, &p).await {
+                            Ok(peer) => json!({"ok": true, "pc_id": peer.pc_id, "name": peer.name}),
+                            Err(e) => json!({"ok": false, "error": format!("{e:#}")}),
+                        },
+                        None => json!({"ok": false, "error": "The pairing text is not what `mewo pair` prints"}),
+                    }
+                }
+                "peer_remove" => {
+                    let pc_id = req.get("pc_id").and_then(Value::as_str).unwrap_or("");
+                    match state.peers.remove(pc_id) {
+                        Ok(true) => json!({"ok": true}),
+                        Ok(false) => json!({"ok": false, "error": "no such peer"}),
+                        Err(e) => json!({"ok": false, "error": format!("{e:#}")}),
+                    }
+                }
                 // v1.7: the TORCH flow.
                 "features" => state.features_json().await,
                 _ => handle_request(&state, &req),
@@ -268,6 +311,14 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
     }
 }
 
+/// A request carrying another PC's `pc_id` (v2.0).
+fn is_for_peer(state: &AppState, req: &Value) -> bool {
+    match req.get("pc_id").and_then(Value::as_str) {
+        Some(id) if !id.is_empty() && id != state.config.pc_id => state.peers.is_peer(id),
+        _ => false,
+    }
+}
+
 /// The policy commands (v1.7). `workspace` names the workspace; when
 /// absent, the one feature `feature` is in.
 pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
@@ -307,7 +358,7 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
             return json!({"ok": false, "error": "No workspace known yet"});
         };
         return match cmd.as_str() {
-            "set_role" => match flow::set_role(&ws, &s("role"), &s("name"), &s("phone")) {
+            "set_role" => match flow::set_role(&ws, &s("role"), &s("name"), &s("phone"), &s("pc")) {
                 Ok(list) => json!({"ok": true, "roles": list}),
                 Err(e) => json!({"ok": false, "error": e}),
             },

@@ -133,6 +133,8 @@ pub struct Role {
     pub role: String,
     pub name: String,
     pub phone: String,
+    /// The PC (its Mewo name) this person's sessions run on (v2.0).
+    pub pc: String,
 }
 
 fn roles_file(ws: &Path) -> PathBuf {
@@ -152,7 +154,7 @@ pub fn roles(ws: &Path) -> Vec<Role> {
         if c.len() < 2 || c[0].eq_ignore_ascii_case("role") {
             continue;
         }
-        out.push(Role { role: c[0].clone(), name: c[1].clone(), phone: c.get(2).cloned().unwrap_or_default() });
+        out.push(Role { role: c[0].clone(), name: c[1].clone(), phone: c.get(2).cloned().unwrap_or_default(), pc: c.get(3).cloned().unwrap_or_default() });
     }
     out
 }
@@ -162,17 +164,17 @@ pub fn role_named(ws: &Path, role: &str) -> Option<Role> {
 }
 
 /// Writes or replaces a role's row. An empty name removes the row.
-pub fn set_role(ws: &Path, role: &str, name: &str, phone: &str) -> Result<Vec<Role>, String> {
+pub fn set_role(ws: &Path, role: &str, name: &str, phone: &str, pc: &str) -> Result<Vec<Role>, String> {
     let role = ROLES.iter().find(|r| r.eq_ignore_ascii_case(role)).ok_or_else(|| format!("Unknown role {role}. The policy's roles: {}", ROLES.join(", ")))?;
     let mut list = roles(ws);
     list.retain(|r| !r.role.eq_ignore_ascii_case(role));
     if !name.trim().is_empty() {
-        list.push(Role { role: role.to_string(), name: name.trim().to_string(), phone: phone.trim().to_string() });
+        list.push(Role { role: role.to_string(), name: name.trim().to_string(), phone: phone.trim().to_string(), pc: pc.trim().to_string() });
     }
     list.sort_by_key(|r| ROLES.iter().position(|x| x.eq_ignore_ascii_case(&r.role)).unwrap_or(99));
-    let mut out = String::from("# Roles\n\nWho holds each role of the TORCH Agentic Development Policy, and the phone (Mewo on Fire) that reaches them. Written from the phones; edit by hand if you like.\n\n| Role | Name | Phone |\n|---|---|---|\n");
+    let mut out = String::from("# Roles\n\nWho holds each role of the TORCH Agentic Development Policy, the phone (Mewo on Fire) that reaches them, and the PC their sessions run on. Written from the phones and the console; edit by hand if you like.\n\n| Role | Name | Phone | PC |\n|---|---|---|---|\n");
     for r in &list {
-        out.push_str(&format!("| {} | {} | {} |\n", r.role, r.name, r.phone));
+        out.push_str(&format!("| {} | {} | {} | {} |\n", r.role, r.name, r.phone, r.pc));
     }
     let path = roles_file(ws);
     let _ = fs::create_dir_all(path.parent().unwrap_or(ws));

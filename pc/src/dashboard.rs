@@ -159,7 +159,7 @@ fn state_json(cache: &Cache) -> String {
 /// is meant to send.
 fn forward(req: &Value) -> Value {
     let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("");
-    if !matches!(cmd, "features" | "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign" | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign") {
+    if !matches!(cmd, "features" | "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign" | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "peers" | "peer_scan" | "peer_pair" | "peer_remove" | "new_session") {
         return json!({"ok": false, "error": "not a console command"});
     }
     for (path, legacy) in sockets() {
@@ -239,6 +239,7 @@ fn collect() -> Value {
                     "requests": requests,
                     "features": features,
                     "features_meta": features_meta,
+                    "peers": if legacy { Value::Array(Vec::new()) } else { field(&path, json!({"cmd": "peers"}), "peers") },
                     "legacy": legacy,
                     "socket": path,
                     "now": now_ms(),

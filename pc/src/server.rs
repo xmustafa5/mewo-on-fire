@@ -242,6 +242,7 @@ async fn handle_auth(
             "name": state.config.name,
             "last_id": sub.last_id,
             "hosts": state.hosts(),
+            "account": crate::daemon::account_name(),
         }),
     )
     .await?;
@@ -442,6 +443,17 @@ async fn handle_get_prs(state: &AppState, sink: &mut WsSink, msg: &Value) -> Res
 async fn handle_policy(state: &AppState, device: &Device, sink: &mut WsSink, msg: &Value) -> Result<()> {
     let frame = str_field(msg, "type").to_string();
     let client_id = str_field(msg, "client_id").to_string();
+    // v2.0: a frame for another PC of the network goes through this hub.
+    let pc_id = str_field(msg, "pc_id").to_string();
+    if !pc_id.is_empty() && pc_id != state.config.pc_id && state.peers.is_peer(&pc_id) {
+        let mut v = state.peers.forward(&pc_id, msg.clone()).await;
+        if let Some(o) = v.as_object_mut() {
+            o.insert("type".to_string(), json!(format!("{}_result", frame.trim_start_matches("get_"))));
+            o.insert("client_id".to_string(), json!(client_id));
+            o.insert("pc_id".to_string(), json!(pc_id));
+        }
+        return send_json(sink, &v).await;
+    }
     let mut req = msg.clone();
     if let Some(o) = req.as_object_mut() {
         let cmd = match frame.as_str() {

@@ -61,6 +61,32 @@ header {
 .pc .state { font-size: 10px; letter-spacing: 0.3em; color: var(--ok); margin-top: 2px; }
 .pc .state.off { color: var(--heat); }
 .pc .state::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 8px; box-shadow: 0 0 10px currentColor; vertical-align: 1px; animation: blink 2.4s ease-in-out infinite; }
+.fleet { padding: 10px 14px 4px; border-bottom: 1px solid var(--cyan-dim); }
+.fleet .fh { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.3em; color: var(--dim2); margin-bottom: 8px; }
+.fleet .fh button { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--cyan); font: 9px var(--mono); letter-spacing: 0.2em; padding: 4px 8px; }
+.fleet .pc { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px dashed rgba(79,209,255,0.1); cursor: pointer; }
+.fleet .pc:first-of-type { border-top: 0; }
+.fleet .pc .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 10px var(--ok); animation: blink 2.4s ease-in-out infinite; }
+.fleet .pc .dot.off { background: var(--heat); box-shadow: 0 0 10px var(--heat); animation: none; }
+.fleet .pc .dot.me { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
+.fleet .pc .n { color: #fff; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet .pc .a { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; color: var(--dim); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet .pc .s { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+.fleet .pc .s b { color: var(--fire); font-weight: 600; }
+.fleet .pc .s .ms { color: var(--dim2); font-size: 9px; display: block; }
+#addpc { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); width: 520px; display: none; z-index: 9; background: rgba(6, 12, 20, 0.97); border: 1px solid var(--cyan-line); padding: 14px 16px; box-shadow: 0 16px 50px rgba(0,0,0,.7), 0 0 30px rgba(79,209,255,.12); }
+#addpc.on { display: block; }
+#addpc .t { font-weight: 700; color: #fff; font-size: 14px; }
+#addpc .m { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); margin: 4px 0 10px; line-height: 1.6; }
+#addpc .m code { color: var(--amber); }
+#addpc .found { border: 1px solid var(--cyan-dim); max-height: 180px; overflow: auto; margin-bottom: 10px; }
+#addpc .found .row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px dashed rgba(79,209,255,0.12); }
+#addpc .found .row .n { color: #fff; font-size: 12.5px; } #addpc .found .row .h { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; color: var(--dim); }
+#addpc .found input { width: 110px; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 12px var(--mono); padding: 5px 7px; outline: none; }
+#addpc textarea { width: 100%; box-sizing: border-box; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 11px var(--mono); padding: 7px 9px; outline: none; min-height: 54px; resize: vertical; }
+#addpc .row2 { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+#addpc .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-top: 8px; color: var(--amber); min-height: 14px; }
+#addpc .msg.bad { color: var(--heat); }
 .views { display: flex; gap: 6px; margin-left: 26px; }
 .views button { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); font: 10px var(--mono); letter-spacing: 0.28em; padding: 7px 12px; }
 .views button.on { border-color: var(--cyan); color: var(--cyan); background: rgba(79,209,255,0.08); box-shadow: 0 0 14px rgba(79,209,255,0.18); }
@@ -381,6 +407,7 @@ footer .seg { display: flex; gap: 22px; }
     <span class="c tl"></span><span class="c tr"></span><span class="c bl"></span><span class="c br"></span>
     <div class="ph"><span>SESSIONS</span><span class="r" id="stotal">0 TOTAL</span></div>
     <div class="pb">
+      <div class="fleet" id="fleet"></div>
       <div class="tiles">
         <div class="tile" style="--c: var(--fire)"><div class="n" id="n-working">0</div><div class="l">WORKING</div><div class="bar" id="b-working"></div></div>
         <div class="tile" style="--c: var(--amber)"><div class="n" id="n-waiting">0</div><div class="l">NEEDS YOU</div><div class="bar" id="b-waiting"></div></div>
@@ -408,6 +435,14 @@ footer .seg { display: flex; gap: 22px; }
     <div id="pipe"><div id="plist"></div><div id="pdetail"><div class="msg" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);padding:20px">PICK A FEATURE</div></div></div>
     <div id="tip"></div>
     <button id="newbtn" type="button">+ NEW SESSION</button>
+    <div id="addpc">
+      <div class="t">Add a PC to the network</div>
+      <div class="m">ON THE OTHER PC, WITH MEWO INSTALLED, RUN <code>mewo pair</code>. PICK IT BELOW AND TYPE THE 8-CHARACTER CODE IT SHOWS, OR PASTE THE WHOLE PAIRING LINE. BOTH PCS MUST BE ON THE SAME NETWORK.</div>
+      <div class="found" id="ap-found"><div class="row"><span class="h">SCANNING THE NETWORK…</span></div></div>
+      <textarea id="ap-paste" placeholder='Or paste the line: {"v":1,"id":"…","name":"…","hosts":[…],"port":47822,"fp":"…","code":"…"}'></textarea>
+      <div class="row2"><button class="btn go" id="ap-go" type="button">PAIR FROM THE PASTED LINE</button><button class="btn" id="ap-scan" type="button">SCAN AGAIN</button><button class="btn" id="ap-close" type="button">CLOSE</button></div>
+      <div class="msg" id="ap-msg"></div>
+    </div>
     <div id="newsess">
       <div class="t">New session</div>
       <div class="m">CLAUDE DESKTOP STARTS IT WITH YOUR FIRST MESSAGE</div>
@@ -656,12 +691,16 @@ function wireTools(list) {
 function renderPipeline() {
   const list = $('plist');
   if (!features.length) { list.innerHTML = toolsHtml() + `<div class="msg" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);padding:10px">NO FEATURES YET · START ONE ABOVE, OR RUN A SESSION INSIDE A TORCH WORKSPACE (app-notebooks/, context/templates/)</div>`; wireTools(list); return; }
-  list.innerHTML = toolsHtml() + features.map((f) => {
-    const running = f.plan && f.plan.sessions.some((s) => s.running);
+  // One row per feature; the PCs that have it as badges (v2.0).
+  const byKey = new Map();
+  for (const f of features) { if (!byKey.has(f.key)) byKey.set(f.key, []); byKey.get(f.key).push(f); }
+  const rows = [...byKey.values()].map((copies) => { const d = model.daemon || {}; const mine = copies.find((c) => c.pc_id === d.pc_id) || copies[0]; return { ...mine, copies }; });
+  list.innerHTML = toolsHtml() + rows.map((f) => {
+    const running = f.copies.some((c) => c.plan && c.plan.sessions.some((s) => s.running)) || (f.plan && f.plan.sessions.some((s) => s.running));
     const warn = (f.warnings || []).length + (f.plan ? f.plan.sessions.reduce((a, s) => a + (s.warnings || []).length, 0) : 0);
     return `<div class="f${picked === f.key ? ' on' : ''}" data-key="${esc(f.key)}">
       <div class="t">${esc(f.app)} / ${esc(f.slug)}${f.light ? '<span class="badge">LIGHT PATH</span>' : ''}${running ? '<span class="badge" style="color:var(--fire)">RUNNING</span>' : ''}</div>
-      <div class="m">${esc(f.branch)}</div>
+      <div class="m">${esc(f.branch)}${f.copies.length > 1 || (f.copies[0] && f.copies[0].pc_id !== (model.daemon || {}).pc_id) ? ' · ON ' + f.copies.map((c) => esc((c.pc_name || '').toUpperCase())).join(', ') : ''}</div>
       ${f.light ? '' : stepBar(f)}
       <div class="st"><span>${f.released ? 'RELEASED' : `STEP ${f.step} · ${esc((f.step_label || '').toUpperCase())}`}</span><span>${f.sessions_total ? `${f.sessions_merged}/${f.sessions_total} MERGED` : ''}${f.open_questions ? ` · ${f.open_questions} OPEN Q` : ''}${warn ? ` · <span class="w">${warn} WARNING${warn > 1 ? 'S' : ''}</span>` : ''}</span></div>
     </div>`;
@@ -726,12 +765,16 @@ function gateHtml(f, g) {
   </div>`;
 }
 function renderFeature() {
-  const f = features.find((x) => x.key === picked); const box = $('pdetail');
+  const d0 = model.daemon || {};
+  const copies = features.filter((x) => x.key === picked);
+  const f = copies.find((c) => c.pc_id === d0.pc_id) || copies[0]; const box = $('pdetail');
   if (!f) { box.innerHTML = ''; return; }
+  const pcs = copies.map((c) => ({ pc_id: c.pc_id, name: c.pc_name, ready: (c.branches || []).length > 0 || !(c.fetched_repos || []).length, sync: c.sync || {} }));
   const plan = f.plan;
   const h = [];
   h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}` : ' · NO PRD FOUND'}</div></div>${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
   for (const w of (f.warnings || [])) h.push(`<div class="warn" style="margin-top:10px">${esc(w)}</div>`);
+  if (pcs.length) h.push(`<div class="sec" style="margin-top:12px"><span>ON THE NETWORK</span></div><div class="files">${pcs.map((p) => `<span class="pill ${p.ready ? 'merged' : 'waiting'}" title="${esc(p.name)}">${esc((p.name || '').toUpperCase())}${p.sync.remote ? ` · ↑${p.sync.ahead || 0} ↓${p.sync.behind || 0}` : p.sync.local ? ' · NO REMOTE' : ' · NO BRANCH'}${p.ready ? '' : ' · REPO NOT FETCHED'}</span>`).join('')}</div>`);
   h.push(flowHtml(f));
   if (!f.light) h.push(`<div class="sec"><span>THE TWELVE STEPS</span></div><div class="stepper">${STEPS.map((s, i) => `<div class="${f.released || i + 1 < f.step ? 'done' : i + 1 === f.step ? 'now' : ''}">${i + 1}<br>${esc(s)}</div>`).join('')}</div>`);
   if (plan) {
@@ -740,7 +783,7 @@ function renderFeature() {
     for (const s of plan.sessions) {
       const live = (s.live || []).map((l) => `${esc(l.short)} ${l.state.toUpperCase()}${l.tier ? ' T' + l.tier : ''}`).join(', ');
       h.push(`<div class="srow"><div class="n">S${s.n}</div><div><div class="g">${esc(s.goal)}</div><div class="i">${esc((s.level || '').toUpperCase())} · TIER ${s.tier || '?'} · ${esc(s.repo || f.repos[0] || '')}${s.owner ? ' · ' + esc(s.owner.toUpperCase()) : ''}${s.depends_on && s.depends_on.length ? ' · AFTER ' + s.depends_on.join(', ') : ''}${s.attempts ? ` · ${s.attempts} ATTEMPT${s.attempts > 1 ? 'S' : ''}` : ''}${live ? ' · ' + live : ''}${s.note ? ' · ' + esc(s.note.toUpperCase()) : ''}${(s.warnings || []).map((w) => ` <span class="w">· ${esc(w)}</span>`).join('')}</div></div>
-        <div class="a"><span class="pill ${esc(s.effective)}">${esc((s.effective === 'review' ? 'IN REVIEW' : s.effective === 'progress' ? 'IN PROGRESS' : s.effective).toUpperCase())}</span>${s.pr_url || s.pr ? `<button class="btn" type="button" data-url="${esc(s.pr_url || s.pr)}">PR${s.pr_number ? ' #' + s.pr_number : ''}</button>` : ''}${(s.live || []).filter((l) => l.desktop).slice(0, 1).map((l) => `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(l.desktop)}">OPEN</button>`).join('')}${s.effective === 'ready' || s.effective === 'progress' ? `<button class="btn go start" type="button" data-n="${s.n}" ${s.prompt ? '' : 'disabled title="No prompt in the plan"'}>START</button>` : ''}</div></div>`);
+        <div class="a"><span class="pill ${esc(s.effective)}">${esc((s.effective === 'review' ? 'IN REVIEW' : s.effective === 'progress' ? 'IN PROGRESS' : s.effective).toUpperCase())}</span>${s.pr_url || s.pr ? `<button class="btn" type="button" data-url="${esc(s.pr_url || s.pr)}">PR${s.pr_number ? ' #' + s.pr_number : ''}</button>` : ''}${(s.live || []).filter((l) => l.desktop).slice(0, 1).map((l) => `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(l.desktop)}">OPEN</button>`).join('')}${s.effective === 'ready' || s.effective === 'progress' ? `${pcs.length > 1 ? `<select class="startpc" data-n="${s.n}" style="background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:9.5px var(--mono);padding:5px 6px">${pcs.map((p) => `<option value="${esc(p.pc_id)}" ${p.pc_id === f.pc_id ? 'selected' : ''}>ON ${esc((p.name || '').toUpperCase())}</option>`).join('')}</select>` : ''}<button class="btn go start" type="button" data-n="${s.n}" ${s.prompt ? '' : 'disabled title="No prompt in the plan"'}>START</button>` : ''}</div></div>`);
     }
   } else if (!f.light) {
     h.push(`<div class="sec"><span>SESSION PLAN</span></div><div class="i" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim)">NO SESSION_PLAN.md YET · WRITE IT IN CLAUDE COWORK WITH THE session-plan SKILL</div>`);
@@ -767,7 +810,9 @@ function renderFeature() {
   for (const b of box.querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
   for (const b of box.querySelectorAll('button.start')) b.onclick = async () => {
     b.disabled = true; b.textContent = 'STARTING…';
-    const r = await daemon({ cmd: 'start_session', feature: f.key, n: +b.dataset.n });
+    const sel = box.querySelector(`select.startpc[data-n="${b.dataset.n}"]`);
+    const pc = sel ? sel.value : f.pc_id;
+    const r = await daemon({ cmd: 'start_session', feature: f.key, n: +b.dataset.n, ...(pc && pc !== (model.daemon || {}).pc_id ? { pc_id: pc } : {}) });
     b.textContent = r.ok ? 'STARTED' : 'FAILED'; if (!r.ok) alert(r.error || 'Could not start it');
     setTimeout(refreshFeatures, 1500);
   };
@@ -904,7 +949,7 @@ function showDetail(s) {
   detail.innerHTML = `<div class="hd"><div class="t">${esc(s.title || s.project || s.id)}</div><button class="x" aria-label="Close">×</button></div>
     <div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}${s.tier ? ` · TIER ${s.tier}` : ''}${s.branch ? ` · ${esc(s.branch)}` : ''}${s.feature ? ` · ${esc(s.feature.toUpperCase())}${s.plan_session ? ' S' + s.plan_session : ''}` : ''}</div>
     ${s.last_text ? `<div class="last">${esc(s.last_text)}</div>` : ''}
-    ${s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
+    ${s.pc_name ? `<div class="none">ON ${esc(s.pc_name.toUpperCase())}${s.desktop ? ' · OPEN IT THERE' : ''}</div>` : s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
     ${arts.length ? `<div class="sec">MADE BY CLAUDE</div>` + arts.map((a, i) => `<button class="act" style="--c:${a.kind === 'design' ? 'var(--amber)' : 'var(--cyan)'}" data-url="${esc(a.url)}" data-art="${i}"><span class="k">${kindLabel(a.kind)}</span><span class="n">${esc(a.title || 'Untitled ' + a.kind)}</span>${a.local ? '<span class="k" style="width:auto">VIEW</span>' : ''}</button>`).join('') : ''}`;
   detail.style.display = 'block';
   detail.querySelector('.x').onclick = () => { detail.style.display = 'none'; };
@@ -919,7 +964,51 @@ net.addEventListener('click', () => {
   showDetail(hover.s);
 });
 
-let model = { sessions: [], daemon: null };
+let model = { sessions: [], daemon: null, peers: [] };
+// ---------- the fleet (v2.0): this PC and its peers ----------
+function renderFleet() {
+  const box = $('fleet'); const d = model.daemon || {}; const peers = model.peers || [];
+  const me = model.sessions.filter((s) => !s.pc_id || s.pc_id === d.pc_id);
+  const row = (dot, name, account, s1, s2, key, title) => `<div class="pc" data-pc="${esc(key)}" title="${esc(title || '')}"><span class="dot ${dot}"></span><div><div class="n">${esc(name)}</div><div class="a">${esc(account)}</div></div><div class="s">${s1}<span class="ms">${s2}</span></div></div>`;
+  let h = `<div class="fh"><span>FLEET · ${1 + peers.length} PC${peers.length ? 'S' : ''}</span><button id="fl-add" type="button">+ ADD A PC</button></div>`;
+  h += row('me', d.name || 'THIS PC', (d.account ? d.account + ' · ' : '') + 'THIS PC · HUB', `<b>${me.filter((s) => s.state === 'working').length}</b> / ${me.length}`, 'WORKING / SESSIONS', '', '');
+  for (const p of peers) {
+    const st = p.connected ? `<b>${p.working || 0}</b> / ${(p.sessions || []).length}` : 'OFFLINE';
+    const sub = p.connected ? `${p.latency_ms || 0} MS · ${p.host || ''}` : (p.error || 'not reachable').slice(0, 40).toUpperCase();
+    h += row(p.connected ? '' : 'off', p.name, (p.account ? p.account + ' · ' : '') + (p.connected ? 'CONNECTED' : 'PEER'), st, sub, p.pc_id, p.error || '');
+  }
+  box.innerHTML = h;
+  $('fl-add').onclick = () => openAddPc();
+  for (const el of box.querySelectorAll('.pc[data-pc]')) el.onclick = () => { if (!el.dataset.pc) return; if (confirm(`Remove ${el.querySelector('.n').textContent} from the network?`)) daemon({ cmd: 'peer_remove', pc_id: el.dataset.pc }).then(() => setTimeout(refreshFeatures, 300)); };
+}
+let apScanning = false;
+async function scanPcs() {
+  if (apScanning) return; apScanning = true;
+  const box = $('ap-found'); box.innerHTML = '<div class="row"><span class="h">SCANNING THE NETWORK…</span></div>';
+  const r = await daemon({ cmd: 'peer_scan', seconds: 3 }); apScanning = false;
+  const d = model.daemon || {}; const found = (r.found || []).filter((f) => f.id !== d.pc_id);
+  if (!found.length) { box.innerHTML = '<div class="row"><span class="h">NO OTHER PC SEEN. IS MEWO RUNNING THERE, ON THIS NETWORK?</span></div>'; return; }
+  box.innerHTML = found.map((f, i) => `<div class="row"><div><div class="n">${esc(f.name)}</div><div class="h">${esc((f.hosts || []).join(' · '))}:${f.port}${f.fp ? '' : ' · OLDER MEWO: PASTE THE LINE INSTEAD'}</div></div><input placeholder="CODE" data-i="${i}" ${f.fp ? '' : 'disabled'}><button class="btn go pairbtn" type="button" data-i="${i}" ${f.fp ? '' : 'disabled'}>PAIR</button></div>`).join('');
+  for (const b of box.querySelectorAll('button.pairbtn')) b.onclick = async () => {
+    const f = found[+b.dataset.i]; const code = box.querySelector(`input[data-i="${b.dataset.i}"]`).value.trim();
+    const msg = $('ap-msg'); if (!code) { msg.className = 'msg bad'; msg.textContent = 'TYPE THE CODE FROM mewo pair'; return; }
+    b.disabled = true; msg.className = 'msg'; msg.textContent = 'PAIRING…';
+    const r2 = await daemon({ cmd: 'peer_pair', payload: { id: f.id, name: f.name, hosts: f.hosts, port: f.port, fp: f.fp, code } });
+    if (r2.ok) { msg.textContent = `PAIRED WITH ${(r2.name || f.name).toUpperCase()}`; setTimeout(() => { $('addpc').classList.remove('on'); refreshFeatures(); }, 1200); }
+    else { msg.className = 'msg bad'; msg.textContent = (r2.error || 'FAILED').toUpperCase(); b.disabled = false; }
+  };
+}
+function openAddPc() { $('addpc').classList.add('on'); $('ap-msg').textContent = ''; scanPcs(); }
+$('ap-close').addEventListener('click', () => $('addpc').classList.remove('on'));
+$('ap-scan').addEventListener('click', scanPcs);
+$('ap-go').addEventListener('click', async () => {
+  const msg = $('ap-msg'); const text = $('ap-paste').value.trim();
+  if (!text.startsWith('{')) { msg.className = 'msg bad'; msg.textContent = 'PASTE THE LINE mewo pair PRINTS'; return; }
+  msg.className = 'msg'; msg.textContent = 'PAIRING…';
+  const r = await daemon({ cmd: 'peer_pair', payload: text });
+  if (r.ok) { msg.textContent = `PAIRED WITH ${(r.name || '').toUpperCase()}`; $('ap-paste').value = ''; setTimeout(() => { $('addpc').classList.remove('on'); refreshFeatures(); }, 1200); }
+  else { msg.className = 'msg bad'; msg.textContent = (r.error || 'FAILED').toUpperCase(); }
+});
 function layout() {
   const cx = W / 2, cy = H / 2 + 8;
   const core = nodes.get('core') || { id: 'core', kind: 'core', x: cx, y: cy };
@@ -932,12 +1021,33 @@ function layout() {
     projects.get(p).push(s);
   }
   const names = [...projects.keys()].sort();
-  const many = names.length > 1;
+  const peers = model.peers || [];
+  const ringN = names.length + peers.length;
+  const many = ringN > 1;
   const R1 = Math.max(110, Math.min(many ? 290 : 240, Math.min(W, H) * (many ? 0.34 : 0.27)));
   const clampX = (x) => Math.max(44, Math.min(W - 44, x)), clampY = (y) => Math.max(40, Math.min(H - 64, y));
+  // Peers: one node each on the ring, their sessions in an arc behind it.
+  peers.forEach((p, k) => {
+    const i = names.length + k;
+    const ang = -Math.PI / 2 + (i / ringN) * Math.PI * 2;
+    const id = 'pc:' + p.pc_id;
+    const node = nodes.get(id) || { id, kind: 'pc', x: cx, y: cy, born: performance.now() };
+    node.p = p; node.label = p.name; node.tx = clampX(cx + Math.cos(ang) * R1); node.ty = clampY(cy + Math.sin(ang) * R1);
+    node.hot = (p.sessions || []).some((s) => s.state === 'working' || s.state === 'waiting');
+    nodes.set(id, node); seen.add(id);
+    const list = [...(p.sessions || [])].filter((s) => s.state !== 'ended').sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0)).slice(0, 8);
+    const n = list.length, spread = Math.min(Math.PI * 0.95, 0.55 + n * 0.34), r2 = Math.max(56, Math.min(100, R1 * 0.4 + n * 4));
+    list.forEach((s, j) => {
+      const sid = 's:' + p.pc_id + ':' + s.id;
+      const a = ang - spread / 2 + (n === 1 ? spread / 2 : (j / (n - 1)) * spread);
+      const sn = nodes.get(sid) || { id: sid, kind: 'session', x: node.tx, y: node.ty, born: performance.now() };
+      sn.s = { ...s, pc_id: p.pc_id, pc_name: p.name }; sn.hub = id; sn.tx = clampX(node.tx + Math.cos(a) * r2); sn.ty = clampY(node.ty + Math.sin(a) * r2);
+      nodes.set(sid, sn); seen.add(sid);
+    });
+  });
   names.forEach((p, i) => {
     const list = projects.get(p).sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
-    const ang = -Math.PI / 2 + (i / names.length) * Math.PI * 2;
+    const ang = -Math.PI / 2 + (i / ringN) * Math.PI * 2;
     let hx = cx, hy = cy, base = ang;
     if (many) {
       const id = 'p:' + p;
@@ -997,12 +1107,12 @@ function drawNet(now) {
   // edges
   for (const n of nodes.values()) {
     if (n.kind === 'core') continue;
-    const from = nodes.get(n.kind === 'hub' ? 'core' : n.hub); if (!from) continue;
-    const col = n.kind === 'hub' ? C.cyan : stateColor(n.s.state);
-    const lit = n.kind === 'hub' ? n.hot : (n.s.state === 'working' || n.s.state === 'waiting');
+    const from = nodes.get(n.kind === 'hub' || n.kind === 'pc' ? 'core' : n.hub); if (!from) continue;
+    const col = n.kind === 'hub' ? C.cyan : n.kind === 'pc' ? (n.p.connected ? C.cyan : C.heat) : stateColor(n.s.state);
+    const lit = n.kind === 'hub' || n.kind === 'pc' ? n.hot : (n.s.state === 'working' || n.s.state === 'waiting');
     nx.beginPath(); nx.moveTo(from.x, from.y); nx.lineTo(n.x, n.y);
     nx.strokeStyle = col; nx.globalAlpha = lit ? 0.5 : 0.18; nx.lineWidth = lit ? 1.4 : 1;
-    if (n.kind === 'session' && n.s.state === 'ended') nx.setLineDash([3, 6]); else nx.setLineDash([]);
+    if ((n.kind === 'session' && n.s.state === 'ended') || (n.kind === 'pc' && !n.p.connected)) nx.setLineDash([3, 6]); else nx.setLineDash([]);
     nx.stroke(); nx.setLineDash([]); nx.globalAlpha = 1;
   }
   // particles
@@ -1033,6 +1143,25 @@ function drawNet(now) {
   roundRectLabel(core.x, core.y + 64, (model.daemon.name || 'PC').toUpperCase(), '#fff', 11, 800);
   roundRectLabel(core.x, core.y + 79, hot ? 'CLAUDE AT WORK' : 'STANDING BY', hot ? C.fire : C.dim, 9, 600);
 
+  // peers: a bigger hexagon with a reactor of its own
+  for (const n of nodes.values()) {
+    if (n.kind !== 'pc') continue;
+    const on = n.p.connected, col = on ? C.cyan : C.heat, hot = n.hot && on;
+    nx.save(); nx.translate(n.x, n.y);
+    const g = nx.createRadialGradient(0, 0, 0, 0, 0, 44); g.addColorStop(0, hot ? 'rgba(255,107,53,0.28)' : on ? 'rgba(79,209,255,0.22)' : 'rgba(255,61,31,0.12)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    nx.fillStyle = g; nx.beginPath(); nx.arc(0, 0, 44, 0, Math.PI * 2); nx.fill();
+    nx.beginPath();
+    for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + (i / 6) * Math.PI * 2; const r = 24; i ? nx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : nx.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+    nx.closePath(); nx.fillStyle = on ? 'rgba(79,209,255,0.08)' : 'rgba(255,61,31,0.06)'; nx.fill();
+    nx.strokeStyle = col; nx.lineWidth = 1.6; if (!on) nx.setLineDash([3, 3]); if (on) { nx.shadowColor = col; nx.shadowBlur = hot ? 22 : 12; }
+    nx.stroke(); nx.setLineDash([]); nx.shadowBlur = 0;
+    if (on) { nx.beginPath(); nx.setLineDash([2, 5]); nx.lineDashOffset = -tglob * 18; nx.arc(0, 0, 31, tglob * 0.8, tglob * 0.8 + Math.PI * 1.5); nx.strokeStyle = hot ? C.fire : C.cyan; nx.lineWidth = 1; nx.globalAlpha = 0.8; nx.stroke(); nx.setLineDash([]); nx.globalAlpha = 1; }
+    nx.beginPath(); nx.arc(0, 0, 7, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : col; nx.shadowColor = hot ? C.fire : col; nx.shadowBlur = 16; nx.fill(); nx.shadowBlur = 0;
+    nx.beginPath(); nx.arc(0, 0, 3, 0, Math.PI * 2); nx.fillStyle = '#fff'; nx.fill();
+    nx.restore();
+    roundRectLabel(n.x, n.y + 32, trunc(n.label, 20).toUpperCase(), on ? '#fff' : C.dim, 10.5, 800);
+    roundRectLabel(n.x, n.y + 46, on ? (n.p.account ? n.p.account.toUpperCase() + ' · ' : '') + `${(n.p.sessions || []).length} SESSION${(n.p.sessions || []).length === 1 ? '' : 'S'}` : 'OFFLINE', on ? C.dim : C.heat, 8.5, 600);
+  }
   // hubs
   for (const n of nodes.values()) {
     if (n.kind !== 'hub') continue;
@@ -1086,6 +1215,11 @@ function drawNet(now) {
     tip.innerHTML = `<div class="t">${esc(s.title || s.project || s.id)}</div><div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)} · ${s.last_ts ? hm(s.last_ts) : ''}${s.queued ? ` · ${s.queued} FROM PHONE` : ''}${s.listening ? '' : ' · NOT LISTENING'}</div><div class="x">${esc(s.last_text || '')}</div><div class="m" style="margin-top:8px;color:var(--cyan)">${(s.artifacts || []).length ? `◆ ${s.artifacts.length} MADE · ` : ''}CLICK FOR DETAILS</div>`;
     const tx = Math.min(W - 316, hover.x + 18), ty = Math.min(H - 120, hover.y + 18);
     tip.style.left = tx + 'px'; tip.style.top = ty + 'px';
+  } else if (hover && hover.kind === 'pc') {
+    const p = hover.p;
+    tip.style.display = 'block';
+    tip.innerHTML = `<div class="t">${esc(p.name)}</div><div class="m">${p.connected ? 'CONNECTED · ' + (p.latency_ms || 0) + ' MS · ' + esc(p.host || '') : 'OFFLINE · ' + esc((p.error || '').slice(0, 60))}</div><div class="x">${p.account ? 'ACCOUNT ' + esc(p.account.toUpperCase()) + ' · ' : ''}${(p.sessions || []).length} SESSIONS · ${p.working || 0} WORKING</div>`;
+    tip.style.left = Math.min(W - 316, hover.x + 18) + 'px'; tip.style.top = Math.min(H - 100, hover.y + 18) + 'px';
   } else if (hover && hover.kind === 'hub') {
     tip.style.display = 'block';
     tip.innerHTML = `<div class="t">${esc(hover.label)}</div><div class="m">PROJECT · ${hover.count} SESSION${hover.count === 1 ? '' : 'S'}</div>`;
@@ -1122,7 +1256,7 @@ function renderFeed(events, requests, now) {
   for (const r of (requests || [])) {
     const d = document.createElement('div'); d.className = 'req';
     const kind = r.kind === 'question' ? 'QUESTION' : r.kind === 'plan' ? 'PLAN APPROVAL' : 'PERMISSION';
-    d.innerHTML = `<div class="hd"><span>⚠ ${kind} · ${esc((r.project || '').toUpperCase())}</span><span>${hm(r.ts)}</span></div><div class="t">${esc(r.title || kind)}</div><div class="s">${esc(r.summary || r.detail || '')}</div>`;
+    d.innerHTML = `<div class="hd"><span>⚠ ${kind} · ${esc((r.project || '').toUpperCase())}${r.pc_name ? ' · ' + esc(r.pc_name.toUpperCase()) : ''}</span><span>${hm(r.ts)}</span></div><div class="t">${esc(r.title || kind)}</div><div class="s">${esc(r.summary || r.detail || '')}</div>`;
     reqs.appendChild(d);
   }
   const feed = $('feed');
@@ -1136,7 +1270,7 @@ function renderFeed(events, requests, now) {
     seenEv.add(key);
     const [k, c] = e.kind === 'needs_input' ? ['NEEDS YOU', 'var(--amber)'] : e.kind === 'session_end' ? ['CLOSED', 'var(--ash)'] : e.kind === 'warning' ? ['POLICY', 'var(--heat)'] : e.kind === 'signoff' ? ['SIGN-OFF', 'var(--mewo)'] : ['FINISHED', 'var(--ok)'];
     const text = e.message || e.detail || '';
-    d.innerHTML = `<div class="tm">${hm(e.ts)}</div><div><div class="hd" style="--c:${c}"><span class="k">${k}</span><span class="p">${esc(e.project || '')}</span></div>${text ? `<div class="tx">${esc(text)}</div>` : ''}</div>`;
+    d.innerHTML = `<div class="tm">${hm(e.ts)}</div><div><div class="hd" style="--c:${c}"><span class="k">${k}</span>${e.pc_name ? `<span class="k" style="color:var(--dim)">${esc(e.pc_name.toUpperCase())}</span>` : ''}<span class="p">${esc(e.project || '')}</span></div>${text ? `<div class="tx">${esc(text)}</div>` : ''}</div>`;
     frag.appendChild(d);
   }
   feed.innerHTML = ''; feed.appendChild(frag); firstFeed = false;
@@ -1155,7 +1289,8 @@ function apply(s) {
   }
   $('offline').style.display = 'none';
   const d = s.daemon, sessions = s.sessions || [], events = s.events || [], requests = s.requests || [];
-  model = { sessions, daemon: d, legacy: !!s.legacy };
+  model = { sessions, daemon: d, legacy: !!s.legacy, peers: s.peers || [] };
+  renderFleet();
   if (Array.isArray(s.features)) { features = s.features; if (s.features_meta) meta = s.features_meta; if (view === 'pipe') renderPipeline(); }
   $('legacy').style.display = s.legacy ? 'block' : 'none';
   $('pcname').textContent = (d.name || 'PC').toUpperCase();
@@ -1177,7 +1312,9 @@ function apply(s) {
   $('f-hosts').innerHTML = `HOSTS <b>${esc((d.hosts || []).filter((h) => !h.includes('://')).join('  ') || '—')}</b>`;
   $('f-port').innerHTML = `PORT <b>${d.port || ''}</b>`;
   $('f-relay').innerHTML = d.relay ? `RELAY <b>${esc(d.relay.replace(/^wss?:\/\//, ''))}</b>` : '';
-  drawChart(events, now); renderFeed(events, requests, now); layout();
+  const peerEvents = (s.peers || []).flatMap((p) => (p.events || []).map((e) => ({ ...e, id: `${p.pc_id}:${e.id}`, pc_name: p.name })));
+  const peerRequests = (s.peers || []).flatMap((p) => (p.requests || []).map((r) => ({ ...r, pc_name: p.name })));
+  drawChart(events, now); renderFeed([...events, ...peerEvents], [...requests, ...peerRequests], now); layout();
 }
 async function poll() {
   try {

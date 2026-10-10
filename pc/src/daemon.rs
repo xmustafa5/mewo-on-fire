@@ -17,6 +17,7 @@ use crate::requests::{self, AskReply, Request, Requests};
 use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session, Sessions};
 use crate::store::{Event, Store};
 use crate::transcript::{self, ChatItem};
+use crate::peers;
 use crate::policy;
 use crate::desktop;
 use crate::flow;
@@ -63,6 +64,22 @@ pub struct AppState {
     pub relay_up: AtomicBool,
     /// Pull requests by repository (prs.rs, v1.6).
     pub prs: prs::PrCache,
+    /// The other PCs this one is paired with (peers.rs, v2.0).
+    pub peers: peers::Peers,
+}
+
+/// The Claude account's display name on this PC (from Claude Code's own
+/// config), for the fleet view; empty when unknown.
+pub fn account_name() -> String {
+    let path = paths::home().join(".claude.json");
+    let Ok(text) = std::fs::read_to_string(path) else { return String::new() };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else { return String::new() };
+    let acc = v.get("oauthAccount").cloned().unwrap_or(Value::Null);
+    acc.get("displayName")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -179,6 +196,37 @@ impl AppState {
         v
     }
 
+    /// v2.0: the peer a plan session should run on, when its owner's PC
+    /// (from `context/roles.md`) is a connected peer that has the feature
+    /// with its branch ready. None means this PC.
+    pub fn pc_for_session(&self, ws: &Path, f: &policy::Feature, n: u32) -> Option<String> {
+        let owner = f.plan.as_ref()?.sessions.iter().find(|s| s.n == n)?.owner.trim().to_string();
+        if owner.is_empty() {
+            return None;
+        }
+        let pc_name = flow::roles(ws)
+            .into_iter()
+            .find(|r| r.name.eq_ignore_ascii_case(&owner) || owner.to_ascii_lowercase().starts_with(&r.name.to_ascii_lowercase()) && !r.name.is_empty())
+            .map(|r| r.pc)
+            .filter(|p| !p.is_empty())?;
+        if pc_name.eq_ignore_ascii_case(&self.config.name) {
+            return None;
+        }
+        let peer = self.peers.summary().into_iter().find(|p| p.get("name").and_then(Value::as_str).map(|n| n.eq_ignore_ascii_case(&pc_name)).unwrap_or(false))?;
+        if !peer.get("connected").and_then(Value::as_bool).unwrap_or(false) {
+            return None;
+        }
+        let has = peer
+            .get("features")
+            .and_then(Value::as_array)
+            .map(|l| l.iter().any(|x| x.get("key").and_then(Value::as_str) == Some(f.key.as_str()) && x.get("branches").and_then(Value::as_array).map(|b| !b.is_empty()).unwrap_or(false)))
+            .unwrap_or(false);
+        if !has {
+            return None;
+        }
+        peer.get("pc_id").and_then(Value::as_str).map(str::to_string)
+    }
+
     /// v1.8: asks a role (its phone, or every phone) to sign a gate.
     pub fn ask_signature(&self, ws: &Path, f: &policy::Feature, gate: &str, role: &str, by: &str) -> Value {
         let title = if gate == "prd" {
@@ -226,6 +274,24 @@ impl AppState {
         let st = flow::get(ws, &f.key);
         let a = action.unwrap_or_else(|| flow::next_action(ws, f, &st, &sessions));
         match a.kind.as_str() {
+            "start" if self.pc_for_session(ws, f, a.session).is_some() => {
+                // v2.0: the session's owner works on another PC of the network.
+                let pc_id = self.pc_for_session(ws, f, a.session).unwrap_or_default();
+                let name = self.peers.get(&pc_id).map(|p| p.name).unwrap_or_else(|| pc_id.clone());
+                let frame = json!({"type": "start_session", "feature": f.key, "n": a.session});
+                let reply = tokio::runtime::Handle::current().block_on(self.peers.forward(&pc_id, frame));
+                if reply.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                    let started = now_ms();
+                    flow::update(ws, &f.key, |st| {
+                        st.runs.push(flow::Run { step: 9, started, note: a.session.to_string() });
+                        st.note(format!("Started session {} on {name}", a.session));
+                    });
+                    flow::journal(ws, &f.key, "start", &format!("Started session {} on {name}", a.session), Vec::new(), "", true, json!({"started": started, "session": a.session, "step": 9, "pc": pc_id}));
+                    json!({"ok": true, "did": "start", "title": a.title, "pc": name})
+                } else {
+                    json!({"ok": false, "error": format!("{name}: {}", reply.get("error").and_then(Value::as_str).unwrap_or("could not start it"))})
+                }
+            }
             "run" | "start" => {
                 // Sessions of the flow run on the feature branch of torch-main.
                 let ws_s = ws.to_string_lossy().into_owned();
@@ -357,6 +423,27 @@ impl AppState {
                 all.push(self.feature_json(&ws, f, &sessions));
             }
         }
+        // Tag ours, then the peers' (v2.0).
+        for f in all.iter_mut() {
+            if let Some(o) = f.as_object_mut() {
+                o.insert("pc_id".to_string(), json!(self.config.pc_id));
+                o.insert("pc_name".to_string(), json!(self.config.name));
+            }
+        }
+        for p in self.peers.summary() {
+            let pc_id = p.get("pc_id").and_then(Value::as_str).unwrap_or("").to_string();
+            let pc_name = p.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            if let Some(list) = p.get("features").and_then(Value::as_array) {
+                for f in list {
+                    let mut f = f.clone();
+                    if let Some(o) = f.as_object_mut() {
+                        o.insert("pc_id".to_string(), json!(pc_id));
+                        o.insert("pc_name".to_string(), json!(pc_name));
+                    }
+                    all.push(f);
+                }
+            }
+        }
         let roles: serde_json::Map<String, Value> = policy::workspaces().iter().map(|ws| (ws.to_string_lossy().into_owned(), serde_json::to_value(flow::roles(ws)).unwrap_or(Value::Null))).collect();
         let apps: serde_json::Map<String, Value> = policy::workspaces().iter().map(|ws| (ws.to_string_lossy().into_owned(), json!(policy::apps(ws)))).collect();
         json!({
@@ -369,6 +456,9 @@ impl AppState {
             "roles": roles,
             "apps": apps,
             "role_names": flow::ROLES,
+            "pc_id": self.config.pc_id,
+            "pc_name": self.config.name,
+            "peers": self.peers.summary().into_iter().map(|mut p| { if let Some(o) = p.as_object_mut() { o.remove("sessions"); o.remove("events"); o.remove("requests"); o.remove("features"); } p }).collect::<Vec<_>>(),
         })
     }
 
@@ -806,6 +896,9 @@ impl AppState {
             "pending": self.pending_count(),
             "sessions": session_count,
             "listening": listening,
+            "account": account_name(),
+            "peers": self.peers.list().len(),
+            "peers_connected": self.peers.summary().iter().filter(|p| p.get("connected").and_then(Value::as_bool).unwrap_or(false)).count(),
         })
     }
 }
@@ -844,6 +937,7 @@ async fn run_async() -> Result<()> {
         connected: AtomicUsize::new(0),
         relay_up: AtomicBool::new(false),
         prs: prs::PrCache::default(),
+        peers: peers::Peers::new(),
     });
 
     eprintln!(
@@ -858,7 +952,7 @@ async fn run_async() -> Result<()> {
     eprintln!("mewo: hosts={}", state.hosts().join(", "));
     eprintln!("mewo: control socket {}", paths::socket_path().display());
 
-    let mdns_daemon = mdns::advertise(&config);
+    let mdns_daemon = mdns::advertise(&config, &state.fp);
 
     tokio::spawn(control::serve(state.clone(), control_listener));
     tokio::spawn(server::serve(state.clone(), tcp_listener, acceptor));
@@ -866,6 +960,8 @@ async fn run_async() -> Result<()> {
     tokio::spawn(sessions_loop(state.clone()));
     tokio::spawn(match_loop(state.clone()));
     tokio::spawn(flow_loop(state.clone()));
+    tokio::spawn(peers::run(state.clone()));
+    tokio::spawn(fetch_loop(state.clone()));
     tokio::spawn(relay::run(state.clone()));
 
     wait_for_shutdown().await;
@@ -877,6 +973,22 @@ async fn run_async() -> Result<()> {
 
 /// Periodically drop phone requests nobody answered (PROTOCOL.md: 24 h),
 /// and once an hour the images phones sent more than a week ago.
+/// v2.0: `git fetch` on every workspace every 90 s, so each feature's
+/// ahead/behind against the remote is current.
+async fn fetch_loop(_state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(Duration::from_secs(90));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        if policy::git_blocked() {
+            continue;
+        }
+        for ws in policy::workspaces() {
+            let _ = tokio::task::spawn_blocking(move || policy::fetch(&ws)).await;
+        }
+    }
+}
+
 /// v1.8: autopilot. Every half minute, each feature with it on gets its
 /// next action done: a session started, signatures asked for (once a
 /// day per role), the design exported, the release recorded.

@@ -406,6 +406,10 @@ pub struct Feature {
     pub sessions_merged: u32,
     pub sessions_total: u32,
     pub updated: u64,
+    /// v2.0: `{remote, ahead, behind, local}` of the feature branch in torch-main.
+    pub sync: Value,
+    /// v2.0: which fetched code repositories have the feature branch.
+    pub branches: Vec<String>,
 }
 
 fn placeholder(s: &str) -> bool {
@@ -1078,7 +1082,11 @@ fn read_features(ws: &Path) -> Vec<Feature> {
             .map(|f| mtime(&dir.join(f)))
             .max()
             .unwrap_or(0);
+            let sync = sync_state(ws, &branch);
+            let branches: Vec<String> = fetched.iter().filter(|r| git(&ws.join(r), &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_some()).cloned().collect();
             let mut f = Feature {
+                sync,
+                branches,
                 key: format!("{app}/{slug}"),
                 app: app.clone(),
                 slug: slug.clone(),
@@ -1353,12 +1361,90 @@ fn gate_range(lines: &[&str], gate_id: &str) -> (usize, usize) {
 }
 
 /// Commits one file of the workspace when it is on the feature's branch.
-/// Commits the files on the feature branch: the commit's hash, or why not.
+/// `git <args>` that may take a while (fetch, pull, push): 40 s.
+pub fn git_long(dir: &Path, args: &[&str]) -> Option<String> {
+    if git_blocked() {
+        return None;
+    }
+    let mut child = Command::new(git_bin())
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < Duration::from_secs(40) => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// `git fetch origin`, quietly (v2.0).
+pub fn fetch(ws: &Path) {
+    if git(ws, &["remote", "get-url", "origin"]).is_some() {
+        let _ = git_long(ws, &["fetch", "-q", "origin"]);
+    }
+}
+
+/// Before a record is written on a shared branch: the remote's commits
+/// come in first (rebase, local changes stashed around it). Quiet when
+/// there is no remote or nothing to do; the reason when it failed.
+pub fn sync_pull(ws: &Path, branch: &str) -> Result<(), String> {
+    if branch_of(&ws.to_string_lossy()) != branch {
+        return Ok(());
+    }
+    if git(ws, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_none() {
+        return Ok(());
+    }
+    match git_long(ws, &["pull", "-q", "--rebase", "--autostash", "origin", branch]) {
+        Some(_) => Ok(()),
+        None => {
+            let _ = git(ws, &["rebase", "--abort"]);
+            Err(format!("Could not pull origin/{branch} (a conflict, or no network). The record was written locally."))
+        }
+    }
+}
+
+/// Ahead / behind the remote for a branch, after the last fetch.
+pub fn sync_state(ws: &Path, branch: &str) -> Value {
+    if git(ws, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_none() {
+        return json!({"remote": false, "ahead": 0, "behind": 0, "local": false});
+    }
+    let remote = git(ws, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_some();
+    if !remote {
+        return json!({"remote": false, "ahead": 0, "behind": 0, "local": true});
+    }
+    let counts = git(ws, &["rev-list", "--left-right", "--count", &format!("origin/{branch}...{branch}")]).unwrap_or_default();
+    let mut it = counts.split_whitespace();
+    let behind: u64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let ahead: u64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    json!({"remote": true, "ahead": ahead, "behind": behind, "local": true})
+}
+
+/// Commits the files on the feature branch and pushes them: the commit's
+/// hash, or why not. The push is best effort (the ahead count shows it).
 pub fn commit_files(ws: &Path, branch: &str, files: &[String], message: &str) -> Result<String, String> {
     let on = branch_of(&ws.to_string_lossy());
     if on != branch {
         return Err(format!("torch-main is on '{}', not {branch}", if on.is_empty() { "?" } else { &on }));
     }
+    let _ = sync_pull(ws, branch);
     let mut args: Vec<&str> = vec!["add", "--"];
     args.extend(files.iter().map(String::as_str));
     if git(ws, &args).is_none() {
@@ -1369,7 +1455,11 @@ pub fn commit_files(ws: &Path, branch: &str, files: &[String], message: &str) ->
     if git(ws, &args).is_none() {
         return Err(if git_blocked() { FOLDER_ACCESS_HINT.to_string() } else { "git commit failed (nothing to commit, or no git identity)".to_string() });
     }
-    Ok(git(ws, &["rev-parse", "HEAD"]).unwrap_or_default())
+    let hash = git(ws, &["rev-parse", "HEAD"]).unwrap_or_default();
+    if git(ws, &["remote", "get-url", "origin"]).is_some() {
+        let _ = git_long(ws, &["push", "-q", "-u", "origin", branch]);
+    }
+    Ok(hash)
 }
 
 /// Signs a gate: ticks the items the signer confirmed (`checks`, by index)

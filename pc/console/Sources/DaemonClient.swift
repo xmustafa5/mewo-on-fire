@@ -143,7 +143,7 @@ enum DaemonClient {
   /// A control request from the page, to this daemon (not a legacy one):
   /// the pipeline view's commands only.
   static func forward(_ req: [String: Any]) -> [String: Any] {
-    let allowed = ["features", "sign", "plan_status", "scan", "set_check", "start_session", "request_sign", "flow_next", "flow_set", "estimate", "estimates_done", "export_handoff", "uat_user", "release", "close_branches", "new_feature", "set_role", "rollback", "unsign"]
+    let allowed = ["features", "sign", "plan_status", "scan", "set_check", "start_session", "request_sign", "flow_next", "flow_set", "estimate", "estimates_done", "export_handoff", "uat_user", "release", "close_branches", "new_feature", "set_role", "rollback", "unsign", "peers", "peer_scan", "peer_pair", "peer_remove", "new_session"]
     guard let cmd = req["cmd"] as? String, allowed.contains(cmd) else { return ["ok": false, "error": "not a console command"] }
     for c in candidates where !c.legacy && FileManager.default.fileExists(atPath: c.path) {
       if let r = try? request(at: c.path, req, timeout: 20) { return r }
@@ -169,6 +169,7 @@ enum DaemonClient {
           "requests": list(at: c.path, ["cmd": "requests"], "requests"),
           "features": c.legacy ? [] : list(at: c.path, ["cmd": "features"], "features"),
           "features_meta": c.legacy ? [:] : featuresMeta(at: c.path),
+          "peers": c.legacy ? [] : list(at: c.path, ["cmd": "peers"], "peers"),
           "legacy": c.legacy,
           "now": now,
           "version": version,

@@ -696,3 +696,38 @@ an `estimate` is dropped; `estimates_done` and `release` are unset; a
 `new_feature` whose branch holds nothing but its start commit is
 deleted with its folder. `close` (merged branches) is not undoable.
 
+## The network (v2.0)
+
+A daemon can pair with other PCs' daemons the way a phone does and stay
+connected to them: it is then the hub of its network, and the console
+that talks to it shows every PC. Peers live in `peers.json` (mode 600)
+in the config folder: `pc_id, name, hosts, port, fp, token, device_id`.
+The hub connects over the LAN with the certificate pinned by `fp`, sends
+`auth {token, since}`, and keeps the peer's `sessions`, `session`
+pushes, `event`s, `request`s and its `features` (asked every 30 s).
+
+- The mDNS advertisement's TXT now carries `fp` next to `id`, so a hub
+  can pair with the 8-character code from `mewo pair` alone.
+- `hello` and `status` carry `account`: the Claude account's display
+  name on that PC.
+
+Control commands: `peers` → `{pc_id, name, account, peers: [{pc_id,
+name, hosts, port, connected, error, host, last_seen, latency_ms,
+account, sessions, working, waiting, events, requests, features}]}`;
+`peer_scan {seconds}` → `{found: [{id, name, hosts, port, fp}]}`;
+`peer_pair {payload}` (the line `mewo pair` prints, or `{id, name,
+hosts, port, fp, code}`); `peer_remove {pc_id}`.
+
+Any control command or phone frame that carries another PC's `pc_id` is
+forwarded to that peer by the hub and answered with the peer's reply
+(`client_id` and `pc_id` restored). `features` returns the peers'
+features too, each with `pc_id` and `pc_name`, and the `peers` summary.
+A feature carries `sync {remote, ahead, behind, local}` for its branch
+in torch-main and `branches`, the fetched code repositories that have
+the branch. Records are pulled (`--rebase --autostash`) before a write
+and pushed after a commit; the hub fetches every workspace every 90 s.
+
+`context/roles.md` has a fourth column, `PC`. When a plan session's
+owner maps to a role whose PC is a connected peer that has the feature
+with its branch ready, the flow starts that session there.
+
