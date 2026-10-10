@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import 'feature_screen.dart';
 import 'theme/ember.dart';
 import 'theme/glass.dart';
@@ -31,7 +33,54 @@ List<Widget> featureSlivers(BuildContext context, AppState state) {
       ),
     ];
   }
+  final mine = state.allMine;
   return [
+    if (mine.isNotEmpty) ...[
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 6),
+          child: Text('MINE · FROM PLANE', style: t.labelSmall?.copyWith(color: Ember.text3, letterSpacing: 1.4)),
+        ),
+      ),
+      SliverList.builder(
+        itemCount: mine.length,
+        itemBuilder: (context, i) {
+          final (pcId, m) = mine[i];
+          final key = m.feature;
+          return FadeSlideIn(
+            key: ValueKey<String>('mine:$pcId:${m.url}'),
+            delay: Motion.stagger(i),
+            child: GlassCard(
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+              radius: 14,
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => FeatureScreen(pcId: pcId, featureKey: key))),
+              onLongPress: () {
+                final u = Uri.tryParse(m.url);
+                if (u != null) launchUrl(u, mode: LaunchMode.externalApplication);
+              },
+              child: Row(
+                children: [
+                  IconTile(icon: m.group == 'started' ? Icons.bolt_rounded : Icons.radio_button_unchecked_rounded, color: m.group == 'started' ? Ember.ember : Ember.mewoSoft, size: 32, iconSize: 16),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.titleSmall?.copyWith(fontSize: 13.5)),
+                        Text('$key · ${m.group == 'started' ? 'in progress' : 'to do'} · hold to open in Plane', style: t.labelSmall?.copyWith(color: Ember.text3)),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right_rounded, color: Ember.text3.withValues(alpha: 0.7)),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+      const SliverToBoxAdapter(child: SizedBox(height: 8)),
+    ],
     if (errors.isNotEmpty)
       SliverToBoxAdapter(
         child: Padding(

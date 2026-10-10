@@ -471,3 +471,122 @@ class _RolesSheetState extends State<_RolesSheet> {
     );
   }
 }
+
+// ---- tasks under a session, in Plane (v2.1) ----
+
+Future<void> showTasksSheet(BuildContext context, {required String pcId, required TorchFeature feature, required PlanSession session}) {
+  return showModalBottomSheet<void>(context: context, isScrollControlled: true, builder: (_) => _TasksSheet(pcId: pcId, feature: feature, session: session));
+}
+
+class _TasksSheet extends StatefulWidget {
+  const _TasksSheet({required this.pcId, required this.feature, required this.session});
+  final String pcId;
+  final TorchFeature feature;
+  final PlanSession session;
+  @override
+  State<_TasksSheet> createState() => _TasksSheetState();
+}
+
+class _TasksSheetState extends State<_TasksSheet> {
+  final AppState _state = AppState.instance;
+  final TextEditingController _name = TextEditingController();
+  List<PlaneTask> _tasks = const <PlaneTask>[];
+  bool _loading = true;
+  bool _busy = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final t = await _state.planeTasks(widget.pcId, widget.feature, widget.session.n);
+      if (!mounted) return;
+      setState(() {
+        _tasks = t;
+        _loading = false;
+        _error = '';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e is StateError ? e.message : 'Could not read the tasks';
+      });
+    }
+  }
+
+  Future<void> _add() async {
+    final name = _name.text.trim();
+    if (name.isEmpty || _busy) return;
+    setState(() => _busy = true);
+    final e = await _state.planeTaskAdd(widget.pcId, widget.feature, widget.session.n, name);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = e;
+    });
+    if (e.isEmpty) {
+      _name.clear();
+      HapticFeedback.selectionClick();
+      await _load();
+    }
+  }
+
+  Future<void> _toggle(PlaneTask t) async {
+    HapticFeedback.selectionClick();
+    setState(() => _tasks = [for (final x in _tasks) x.id == t.id ? PlaneTask(id: x.id, name: x.name, done: !x.done, url: x.url, sequenceId: x.sequenceId) : x]);
+    final e = await _state.planeTaskDone(widget.pcId, t.id, !t.done);
+    if (!mounted) return;
+    if (e.isNotEmpty) {
+      setState(() => _error = e);
+      await _load();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final done = _tasks.where((x) => x.done).length;
+    return _sheet(
+      context,
+      Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(context, Icons.checklist_rounded, 'Tasks · S${widget.session.n}', _tasks.isEmpty ? widget.session.goal : '$done of ${_tasks.length} done · ${widget.session.goal}'),
+          const SizedBox(height: 14),
+          if (_loading)
+            const Center(child: Padding(padding: EdgeInsets.all(20), child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Ember.amber))))
+          else if (_tasks.isEmpty)
+            Text('No tasks yet. Break the session down below; each one is a work item under S${widget.session.n} in Plane, assigned to you.', style: t.bodySmall?.copyWith(color: Ember.text2))
+          else
+            for (final task in _tasks)
+              CheckboxListTile(
+                value: task.done,
+                onChanged: (_) => _toggle(task),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                activeColor: Ember.ok,
+                title: Text(task.name, style: t.bodyMedium?.copyWith(color: task.done ? Ember.text3 : Ember.text, decoration: task.done ? TextDecoration.lineThrough : null)),
+                secondary: task.sequenceId > 0 ? Text('#${task.sequenceId}', style: t.labelSmall?.copyWith(color: Ember.text3)) : null,
+              ),
+          _label(context, 'ADD A TASK'),
+          Row(
+            children: [
+              Expanded(child: TextField(controller: _name, textCapitalization: TextCapitalization.sentences, decoration: const InputDecoration(hintText: 'What you will do next'), onSubmitted: (_) => _add())),
+              const SizedBox(width: 10),
+              EmberButton(label: 'Add', icon: Icons.add_rounded, small: true, busy: _busy, onPressed: _busy ? null : _add),
+            ],
+          ),
+          _errorLine(context, _error),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}

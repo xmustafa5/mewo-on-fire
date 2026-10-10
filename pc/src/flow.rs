@@ -135,6 +135,8 @@ pub struct Role {
     pub phone: String,
     /// The PC (its Mewo name) this person's sessions run on (v2.0).
     pub pc: String,
+    /// The Plane user id (v2.1).
+    pub plane: String,
 }
 
 fn roles_file(ws: &Path) -> PathBuf {
@@ -154,7 +156,7 @@ pub fn roles(ws: &Path) -> Vec<Role> {
         if c.len() < 2 || c[0].eq_ignore_ascii_case("role") {
             continue;
         }
-        out.push(Role { role: c[0].clone(), name: c[1].clone(), phone: c.get(2).cloned().unwrap_or_default(), pc: c.get(3).cloned().unwrap_or_default() });
+        out.push(Role { role: c[0].clone(), name: c[1].clone(), phone: c.get(2).cloned().unwrap_or_default(), pc: c.get(3).cloned().unwrap_or_default(), plane: c.get(4).cloned().unwrap_or_default() });
     }
     out
 }
@@ -164,17 +166,17 @@ pub fn role_named(ws: &Path, role: &str) -> Option<Role> {
 }
 
 /// Writes or replaces a role's row. An empty name removes the row.
-pub fn set_role(ws: &Path, role: &str, name: &str, phone: &str, pc: &str) -> Result<Vec<Role>, String> {
+pub fn set_role(ws: &Path, role: &str, name: &str, phone: &str, pc: &str, plane: &str) -> Result<Vec<Role>, String> {
     let role = ROLES.iter().find(|r| r.eq_ignore_ascii_case(role)).ok_or_else(|| format!("Unknown role {role}. The policy's roles: {}", ROLES.join(", ")))?;
     let mut list = roles(ws);
     list.retain(|r| !r.role.eq_ignore_ascii_case(role));
     if !name.trim().is_empty() {
-        list.push(Role { role: role.to_string(), name: name.trim().to_string(), phone: phone.trim().to_string(), pc: pc.trim().to_string() });
+        list.push(Role { role: role.to_string(), name: name.trim().to_string(), phone: phone.trim().to_string(), pc: pc.trim().to_string(), plane: plane.trim().to_string() });
     }
     list.sort_by_key(|r| ROLES.iter().position(|x| x.eq_ignore_ascii_case(&r.role)).unwrap_or(99));
-    let mut out = String::from("# Roles\n\nWho holds each role of the TORCH Agentic Development Policy, the phone (Mewo on Fire) that reaches them, and the PC their sessions run on. Written from the phones and the console; edit by hand if you like.\n\n| Role | Name | Phone | PC |\n|---|---|---|---|\n");
+    let mut out = String::from("# Roles\n\nWho holds each role of the TORCH Agentic Development Policy, the phone (Mewo on Fire) that reaches them, the PC their sessions run on, and their Plane user. Written from the phones and the console; edit by hand if you like.\n\n| Role | Name | Phone | PC | Plane |\n|---|---|---|---|---|\n");
     for r in &list {
-        out.push_str(&format!("| {} | {} | {} | {} |\n", r.role, r.name, r.phone, r.pc));
+        out.push_str(&format!("| {} | {} | {} | {} | {} |\n", r.role, r.name, r.phone, r.pc, r.plane));
     }
     let path = roles_file(ws);
     let _ = fs::create_dir_all(path.parent().unwrap_or(ws));
@@ -566,6 +568,18 @@ fn head(ws: &Path) -> String {
 /// Records a write in the feature's journal. Returns its id.
 pub fn journal(ws: &Path, key: &str, kind: &str, title: &str, files: Vec<String>, commit: &str, undoable: bool, data: Value) -> u64 {
     let id = now_ms();
+    // The board hears about it too (v2.1).
+    let item = match kind {
+        "sign" | "unsign" => format!("gate:{}", data.get("gate").and_then(Value::as_str).unwrap_or("")),
+        "prd" | "prd_withdraw" => "prd".to_string(),
+        "estimate" | "estimates_done" => "estimates".to_string(),
+        "start" | "plan_status" => format!("session:{}", data.get("n").or_else(|| data.get("session")).and_then(Value::as_u64).unwrap_or(0)),
+        "uat" => "gate:uat".to_string(),
+        "release" | "close" => "gate:production".to_string(),
+        "export" => "gate:handoff1".to_string(),
+        _ => String::new(),
+    };
+    crate::plane::note(ws, key, &item, title);
     update(ws, key, |st| {
         st.history.push(Journal { id, ts: id, kind: kind.to_string(), title: title.to_string(), files, commit: commit.to_string(), undoable, undone: false, data });
         while st.history.len() > 60 {

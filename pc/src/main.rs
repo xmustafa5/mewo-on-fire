@@ -17,6 +17,7 @@ mod mdns;
 mod net;
 mod paths;
 mod peers;
+mod plane;
 mod policy;
 mod prs;
 mod relay;

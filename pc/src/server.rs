@@ -392,7 +392,8 @@ async fn handle_frame(
             send_json(sink, &v).await
         }
         "sign" | "plan_status" | "start_session" | "request_sign" | "get_scan" | "set_check"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" => handle_policy(state, device, sink, &msg).await,
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign"
+        | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_status" => handle_policy(state, device, sink, &msg).await,
         _ => Ok(()),
     }
 }
@@ -462,11 +463,11 @@ async fn handle_policy(state: &AppState, device: &Device, sink: &mut WsSink, msg
         };
         o.insert("cmd".to_string(), json!(cmd));
         // A role set from a phone reaches that phone (v1.8).
-        if frame == "set_role" && str_field(msg, "phone").is_empty() {
+        if (frame == "set_role" || frame.starts_with("plane_")) && str_field(msg, "phone").is_empty() {
             o.insert("phone".to_string(), json!(device.name));
         }
     }
-    let mut v = tokio::task::block_in_place(|| control::policy_request(state, &req));
+    let mut v = tokio::task::block_in_place(|| if frame.starts_with("plane_") { control::plane_request(state, &req) } else { control::policy_request(state, &req) });
     if frame == "set_check" {
         // The session push carries the checks; a small ack is enough.
         v = json!({"ok": v.get("ok").and_then(Value::as_bool).unwrap_or(false)});

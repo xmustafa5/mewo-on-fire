@@ -18,6 +18,7 @@ use crate::sessions::{self, ListenStart, Meta, ScanResult, SendOutcome, Session,
 use crate::store::{Event, Store};
 use crate::transcript::{self, ChatItem};
 use crate::peers;
+use crate::plane;
 use crate::policy;
 use crate::desktop;
 use crate::flow;
@@ -179,6 +180,10 @@ impl AppState {
                     gates.insert(0, prd_gate);
                 }
             }
+            let pc = plane::load();
+            if pc.configured() {
+                o.insert("plane".to_string(), plane::feature_items(&pc, ws, &f.key));
+            }
             o.insert(
                 "flow".to_string(),
                 json!({
@@ -194,6 +199,19 @@ impl AppState {
             );
         }
         v
+    }
+
+    /// v2.1: every local feature with its live state, for the Plane sync.
+    pub fn local_features(&self) -> Vec<(std::path::PathBuf, policy::Feature)> {
+        let mut out = Vec::new();
+        for ws in policy::workspaces() {
+            for f in policy::features(&ws) {
+                if let Some(e) = self.feature(&ws, &f.key) {
+                    out.push((ws.clone(), e));
+                }
+            }
+        }
+        out
     }
 
     /// v2.0: the peer a plan session should run on, when its owner's PC
@@ -235,8 +253,22 @@ impl AppState {
             f.gates.iter().find(|g| g.id == gate).map(|g| g.title.clone()).unwrap_or_else(|| gate.to_string())
         };
         let who = flow::role_named(ws, role);
-        let to = who.as_ref().map(|r| r.phone.clone()).unwrap_or_default();
-        let name = who.as_ref().map(|r| r.name.clone()).filter(|n| !n.is_empty());
+        let mut to = who.as_ref().map(|r| r.phone.clone()).unwrap_or_default();
+        let mut name = who.as_ref().map(|r| r.name.clone()).filter(|n| !n.is_empty());
+        // v2.1: whoever holds the item in Plane is who gets asked.
+        let pc = plane::load();
+        if pc.configured() {
+            let items = plane::feature_items(&pc, ws, &f.key);
+            let item_key = if gate == "prd" { "prd".to_string() } else { format!("gate:{gate}") };
+            if let Some(assignee) = items.get("items").and_then(|i| i.get(&item_key)).and_then(|i| i.get("assignees")).and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str) {
+                if let Some(phone) = plane::phone_for_plane(assignee) {
+                    to = phone;
+                }
+                if let Some(p) = pc.people.iter().find(|p| p.plane_id == assignee) {
+                    name = Some(p.display.clone());
+                }
+            }
+        }
         let ev = Event {
             kind: "signoff".to_string(),
             project: f.app.clone(),
@@ -456,6 +488,7 @@ impl AppState {
             "roles": roles,
             "apps": apps,
             "role_names": flow::ROLES,
+            "plane": plane::load().public(),
             "pc_id": self.config.pc_id,
             "pc_name": self.config.name,
             "peers": self.peers.summary().into_iter().map(|mut p| { if let Some(o) = p.as_object_mut() { o.remove("sessions"); o.remove("events"); o.remove("requests"); o.remove("features"); } p }).collect::<Vec<_>>(),
@@ -962,6 +995,7 @@ async fn run_async() -> Result<()> {
     tokio::spawn(flow_loop(state.clone()));
     tokio::spawn(peers::run(state.clone()));
     tokio::spawn(fetch_loop(state.clone()));
+    tokio::spawn(plane_loop(state.clone()));
     tokio::spawn(relay::run(state.clone()));
 
     wait_for_shutdown().await;
@@ -973,6 +1007,29 @@ async fn run_async() -> Result<()> {
 
 /// Periodically drop phone requests nobody answered (PROTOCOL.md: 24 h),
 /// and once an hour the images phones sent more than a week ago.
+/// v2.1: the board. Every minute, when Plane is connected, the features
+/// and their items are brought in line.
+async fn plane_loop(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(plane::SYNC_INTERVAL);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        if !plane::load().configured() || policy::git_blocked() {
+            continue;
+        }
+        let feats = state.local_features();
+        let r = tokio::task::spawn_blocking(move || plane::sync_once(feats)).await;
+        match r {
+            Ok(Err(e)) => {
+                eprintln!("mewo: plane: {e}");
+                plane::record_error(&e);
+            }
+            Ok(Ok(n)) if n > 0 => eprintln!("mewo: plane: {n} item(s) updated"),
+            _ => {}
+        }
+    }
+}
+
 /// v2.0: `git fetch` on every workspace every 90 s, so each feature's
 /// ahead/behind against the remote is current.
 async fn fetch_loop(_state: Arc<AppState>) {

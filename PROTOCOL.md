@@ -731,3 +731,37 @@ and pushed after a commit; the hub fetches every workspace every 90 s.
 owner maps to a role whose PC is a connected peer that has the feature
 with its branch ready, the flow starts that session there.
 
+## Plane (v2.1)
+
+The daemon mirrors the flow onto a Plane project: one work item per
+feature (the parent), and under it one per sign-off (`Sign-off: …
+(Checklist X)`), the PRD signature, the estimates, and each plan
+session (`S2: …`). States move forward with the flow (backlog, todo
+when the step is reached, in progress when asked or running, done when
+signed or merged) and never back; a state someone sets in Plane stays.
+Assignees come from `context/roles.md` (its new fifth column, the Plane
+user id) and from the people who signed in; an assignee changed in
+Plane wins, and a signature request then goes to that person's phone.
+Every journal entry becomes a comment on the item. The sync runs every
+minute and stays under Plane's 60 requests a minute. The markdown
+records stay the truth: Done in Plane does not sign.
+
+`plane.json` in the config folder (mode 600): `base_url, app_url,
+workspace, project_id, project_name, token, items_path (work-items or
+issues), states {group: id}, people [{plane_id, display, email, phone,
+since}]`. `plane-map.json` in the state folder: which item is which.
+
+Control commands (also phone frames where noted): `plane_test
+{base_url, workspace, token}` → `{me, projects, members}`;
+`plane_config {base_url, app_url, workspace, project_id, project_name,
+token}` (an empty token keeps the saved one); `plane_status` →
+`{config (no token), last_sync, last_error, items, members}`;
+`plane_members`; `plane_sync`; `plane_disconnect`; `plane_signin
+{token}` (phone frame: the PC fills `phone` in) → `{me}`; `plane_mine`
+(phone frame) → the items assigned to that phone's person;
+`plane_tasks {feature, n}` → the tasks under the session's item;
+`plane_task_add {feature, n, name}` (assigned to the phone's person);
+`plane_task_done {id, done}`. `features` carries `plane` (the
+connection, no token) and each feature `plane: {parent, parent_url,
+items: {key: {id, url, group, assignees, sequence_id}}}`.
+

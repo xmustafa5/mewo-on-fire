@@ -144,6 +144,14 @@ class _FeatureScreenState extends State<FeatureScreen> {
     } catch (_) {}
   }
 
+  Future<void> _openPlane(String url) async {
+    final u = Uri.tryParse(url);
+    if (u == null) return;
+    try {
+      await launchUrl(u, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
   void _handoff(TorchFeature f, String file) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => ArtifactScreen(
@@ -212,6 +220,8 @@ class _FeatureScreenState extends State<FeatureScreen> {
           Text(f.branch, style: t.labelSmall?.copyWith(fontFamily: mono, color: Ember.text2, fontWeight: FontWeight.w400, letterSpacing: 0)),
           if (f.prd.isNotEmpty) _tag(context, f.prdSigned ? 'PRD signed' : 'PRD draft', f.prdSigned ? Ember.ok : Ember.amber),
           if (f.prd.isEmpty) _tag(context, 'No PRD found', Ember.text3),
+          if (f.planeParentUrl.isNotEmpty)
+            PressScale(onTap: () => _openPlane(f.planeParentUrl), child: _tag(context, 'On Plane ↗', Ember.mewoSoft)),
           if (f.openQuestions > 0) _tag(context, '${f.openQuestions} open question${f.openQuestions == 1 ? '' : 's'}', Ember.amber),
           if (f.running) _tag(context, 'Running now', Ember.ember),
         ],
@@ -258,6 +268,7 @@ class _FeatureScreenState extends State<FeatureScreen> {
         out.add(enter(_warning(context, 'Revised $r', color: Ember.amber)));
       }
       for (final s in plan.sessions) {
+        final pi = f.planeItems['session:${s.n}'];
         out.add(enter(_SessionRow(
           session: s,
           feature: f,
@@ -266,6 +277,10 @@ class _FeatureScreenState extends State<FeatureScreen> {
           onStart: () => _start(f, s),
           onOpenPr: s.prUrl.isNotEmpty || s.pr.isNotEmpty ? () => _open(s.prUrl.isNotEmpty ? s.prUrl : s.pr) : null,
           onOpenLive: (id) => Navigator.of(context).push(ChatScreen.route(widget.pcId, id)),
+          planeUrl: pi?.url ?? '',
+          planeSeq: pi?.sequenceId ?? 0,
+          onTasks: pi == null ? null : () => showTasksSheet(context, pcId: widget.pcId, feature: f, session: s),
+          onOpenPlane: pi == null ? null : () => _openPlane(pi.url),
         )));
       }
     }
@@ -273,11 +288,14 @@ class _FeatureScreenState extends State<FeatureScreen> {
     // Sign-offs.
     out.add(enter(const SectionLabel('Sign-offs')));
     for (final g in f.gates) {
+      final gi = f.planeItems[g.id == 'prd' ? 'prd' : 'gate:${g.id}'];
       out.add(enter(_GateCard(
         gate: g,
         onSign: g.signed || !g.present ? null : () => showSignSheet(context, pcId: widget.pcId, feature: f, gate: g),
         onAsk: g.signed || !g.present ? null : () => _ask(f, g),
         onUnsign: (role) => _unsign(f, g, role),
+        planeSeq: gi?.sequenceId ?? 0,
+        onOpenPlane: gi == null ? null : () => _openPlane(gi.url),
       )));
     }
 
@@ -422,7 +440,16 @@ class _SessionRow extends StatelessWidget {
     required this.onStart,
     required this.onOpenPr,
     required this.onOpenLive,
+    this.planeUrl = '',
+    this.planeSeq = 0,
+    this.onTasks,
+    this.onOpenPlane,
   });
+
+  final String planeUrl;
+  final int planeSeq;
+  final VoidCallback? onTasks;
+  final VoidCallback? onOpenPlane;
 
   final PlanSession session;
   final TorchFeature feature;
@@ -520,7 +547,7 @@ class _SessionRow extends StatelessWidget {
                 ],
               ),
             ),
-          if (s.live.isNotEmpty || canStart || onOpenPr != null)
+          if (s.live.isNotEmpty || canStart || onOpenPr != null || onTasks != null)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: Wrap(
@@ -536,6 +563,8 @@ class _SessionRow extends StatelessWidget {
                     ),
                   if (onOpenPr != null)
                     _MiniButton(icon: Icons.call_merge_rounded, label: s.prNumber > 0 ? 'PR #${s.prNumber}' : 'Pull request', color: Ember.mewoSoft, onTap: onOpenPr!),
+                  if (onTasks != null) _MiniButton(icon: Icons.checklist_rounded, label: 'Tasks', color: Ember.text2, onTap: onTasks!),
+                  if (onOpenPlane != null) _MiniButton(icon: Icons.open_in_new_rounded, label: planeSeq > 0 ? 'Plane #$planeSeq' : 'Plane', color: Ember.text3, onTap: onOpenPlane!),
                   if (canStart)
                     EmberButton(label: starting ? 'Starting…' : 'Start', icon: Icons.play_arrow_rounded, small: true, busy: starting, onPressed: starting ? null : onStart),
                 ],
@@ -548,8 +577,10 @@ class _SessionRow extends StatelessWidget {
 }
 
 class _GateCard extends StatelessWidget {
-  const _GateCard({required this.gate, required this.onSign, required this.onAsk, required this.onUnsign});
+  const _GateCard({required this.gate, required this.onSign, required this.onAsk, required this.onUnsign, this.planeSeq = 0, this.onOpenPlane});
 
+  final int planeSeq;
+  final VoidCallback? onOpenPlane;
   final TorchGate gate;
   final VoidCallback? onSign;
   final VoidCallback? onAsk;
@@ -587,6 +618,11 @@ class _GateCard extends StatelessWidget {
                   ].join(' · '),
                   style: t.labelSmall?.copyWith(color: Ember.text3),
                 ),
+                if (onOpenPlane != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: _MiniButton(icon: Icons.open_in_new_rounded, label: planeSeq > 0 ? 'Plane #$planeSeq' : 'Plane', color: Ember.text3, onTap: onOpenPlane!),
+                  ),
                 if (signed.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),

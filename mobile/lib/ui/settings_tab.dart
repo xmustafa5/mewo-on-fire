@@ -152,6 +152,15 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                   subtitle: s.signerName.isEmpty ? 'Written into a record when you sign a checkpoint from this phone' : s.signerName,
                   onTap: () => _editName(context, state),
                 ),
+                _Row(
+                  icon: Icons.view_kanban_outlined,
+                  color: Ember.mewoSoft,
+                  title: 'Sign in with Plane',
+                  subtitle: state.pcs.any((pc) => state.featuresOf(pc.id)?.plane.configured ?? false)
+                      ? 'Paste a personal access token from your Plane profile. Your name, phone and Plane user become one person; items assigned to you come to this phone.'
+                      : 'Connect Plane on the console first (PLANE under the pipeline)',
+                  onTap: () => _planeSignin(context, state),
+                ),
               ]),
               const SectionLabel('Muted projects'),
               if (s.mutedProjects.isEmpty)
@@ -276,6 +285,37 @@ class _Group extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+Future<void> _planeSignin(BuildContext context, AppState state) async {
+  final c = TextEditingController();
+  final token = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Sign in with Plane'),
+      content: TextField(
+        controller: c,
+        autofocus: true,
+        obscureText: true,
+        autocorrect: false,
+        decoration: const InputDecoration(hintText: 'Personal access token'),
+        onSubmitted: (v) => Navigator.pop(ctx, v),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+        TextButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Sign in')),
+      ],
+    ),
+  );
+  if (token == null || token.trim().isEmpty || !context.mounted) return;
+  try {
+    final name = await state.planeSignin(token.trim());
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Signed in as $name')));
+  } catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e is StateError ? e.message : 'Could not sign in')));
   }
 }
 

@@ -162,6 +162,10 @@ header {
 .form .msg { grid-column: 1 / -1; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--amber); min-height: 12px; }
 .form .msg.bad { color: var(--heat); }
 #plist .tools { display: flex; gap: 6px; margin-bottom: 10px; }
+.plane-st { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--dim); margin: 6px 0 2px; line-height: 1.7; }
+.plane-st b { color: var(--ok); font-weight: 600; } .plane-st .bad { color: var(--heat); }
+.plink { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.16em; color: var(--mewo); border: 1px solid rgba(47,107,255,.5); padding: 2px 6px; cursor: pointer; background: none; }
+.plink:hover { background: rgba(47,107,255,.15); }
 #plist .tools .btn { flex: 1; text-align: center; }
 #plist .box { border: 1px solid var(--cyan-dim); padding: 10px 12px; margin-bottom: 10px; display: none; }
 #plist .box.on { display: block; }
@@ -660,13 +664,29 @@ function toolsHtml() {
   const apps = (meta.apps[ws] || []);
   const roles = meta.roles[ws] || [];
   const names = meta.role_names.length ? meta.role_names : ['CEO', 'Product lead', 'Design lead', 'Tech lead', 'FE lead', 'BE lead'];
-  return `<div class="tools"><button class="btn tool" data-box="new" type="button">+ NEW FEATURE</button><button class="btn tool" data-box="roles" type="button">ROLES</button></div>
+  const pl = meta.plane || {};
+  const members = meta.members || [];
+  return `<div class="tools"><button class="btn tool" data-box="new" type="button">+ NEW FEATURE</button><button class="btn tool" data-box="roles" type="button">ROLES</button><button class="btn tool" data-box="plane" type="button" style="${pl.configured ? 'color:var(--mewo);border-color:rgba(47,107,255,.5)' : ''}">PLANE${pl.configured ? ' ✓' : ''}</button></div>
+  <div class="box${openBox === 'plane' ? ' on' : ''}" id="box-plane"><div class="t">PLANE · THE BOARD · EVERY FEATURE, SIGN-OFF AND SESSION AS A WORK ITEM</div>
+    <div class="form" style="margin-top:0;border:0;padding:0">
+      <div><label>API ADDRESS</label><input id="pl-url" value="${esc(pl.base_url || 'https://api.plane.so')}" placeholder="https://api.plane.so or your server"></div>
+      <div><label>WORKSPACE SLUG</label><input id="pl-ws" value="${esc(pl.workspace || '')}" placeholder="from the Plane URL: app.plane.so/&lt;slug&gt;/"></div>
+      <div class="full"><label>TOKEN · PROFILE SETTINGS › PERSONAL ACCESS TOKENS${pl.has_token ? ' · ONE IS SAVED, LEAVE EMPTY TO KEEP IT' : ''}</label><input id="pl-token" type="password" placeholder="plane_api_…"></div>
+      <div class="full"><button class="btn" id="pl-test" type="button">TEST THE CONNECTION</button> <span class="msg" id="pl-testmsg" style="display:inline"></span></div>
+      <div class="full" id="pl-projwrap" style="display:${pl.project_id ? 'block' : 'none'}"><label>PROJECT</label><select id="pl-proj">${pl.project_id ? `<option value="${esc(pl.project_id)}">${esc(pl.project_name || pl.project_id)}</option>` : ''}</select></div>
+      <div class="full"><button class="btn go" id="pl-save" type="button">SAVE</button> <button class="btn" id="pl-sync" type="button" ${pl.configured ? '' : 'disabled'}>SYNC NOW</button> <button class="btn" id="pl-off" type="button" ${pl.configured ? '' : 'disabled'}>DISCONNECT</button></div>
+      <div class="msg" id="pl-msg"></div>
+    </div>
+    <div class="plane-st" id="pl-status">${pl.configured ? `CONNECTED · ${esc(pl.workspace)} / ${esc(pl.project_name || pl.project_id)}` : 'NOT CONNECTED'}</div>
+    ${(pl.people || []).length ? `<div class="plane-st">SIGNED IN FROM PHONES · ${pl.people.map((p) => `<b>${esc(p.display)}</b> (${esc(p.phone)})`).join(' · ')}</div>` : ''}
+    ${members.length ? `<div class="plane-st">${members.length} MEMBERS IN THE WORKSPACE</div>` : ''}
+  </div>
   <div class="box${openBox === 'new' ? ' on' : ''}" id="box-new"><div class="t">NEW FEATURE · context/scripts/new-feature.sh</div>
     <div class="form" style="margin-top:0;border:0;padding:0"><div><label>APP</label><select id="nf-app">${apps.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}</select></div><div><label>SLUG</label><input id="nf-slug" placeholder="bank-reconciliation"></div>
     <div class="full"><label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="nf-light" style="width:auto"> LIGHT PATH (a fix, no PRD)</label></div>
     <div class="full"><button class="btn go" id="nf-go" type="button">CREATE THE BRANCH AND THE RECORDS</button></div><div class="msg" id="nf-msg"></div></div></div>
   <div class="box${openBox === 'roles' ? ' on' : ''}" id="box-roles"><div class="t">ROLES · context/roles.md · WHO SIGNS, AND WHICH PHONE REACHES THEM</div>
-    ${names.map((n) => { const r = roles.find((x) => (x.role || '').toLowerCase() === n.toLowerCase()) || {}; return `<div class="roles-row" data-role="${esc(n)}"><span class="r">${esc(n.toUpperCase())}</span><input class="name" placeholder="Name" value="${esc(r.name || '')}"><input class="phone" placeholder="Phone (paired name)" value="${esc(r.phone || '')}"><button class="btn save" type="button">SAVE</button></div>`; }).join('')}
+    ${names.map((n) => { const r = roles.find((x) => (x.role || '').toLowerCase() === n.toLowerCase()) || {}; const pcs = [(model.daemon || {}).name, ...(model.peers || []).map((p) => p.name)].filter(Boolean); return `<div class="roles-row" data-role="${esc(n)}" style="grid-template-columns:92px 1fr 1fr ${pcs.length > 1 ? '1fr ' : ''}${members.length ? '1fr ' : ''}auto"><span class="r">${esc(n.toUpperCase())}</span><input class="name" placeholder="Name" value="${esc(r.name || '')}"><input class="phone" placeholder="Phone (paired name)" value="${esc(r.phone || '')}">${pcs.length > 1 ? `<select class="pc" style="background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:11px var(--sans);padding:4px 6px;min-width:0"><option value="">PC…</option>${pcs.map((p) => `<option value="${esc(p)}" ${r.pc === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select>` : ''}${members.length ? `<select class="plane" style="background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:11px var(--sans);padding:4px 6px;min-width:0"><option value="">Plane user…</option>${members.map((m) => `<option value="${esc(m.id)}" ${r.plane === m.id ? 'selected' : ''}>${esc(m.display)}</option>`).join('')}</select>` : ''}<button class="btn save" type="button">SAVE</button></div>`; }).join('')}
     <div class="msg" id="roles-msg" style="font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;color:var(--amber);min-height:12px"></div></div>`;
 }
 function wireTools(list) {
@@ -681,9 +701,34 @@ function wireTools(list) {
     if (r.ok) { msg.textContent = (r.output || 'CREATED').toUpperCase().slice(0, 140); openBox = ''; picked = r.key; setTimeout(refreshFeatures, 500); }
     else { msg.className = 'msg bad'; msg.textContent = (r.error || 'FAILED').toUpperCase().slice(0, 160); }
   };
+  const plTest = list.querySelector('#pl-test');
+  if (plTest) plTest.onclick = async () => {
+    const msg = list.querySelector('#pl-testmsg'); msg.className = 'msg'; msg.textContent = 'ASKING PLANE…';
+    const r = await daemon({ cmd: 'plane_test', base_url: list.querySelector('#pl-url').value.trim(), workspace: list.querySelector('#pl-ws').value.trim(), token: list.querySelector('#pl-token').value.trim() });
+    if (!r.ok) { msg.className = 'msg bad'; msg.textContent = (r.error || 'FAILED').toUpperCase(); return; }
+    msg.textContent = `SIGNED IN AS ${esc((r.me || {}).display || '').toUpperCase()} · ${r.members || 0} MEMBERS · ${(r.projects || []).length} PROJECTS`;
+    const sel = list.querySelector('#pl-proj'); const cur = (meta.plane || {}).project_id || '';
+    sel.innerHTML = (r.projects || []).map((p) => `<option value="${esc(p.id)}" ${p.id === cur ? 'selected' : ''}>${esc(p.identifier ? p.identifier + ' · ' : '')}${esc(p.name)}</option>`).join('');
+    list.querySelector('#pl-projwrap').style.display = 'block';
+    meta.members = r.members_list || meta.members;
+  };
+  const plSave = list.querySelector('#pl-save');
+  if (plSave) plSave.onclick = async () => {
+    const msg = list.querySelector('#pl-msg'); const sel = list.querySelector('#pl-proj');
+    const r = await daemon({ cmd: 'plane_config', base_url: list.querySelector('#pl-url').value.trim(), workspace: list.querySelector('#pl-ws').value.trim(), token: list.querySelector('#pl-token').value.trim(), project_id: sel.value, project_name: sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : '' });
+    msg.className = r.ok ? 'msg' : 'msg bad'; msg.textContent = r.ok ? 'SAVED · THE FIRST SYNC RUNS WITHIN A MINUTE' : (r.error || 'FAILED').toUpperCase();
+    if (r.ok) { list.querySelector('#pl-token').value = ''; setTimeout(refreshFeatures, 500); }
+  };
+  const plSync = list.querySelector('#pl-sync');
+  if (plSync) plSync.onclick = async () => { const msg = list.querySelector('#pl-msg'); msg.className = 'msg'; msg.textContent = 'SYNCING…'; const r = await daemon({ cmd: 'plane_sync' }); msg.className = r.ok ? 'msg' : 'msg bad'; msg.textContent = r.ok ? `SYNCED · ${r.touched} ITEM${r.touched === 1 ? '' : 'S'} TOUCHED` : (r.error || 'FAILED').toUpperCase(); setTimeout(refreshFeatures, 500); };
+  const plOff = list.querySelector('#pl-off');
+  if (plOff) plOff.onclick = async () => { if (!confirm('Disconnect Plane? The items stay in Plane; Mewo forgets the connection.')) return; await daemon({ cmd: 'plane_disconnect' }); setTimeout(refreshFeatures, 300); };
   for (const row of list.querySelectorAll('.roles-row')) row.querySelector('button.save').onclick = async () => {
     const msg = list.querySelector('#roles-msg');
-    const r = await daemon({ cmd: 'set_role', workspace: meta.workspaces[0] || '', role: row.dataset.role, name: row.querySelector('.name').value, phone: row.querySelector('.phone').value });
+    const planeSel = row.querySelector('select.plane'); const pcSel = row.querySelector('select.pc');
+    let name = row.querySelector('.name').value;
+    if (!name.trim() && planeSel && planeSel.value) name = planeSel.selectedOptions[0].textContent;
+    const r = await daemon({ cmd: 'set_role', workspace: meta.workspaces[0] || '', role: row.dataset.role, name, phone: row.querySelector('.phone').value, pc: pcSel ? pcSel.value : '', plane: planeSel ? planeSel.value : '' });
     msg.textContent = r.ok ? `SAVED ${row.dataset.role.toUpperCase()}` : (r.error || 'FAILED').toUpperCase();
     if (r.ok) { meta.roles[meta.workspaces[0] || ''] = r.roles; }
   };
@@ -752,7 +797,7 @@ function gateHtml(f, g) {
   const open = (g.roles || []).filter((r) => !(g.signatures || []).some((s) => s.role === r));
   const items = g.items || [];
   return `<div class="gate" data-gate="${esc(g.id)}">
-    <div class="h"><span class="k">${g.checklist ? 'CHECKLIST ' + esc(g.checklist) : 'REVIEW'}</span><span class="t">${esc(g.title)}</span>${g.signed ? '<span class="ok">SIGNED</span>' : g.present ? `<button class="btn sign" type="button">SIGN…</button><button class="btn ask" type="button" title="Notify the phones">ASK</button>` : '<span class="k" style="color:var(--dim2)">NO RECORD FILE</span>'}</div>
+    <div class="h"><span class="k">${g.checklist ? 'CHECKLIST ' + esc(g.checklist) : 'REVIEW'}</span><span class="t">${esc(g.title)} ${(f.plane && f.plane.items && f.plane.items[g.id === 'prd' ? 'prd' : 'gate:' + g.id]) ? `<button class="plink" type="button" data-url="${esc(f.plane.items[g.id === 'prd' ? 'prd' : 'gate:' + g.id].url)}">PLANE${f.plane.items[g.id === 'prd' ? 'prd' : 'gate:' + g.id].sequence_id ? ' #' + f.plane.items[g.id === 'prd' ? 'prd' : 'gate:' + g.id].sequence_id : ''}</button>` : ''}</span>${g.signed ? '<span class="ok">SIGNED</span>' : g.present ? `<button class="btn sign" type="button">SIGN…</button><button class="btn ask" type="button" title="Notify the phones">ASK</button>` : '<span class="k" style="color:var(--dim2)">NO RECORD FILE</span>'}</div>
     ${items.length ? `<div class="sig">${items.filter((i) => i.checked).length}/${items.length} ITEMS TICKED${g.roles && g.roles.length ? ' · ' : ''}${(g.roles || []).join(' · ').toUpperCase()}</div>` : ''}
     ${sigs ? `<div class="sig">SIGNED BY ${sigs}${g.date ? ' · ' + esc(g.date) : ''}</div>` : g.signed && items.length ? `<div class="sig">ALL ITEMS TICKED <button class="btn unsign" type="button" data-role="" style="padding:2px 6px;font-size:8.5px">UNTICK</button></div>` : ''}
     <form onsubmit="return false">
@@ -772,7 +817,9 @@ function renderFeature() {
   const pcs = copies.map((c) => ({ pc_id: c.pc_id, name: c.pc_name, ready: (c.branches || []).length > 0 || !(c.fetched_repos || []).length, sync: c.sync || {} }));
   const plan = f.plan;
   const h = [];
-  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}` : ' · NO PRD FOUND'}</div></div>${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
+  const plItem = (k) => (f.plane && f.plane.items && f.plane.items[k]) || null;
+  const plLink = (k) => { const it = plItem(k); return it ? `<button class="plink" type="button" data-url="${esc(it.url)}" title="Open in Plane">PLANE${it.sequence_id ? ' #' + it.sequence_id : ''}${it.assignees && it.assignees.length ? ' · ASSIGNED' : ''}</button>` : ''; };
+  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}` : ' · NO PRD FOUND'}</div></div>${f.plane && f.plane.parent_url ? `<button class="plink" type="button" data-url="${esc(f.plane.parent_url)}">ON PLANE</button>` : ''}${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
   for (const w of (f.warnings || [])) h.push(`<div class="warn" style="margin-top:10px">${esc(w)}</div>`);
   if (pcs.length) h.push(`<div class="sec" style="margin-top:12px"><span>ON THE NETWORK</span></div><div class="files">${pcs.map((p) => `<span class="pill ${p.ready ? 'merged' : 'waiting'}" title="${esc(p.name)}">${esc((p.name || '').toUpperCase())}${p.sync.remote ? ` · ↑${p.sync.ahead || 0} ↓${p.sync.behind || 0}` : p.sync.local ? ' · NO REMOTE' : ' · NO BRANCH'}${p.ready ? '' : ' · REPO NOT FETCHED'}</span>`).join('')}</div>`);
   h.push(flowHtml(f));
@@ -782,7 +829,7 @@ function renderFeature() {
     for (const r of (plan.revised || [])) h.push(`<div class="warn" style="border-color:var(--amber);background:rgba(255,179,71,.06);color:var(--amber)">REVISED ${esc(r)}</div>`);
     for (const s of plan.sessions) {
       const live = (s.live || []).map((l) => `${esc(l.short)} ${l.state.toUpperCase()}${l.tier ? ' T' + l.tier : ''}`).join(', ');
-      h.push(`<div class="srow"><div class="n">S${s.n}</div><div><div class="g">${esc(s.goal)}</div><div class="i">${esc((s.level || '').toUpperCase())} · TIER ${s.tier || '?'} · ${esc(s.repo || f.repos[0] || '')}${s.owner ? ' · ' + esc(s.owner.toUpperCase()) : ''}${s.depends_on && s.depends_on.length ? ' · AFTER ' + s.depends_on.join(', ') : ''}${s.attempts ? ` · ${s.attempts} ATTEMPT${s.attempts > 1 ? 'S' : ''}` : ''}${live ? ' · ' + live : ''}${s.note ? ' · ' + esc(s.note.toUpperCase()) : ''}${(s.warnings || []).map((w) => ` <span class="w">· ${esc(w)}</span>`).join('')}</div></div>
+      h.push(`<div class="srow"><div class="n">S${s.n}</div><div><div class="g">${esc(s.goal)} ${plLink('session:' + s.n)}</div><div class="i">${esc((s.level || '').toUpperCase())} · TIER ${s.tier || '?'} · ${esc(s.repo || f.repos[0] || '')}${s.owner ? ' · ' + esc(s.owner.toUpperCase()) : ''}${s.depends_on && s.depends_on.length ? ' · AFTER ' + s.depends_on.join(', ') : ''}${s.attempts ? ` · ${s.attempts} ATTEMPT${s.attempts > 1 ? 'S' : ''}` : ''}${live ? ' · ' + live : ''}${s.note ? ' · ' + esc(s.note.toUpperCase()) : ''}${(s.warnings || []).map((w) => ` <span class="w">· ${esc(w)}</span>`).join('')}</div></div>
         <div class="a"><span class="pill ${esc(s.effective)}">${esc((s.effective === 'review' ? 'IN REVIEW' : s.effective === 'progress' ? 'IN PROGRESS' : s.effective).toUpperCase())}</span>${s.pr_url || s.pr ? `<button class="btn" type="button" data-url="${esc(s.pr_url || s.pr)}">PR${s.pr_number ? ' #' + s.pr_number : ''}</button>` : ''}${(s.live || []).filter((l) => l.desktop).slice(0, 1).map((l) => `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(l.desktop)}">OPEN</button>`).join('')}${s.effective === 'ready' || s.effective === 'progress' ? `${pcs.length > 1 ? `<select class="startpc" data-n="${s.n}" style="background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:9.5px var(--mono);padding:5px 6px">${pcs.map((p) => `<option value="${esc(p.pc_id)}" ${p.pc_id === f.pc_id ? 'selected' : ''}>ON ${esc((p.name || '').toUpperCase())}</option>`).join('')}</select>` : ''}<button class="btn go start" type="button" data-n="${s.n}" ${s.prompt ? '' : 'disabled title="No prompt in the plan"'}>START</button>` : ''}</div></div>`);
     }
   } else if (!f.light) {
@@ -848,7 +895,7 @@ function renderFeature() {
 }
 async function refreshFeatures() {
   const r = await daemon({ cmd: 'features' });
-  if (r && r.ok) { features = r.features || []; meta = { roles: r.roles || {}, apps: r.apps || {}, role_names: r.role_names || [], workspaces: r.workspaces || [] }; if (view === 'pipe') renderPipeline(); }
+  if (r && r.ok) { features = r.features || []; meta = { roles: r.roles || {}, apps: r.apps || {}, role_names: r.role_names || [], workspaces: r.workspaces || [], plane: r.plane || {}, members: meta.members || [] }; if (view === 'pipe') renderPipeline(); if ((r.plane || {}).configured && !(meta.members || []).length) daemon({ cmd: 'plane_status' }).then((s) => { meta.members = s.members || []; if (view === 'pipe') renderPipeline(); }); }
 }
 // What a session made, shown in place: the daemon's copy of the files, through the Mac app's
 // mewo-artifact:// scheme, or `mewo dashboard`'s /artifact/<id>/. A design shows board by board.
@@ -1291,7 +1338,7 @@ function apply(s) {
   const d = s.daemon, sessions = s.sessions || [], events = s.events || [], requests = s.requests || [];
   model = { sessions, daemon: d, legacy: !!s.legacy, peers: s.peers || [] };
   renderFleet();
-  if (Array.isArray(s.features)) { features = s.features; if (s.features_meta) meta = s.features_meta; if (view === 'pipe') renderPipeline(); }
+  if (Array.isArray(s.features)) { features = s.features; if (s.features_meta) meta = { ...s.features_meta, members: meta.members || [] }; if (view === 'pipe') renderPipeline(); }
   $('legacy').style.display = s.legacy ? 'block' : 'none';
   $('pcname').textContent = (d.name || 'PC').toUpperCase();
   $('pcstate').textContent = `ONLINE · ${d.connected || 0} PHONE${d.connected === 1 ? '' : 'S'} LIVE`; $('pcstate').className = 'state';

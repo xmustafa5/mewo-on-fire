@@ -19,6 +19,7 @@ use crate::daemon::AppState;
 use crate::hook;
 use crate::paths;
 use crate::peers;
+use crate::plane;
 use crate::policy;
 use crate::requests::{AskReply, Request};
 use crate::sessions::{ListenReply, ListenStart, Meta};
@@ -293,6 +294,9 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
         "requests" => json!({"ok": true, "requests": state.pending_requests()}),
         // v1.7 (TORCH policy): signatures, plan status, the self-check scan,
         // starting a planned session, asking for a signature.
+        "plane_config" | "plane_test" | "plane_status" | "plane_members" | "plane_projects" | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_sync" | "plane_disconnect" => {
+            tokio::task::block_in_place(|| plane_request(state, req))
+        }
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
         | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" => {
             // git and gh run here: off the async threads.
@@ -309,6 +313,136 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
         }
         _ => json!({"ok": false, "error": "unknown_cmd"}),
     }
+}
+
+/// The Plane commands (v2.1).
+pub(crate) fn plane_request(state: &AppState, req: &Value) -> Value {
+    let s = |k: &str| req.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    match s("cmd").as_str() {
+        "plane_status" => {
+            let mut v = plane::status();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("members".to_string(), json!(cached_members(false)));
+            }
+            v
+        }
+        "plane_members" => json!({"ok": true, "members": cached_members(true)}),
+        "plane_test" | "plane_projects" => {
+            let mut c = plane::load();
+            if !s("base_url").is_empty() {
+                c.base_url = s("base_url");
+            }
+            if !s("workspace").is_empty() {
+                c.workspace = s("workspace");
+            }
+            if !s("token").is_empty() {
+                c.token = s("token");
+            }
+            if c.base_url.is_empty() || c.token.is_empty() {
+                return json!({"ok": false, "error": "The address and a token are needed"});
+            }
+            let me = match plane::me(&c.base_url, &c.token) {
+                Ok(m) => m,
+                Err(e) => return json!({"ok": false, "error": e}),
+            };
+            let projects = if c.workspace.is_empty() { Vec::new() } else { plane::projects(&c).unwrap_or_default() };
+            let members = if c.workspace.is_empty() { Vec::new() } else { plane::members(&c).unwrap_or_default() };
+            json!({"ok": true, "me": me, "projects": projects, "members": members.len(), "members_list": members})
+        }
+        "plane_config" => {
+            let mut c = plane::load();
+            c.base_url = s("base_url").trim_end_matches('/').to_string();
+            c.app_url = s("app_url").trim_end_matches('/').to_string();
+            c.workspace = s("workspace");
+            if c.project_id != s("project_id") {
+                c.states.clear();
+                c.items_path.clear();
+            }
+            c.project_id = s("project_id");
+            c.project_name = s("project_name");
+            if !s("token").is_empty() {
+                c.token = s("token");
+            }
+            match plane::save(&c) {
+                Ok(()) => {
+                    let _ = cached_members(true);
+                    json!({"ok": true, "config": c.public()})
+                }
+                Err(e) => json!({"ok": false, "error": e}),
+            }
+        }
+        "plane_disconnect" => match plane::save(&plane::PlaneConfig::default()) {
+            Ok(()) => json!({"ok": true}),
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "plane_signin" => match plane::signin(&s("token"), &s("phone")) {
+            Ok(who) => json!({"ok": true, "me": who}),
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "plane_mine" => {
+            let plane_id = if !s("plane_id").is_empty() { s("plane_id") } else { plane::person_for_phone(&s("phone")).map(|p| p.plane_id).unwrap_or_default() };
+            if plane_id.is_empty() {
+                return json!({"ok": false, "error": "Sign in with Plane first (Settings)", "items": []});
+            }
+            json!({"ok": true, "items": plane::mine(&plane_id), "me": plane::person_for_phone(&s("phone"))})
+        }
+        "plane_sync" => {
+            let feats = state.local_features();
+            match plane::sync_once(feats) {
+                Ok(n) => json!({"ok": true, "touched": n}),
+                Err(e) => {
+                    plane::record_error(&e);
+                    json!({"ok": false, "error": e})
+                }
+            }
+        }
+        "plane_tasks" | "plane_task_add" | "plane_task_done" => {
+            if s("cmd") == "plane_task_done" {
+                return match plane::set_task_done(&s("id"), req.get("done").and_then(Value::as_bool).unwrap_or(true)) {
+                    Ok(()) => json!({"ok": true}),
+                    Err(e) => json!({"ok": false, "error": e}),
+                };
+            }
+            let key = s("feature");
+            let Some(ws) = workspace_of(&s("workspace"), &key) else {
+                return json!({"ok": false, "error": format!("No workspace with the feature {key}")});
+            };
+            let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as u32;
+            if s("cmd") == "plane_tasks" {
+                match plane::tasks(&ws, &key, n) {
+                    Ok(t) => json!({"ok": true, "tasks": t}),
+                    Err(e) => json!({"ok": false, "error": e, "tasks": []}),
+                }
+            } else {
+                let assignee = plane::person_for_phone(&s("phone")).map(|p| p.plane_id).unwrap_or_default();
+                match plane::add_task(&ws, &key, n, &s("name"), &assignee) {
+                    Ok(v) => v,
+                    Err(e) => json!({"ok": false, "error": e}),
+                }
+            }
+        }
+        _ => json!({"ok": false, "error": "unknown_cmd"}),
+    }
+}
+
+/// The workspace's members, kept five minutes (Plane allows 60 calls a minute).
+fn cached_members(refresh: bool) -> Vec<Value> {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<Value>)>> = std::sync::Mutex::new(None);
+    let mut g = CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    if !refresh {
+        if let Some((at, list)) = g.as_ref() {
+            if at.elapsed() < std::time::Duration::from_secs(300) {
+                return list.clone();
+            }
+        }
+    }
+    let c = plane::load();
+    if c.base_url.is_empty() || c.workspace.is_empty() || c.token.is_empty() {
+        return Vec::new();
+    }
+    let list = plane::members(&c).unwrap_or_default();
+    *g = Some((std::time::Instant::now(), list.clone()));
+    list
 }
 
 /// A request carrying another PC's `pc_id` (v2.0).
@@ -362,7 +496,7 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
             return json!({"ok": false, "error": "No workspace known yet"});
         };
         return match cmd.as_str() {
-            "set_role" => match flow::set_role(&ws, &s("role"), &s("name"), &s("phone"), &s("pc")) {
+            "set_role" => match flow::set_role(&ws, &s("role"), &s("name"), &s("phone"), &s("pc"), &s("plane")) {
                 Ok(list) => json!({"ok": true, "roles": list}),
                 Err(e) => json!({"ok": false, "error": e}),
             },

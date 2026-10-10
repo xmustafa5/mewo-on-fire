@@ -1177,10 +1177,80 @@ class FlowInfo {
 }
 
 class RoleEntry {
-  const RoleEntry({required this.role, required this.name, required this.phone});
+  const RoleEntry({required this.role, required this.name, required this.phone, this.pc = '', this.plane = ''});
   final String role;
   final String name;
   final String phone;
+  final String pc;
+  final String plane;
+}
+
+/// A work item in Plane that mirrors a gate or a session (v2.1).
+class PlaneItem {
+  const PlaneItem({required this.id, required this.url, required this.group, required this.assignees, required this.sequenceId});
+  final String id;
+  final String url;
+  final String group;
+  final List<String> assignees;
+  final int sequenceId;
+
+  factory PlaneItem.fromJson(Map<String, dynamic> j) => PlaneItem(
+        id: _asString(j['id']),
+        url: _asString(j['url']),
+        group: _asString(j['group']),
+        assignees: _asStringList(j['assignees']),
+        sequenceId: _asInt(j['sequence_id']),
+      );
+}
+
+/// The Plane connection of a PC, as the phones see it (no token).
+class PlaneInfo {
+  const PlaneInfo({required this.configured, required this.workspace, required this.projectName, required this.appUrl, required this.people});
+  final bool configured;
+  final String workspace;
+  final String projectName;
+  final String appUrl;
+
+  /// phone device name → display name of who signed in there.
+  final Map<String, String> people;
+
+  static const none = PlaneInfo(configured: false, workspace: '', projectName: '', appUrl: '', people: <String, String>{});
+
+  factory PlaneInfo.fromJson(Map<String, dynamic> j) => PlaneInfo(
+        configured: j['configured'] == true,
+        workspace: _asString(j['workspace']),
+        projectName: _asString(j['project_name']),
+        appUrl: _asString(j['app_url']),
+        people: {
+          if (j['people'] is List)
+            for (final p in j['people'] as List)
+              if (p is Map) _asString(p['phone']): _asString(p['display']),
+        },
+      );
+}
+
+/// A Plane item assigned to me (v2.1).
+class MineItem {
+  const MineItem({required this.feature, required this.item, required this.name, required this.group, required this.url});
+  final String feature;
+  final String item;
+  final String name;
+  final String group;
+  final String url;
+
+  factory MineItem.fromJson(Map<String, dynamic> j) => MineItem(feature: _asString(j['feature']), item: _asString(j['item']), name: _asString(j['name']), group: _asString(j['group']), url: _asString(j['url']));
+}
+
+/// A task under a session's Plane item.
+class PlaneTask {
+  const PlaneTask({required this.id, required this.name, required this.done, required this.url, required this.sequenceId});
+  final String id;
+  final String name;
+  final bool done;
+  final String url;
+  final int sequenceId;
+
+  factory PlaneTask.fromJson(Map<String, dynamic> j) => PlaneTask(id: _asString(j['id']), name: _asString(j['name']), done: j['done'] == true, url: _asString(j['url']), sequenceId: _asInt(j['sequence_id']));
 }
 
 /// A feature of a TORCH workspace and where it stands in the twelve steps.
@@ -1207,9 +1277,15 @@ class TorchFeature {
     required this.sessionsMerged,
     required this.sessionsTotal,
     this.flow = FlowInfo.empty,
+    this.planeParentUrl = '',
+    this.planeItems = const <String, PlaneItem>{},
   });
 
   final FlowInfo flow;
+  final String planeParentUrl;
+
+  /// `gate:<id>`, `prd`, `estimates`, `session:<n>` → the Plane item.
+  final Map<String, PlaneItem> planeItems;
 
   static const List<String> steps = <String>[
     'PRD draft',
@@ -1276,6 +1352,12 @@ class TorchFeature {
         sessionsMerged: _asInt(j['sessions_merged']),
         sessionsTotal: _asInt(j['sessions_total']),
         flow: j['flow'] is Map ? FlowInfo.fromJson(Map<String, dynamic>.from(j['flow'] as Map)) : FlowInfo.empty,
+        planeParentUrl: j['plane'] is Map ? _asString((j['plane'] as Map)['parent_url']) : '',
+        planeItems: {
+          if (j['plane'] is Map && (j['plane'] as Map)['items'] is Map)
+            for (final e in ((j['plane'] as Map)['items'] as Map).entries)
+              if (e.value is Map) '${e.key}': PlaneItem.fromJson(Map<String, dynamic>.from(e.value as Map)),
+        },
       );
 }
 
@@ -1292,7 +1374,9 @@ class FeaturesData {
     this.apps = const <String, List<String>>{},
     this.roleNames = const <String>[],
     this.warning = '',
+    this.plane = PlaneInfo.none,
   });
+  final PlaneInfo plane;
   final List<TorchFeature> features;
   final List<String> selfCheck;
   final List<String> reviewCheck;
@@ -1323,7 +1407,7 @@ class FeaturesData {
               '${e.key}': [
                 if (e.value is List)
                   for (final r in e.value as List)
-                    if (r is Map) RoleEntry(role: _asString(r['role']), name: _asString(r['name']), phone: _asString(r['phone'])),
+                    if (r is Map) RoleEntry(role: _asString(r['role']), name: _asString(r['name']), phone: _asString(r['phone']), pc: _asString(r['pc']), plane: _asString(r['plane'])),
               ],
         },
         apps: {
@@ -1332,6 +1416,7 @@ class FeaturesData {
         },
         roleNames: _asStringList(j['role_names']),
         warning: _asString(j['warning']),
+        plane: j['plane'] is Map ? PlaneInfo.fromJson(Map<String, dynamic>.from(j['plane'] as Map)) : PlaneInfo.none,
       );
 }
 

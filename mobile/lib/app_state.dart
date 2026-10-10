@@ -630,10 +630,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   void _onFeatures(Map<String, dynamic> msg) {
     final pcId = '${msg['pc_id']}';
     if (pcId.isEmpty) return;
+    final hadPlane = _features[pcId]?.plane.configured ?? false;
+    if (msg['ok'] != false && msg['plane'] is Map && (msg['plane'] as Map)['configured'] == true && !hadPlane) {
+      Timer(const Duration(milliseconds: 300), refreshMine);
+    }
     if (msg['ok'] == false && _features.containsKey(pcId)) {
       // Keep what was known; the error shows on the list.
       final old = _features[pcId]!;
-      _features[pcId] = FeaturesData(features: old.features, selfCheck: old.selfCheck, reviewCheck: old.reviewCheck, error: '${msg['error'] ?? ''}', ts: old.ts, workspaces: old.workspaces, roles: old.roles, apps: old.apps, roleNames: old.roleNames, warning: old.warning);
+      _features[pcId] = FeaturesData(features: old.features, selfCheck: old.selfCheck, reviewCheck: old.reviewCheck, error: '${msg['error'] ?? ''}', ts: old.ts, workspaces: old.workspaces, roles: old.roles, apps: old.apps, roleNames: old.roleNames, warning: old.warning, plane: old.plane);
     } else {
       _features[pcId] = FeaturesData.fromJson(msg);
     }
@@ -738,6 +742,65 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final r = await policy(pcId, 'new_feature', {'workspace': workspace, 'app': app, 'slug': slug, 'light': light});
     if (r['ok'] == true) Timer(const Duration(milliseconds: 600), refreshFeatures);
     return r;
+  }
+
+  // ---- Plane (v2.1) ----
+
+  final Map<String, List<MineItem>> _mine = <String, List<MineItem>>{};
+
+  List<MineItem> mineOf(String pcId) => _mine[pcId] ?? const <MineItem>[];
+
+  /// Everything assigned to me in Plane, across PCs.
+  List<(String, MineItem)> get allMine => [for (final e in _mine.entries) for (final m in e.value) (e.key, m)];
+
+  /// Signs in with a Plane personal token on every PC that has Plane; the
+  /// PC remembers this phone as that person. Returns the display name.
+  Future<String> planeSignin(String token) async {
+    String name = '';
+    String error = '';
+    for (final pc in pcs) {
+      if (!(featuresOf(pc.id)?.plane.configured ?? false)) continue;
+      final r = await policy(pc.id, 'plane_signin', {'token': token});
+      if (r['ok'] == true) {
+        name = '${(r['me'] as Map?)?['display'] ?? ''}';
+      } else {
+        error = '${r['error'] ?? ''}';
+      }
+    }
+    if (name.isEmpty) throw StateError(error.isEmpty ? 'No PC has Plane connected yet (console → PLANE)' : error);
+    if (name != settings.signerName) await updateSettings(settings.copyWith(signerName: name));
+    unawaited(refreshMine());
+    unawaited(refreshFeatures());
+    return name;
+  }
+
+  Future<void> refreshMine() async {
+    for (final pc in pcs) {
+      if (!(featuresOf(pc.id)?.plane.configured ?? false)) continue;
+      final r = await policy(pc.id, 'plane_mine', {});
+      if (r['ok'] == true && r['items'] is List) {
+        _mine[pc.id] = [for (final i in r['items'] as List) if (i is Map) MineItem.fromJson(Map<String, dynamic>.from(i))];
+      } else {
+        _mine.remove(pc.id);
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<List<PlaneTask>> planeTasks(String pcId, TorchFeature f, int n) async {
+    final r = await policy(pcId, 'plane_tasks', {'feature': f.key, 'workspace': f.workspace, 'n': n});
+    if (r['ok'] != true) throw StateError('${r['error'] ?? 'Could not read the tasks'}');
+    return [for (final t in (r['tasks'] as List? ?? const [])) if (t is Map) PlaneTask.fromJson(Map<String, dynamic>.from(t))];
+  }
+
+  Future<String> planeTaskAdd(String pcId, TorchFeature f, int n, String name) async {
+    final r = await policy(pcId, 'plane_task_add', {'feature': f.key, 'workspace': f.workspace, 'n': n, 'name': name});
+    return r['ok'] == true ? '' : '${r['error'] ?? 'Could not add it'}';
+  }
+
+  Future<String> planeTaskDone(String pcId, String id, bool done) async {
+    final r = await policy(pcId, 'plane_task_done', {'id': id, 'done': done});
+    return r['ok'] == true ? '' : '${r['error'] ?? 'Could not change it'}';
   }
 
   /// Removes a signature from a gate (v1.9): precisely, even one made by hand.
