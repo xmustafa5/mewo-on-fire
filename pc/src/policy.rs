@@ -475,7 +475,8 @@ fn signature_table(lines: &[&str]) -> Option<(Vec<String>, Vec<String>, usize, u
         }
         let row_i = i + 2;
         let mut row = cells(lines.get(row_i).copied().unwrap_or(""));
-        if row.is_empty() {
+        // A row of another shape is not this table's.
+        if row.is_empty() || row.len() > head.len() {
             row = vec![String::new(); head.len()];
         }
         while row.len() < head.len() {
@@ -1387,6 +1388,7 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
     let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
     let (a, b) = gate_range(&refs, gate_id);
     let date = today();
+    let mut ticked: Vec<usize> = Vec::new();
     if gate_id == "plan" {
         let mut done = false;
         for l in lines.iter_mut() {
@@ -1401,13 +1403,14 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
             return Err("The plan has no 'Reviewed by tech lead' row".to_string());
         }
     } else {
-        // Tick the confirmed items (never untick).
+        // Tick the confirmed items (never untick), remembering which.
         let boxes = checkboxes(&refs[a..b]);
-        for (i, (line, _, _)) in boxes.iter().enumerate() {
-            if checks.get(i).copied().unwrap_or(false) {
+        for (i, (line, _, checked)) in boxes.iter().enumerate() {
+            if checks.get(i).copied().unwrap_or(false) && !checked {
                 let l = &mut lines[a + line];
                 if let Some(pos) = l.find("- [ ]") {
                     l.replace_range(pos..pos + 5, "- [x]");
+                    ticked.push(i);
                 }
             }
         }
@@ -1440,7 +1443,7 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
     invalidate();
     let commit = commit_files(ws, &f.branch, &[gate.file.clone()], &format!("{}: signed by {name} ({role})", gate.title));
     let committed = commit.is_ok();
-    crate::flow::journal(ws, key, "sign", &format!("{} signed by {name} ({role})", gate.title), vec![gate.file.clone()], commit.as_deref().unwrap_or(""), true, json!({"gate": gate_id, "role": role}));
+    crate::flow::journal(ws, key, "sign", &format!("{} signed by {name} ({role})", gate.title), vec![gate.file.clone()], commit.as_deref().unwrap_or(""), true, json!({"gate": gate_id, "role": role, "ticked": ticked}));
     let blocked = git_blocked();
     let fresh = find_feature(ws, key).and_then(|f| f.gates.into_iter().find(|g| g.id == gate_id));
     Ok(json!({
@@ -1450,6 +1453,71 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
         "signed": fresh.as_ref().map(|g| g.signed).unwrap_or(false),
         "note": if committed { String::new() } else if blocked { format!("Written to {}, not committed: {}", gate.file, FOLDER_ACCESS_HINT) } else { format!("Written to {}. torch-main is not on {}, so it is not committed.", gate.file, f.branch) },
     }))
+}
+
+/// Removes a signature: the role's name out of the table (and the date
+/// when nobody is left), the items in `untick` back to open. With no
+/// table and no `untick`, every item of the gate goes back to open.
+pub fn unsign(ws: &Path, key: &str, gate_id: &str, role: &str, untick: &[usize]) -> Result<Value, String> {
+    let f = find_feature(ws, key).ok_or_else(|| format!("No feature {key} in this workspace"))?;
+    let gate = f.gates.iter().find(|g| g.id == gate_id).ok_or_else(|| format!("No gate {gate_id}"))?;
+    let path = ws.join(&gate.file);
+    let text = fs::read_to_string(&path).map_err(|_| format!("{} is missing", gate.file))?;
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let (a, b) = gate_range(&refs, gate_id);
+    let mut changed = false;
+    if gate_id == "plan" {
+        for l in lines.iter_mut() {
+            let c = cells(l);
+            if c.len() >= 2 && c[0].eq_ignore_ascii_case("reviewed by tech lead") && !clean(&c[1]).is_empty() {
+                *l = "| Reviewed by tech lead | {name}, {date} |".to_string();
+                changed = true;
+            }
+        }
+    } else {
+        let boxes = checkboxes(&refs[a..b]);
+        let table = signature_table(&refs[a..b]);
+        let all_items = untick.is_empty() && table.is_none();
+        for (i, (line, _, checked)) in boxes.iter().enumerate() {
+            if *checked && (all_items || untick.contains(&i)) {
+                let l = &mut lines[a + line];
+                if let Some(pos) = l.find("- [x]").or_else(|| l.find("- [X]")) {
+                    l.replace_range(pos..pos + 5, "- [ ]");
+                    changed = true;
+                }
+            }
+        }
+        if let Some((head, mut row, _, row_i)) = table {
+            if let Some(col) = head.iter().position(|h| h.eq_ignore_ascii_case(role)) {
+                if !clean(&row[col]).is_empty() {
+                    row[col] = String::new();
+                    changed = true;
+                }
+                let anyone = head.iter().zip(row.iter()).any(|(h, v)| !h.eq_ignore_ascii_case("date") && !clean(v).is_empty());
+                if !anyone {
+                    if let Some(dc) = head.iter().position(|h| h.eq_ignore_ascii_case("date")) {
+                        row[dc] = String::new();
+                    }
+                }
+                let target = a + row_i;
+                if target < lines.len() {
+                    lines[target] = format!("| {} |", row.join(" | "));
+                }
+            } else if !role.is_empty() {
+                return Err(format!("This record has no '{role}' column"));
+            }
+        }
+    }
+    if !changed {
+        return Err("Nothing to remove: that signature is not in the record".to_string());
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    fs::write(&path, out).map_err(|e| format!("Could not write {}: {e}", gate.file))?;
+    invalidate();
+    let commit = commit_files(ws, &f.branch, &[gate.file.clone()], &format!("{}: signature of {} removed", gate.title, if role.is_empty() { "the items" } else { role }));
+    Ok(json!({"ok": true, "file": gate.file, "committed": commit.is_ok(), "note": commit.err().unwrap_or_default()}))
 }
 
 /// Sets a session's status (and optional pull request link) in the plan's
@@ -1463,6 +1531,7 @@ pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> 
     let mut in_order = false;
     let mut in_session = false;
     let mut changed = false;
+    let mut prev = String::new();
     for l in lines.iter_mut() {
         if l.starts_with("## ") {
             in_order = l[3..].trim().eq_ignore_ascii_case("order");
@@ -1472,6 +1541,7 @@ pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> 
         if in_order {
             let mut c = cells(l);
             if c.len() >= 7 && c[0].parse::<u32>().ok() == Some(n) {
+                prev = c[6].clone();
                 c[6] = status.to_string();
                 *l = format!("| {} |", c.join(" | "));
                 changed = true;
@@ -1488,7 +1558,7 @@ pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> 
     let mut out = lines.join("\n");
     out.push('\n');
     fs::write(&path, out).map_err(|e| e.to_string())?;
-    crate::flow::journal(ws, key, "plan_status", &format!("Session {n}: {status}"), vec![plan.file.clone()], "", true, json!({"n": n, "status": status}));
+    crate::flow::journal(ws, key, "plan_status", &format!("Session {n}: {status}"), vec![plan.file.clone()], "", true, json!({"n": n, "status": status, "prev": prev}));
     invalidate();
     Ok(json!({"ok": true, "file": plan.file}))
 }

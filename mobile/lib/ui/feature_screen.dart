@@ -98,6 +98,25 @@ class _FeatureScreenState extends State<FeatureScreen> {
     }
   }
 
+  Future<void> _unsign(TorchFeature f, TorchGate g, String role) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(role.isEmpty ? 'Untick the items?' : 'Remove the signature?'),
+        content: Text(role.isEmpty ? 'Every item of ${g.title} goes back to open.' : 'The signature of $role comes out of ${g.title}; the items it ticked go back to open.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(role.isEmpty ? 'Untick' : 'Remove')),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    HapticFeedback.mediumImpact();
+    final e = await _state.unsign(widget.pcId, f, g, role);
+    if (!mounted) return;
+    _toast(e.isEmpty ? (role.isEmpty ? 'Items unticked' : 'Signature of $role removed') : e);
+  }
+
   Future<void> _ask(TorchFeature f, TorchGate g) async {
     final role = g.openRoles.isNotEmpty ? g.openRoles.first : '';
     final error = await _state.requestSign(widget.pcId, f, g, role);
@@ -246,6 +265,7 @@ class _FeatureScreenState extends State<FeatureScreen> {
         gate: g,
         onSign: g.signed || !g.present ? null : () => showSignSheet(context, pcId: widget.pcId, feature: f, gate: g),
         onAsk: g.signed || !g.present ? null : () => _ask(f, g),
+        onUnsign: (role) => _unsign(f, g, role),
       )));
     }
 
@@ -516,11 +536,12 @@ class _SessionRow extends StatelessWidget {
 }
 
 class _GateCard extends StatelessWidget {
-  const _GateCard({required this.gate, required this.onSign, required this.onAsk});
+  const _GateCard({required this.gate, required this.onSign, required this.onAsk, required this.onUnsign});
 
   final TorchGate gate;
   final VoidCallback? onSign;
   final VoidCallback? onAsk;
+  final void Function(String role) onUnsign;
 
   @override
   Widget build(BuildContext context) {
@@ -556,8 +577,40 @@ class _GateCard extends StatelessWidget {
                 ),
                 if (signed.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(top: 3),
-                    child: Text('Signed by ${signed.join(', ')}${g.date.isNotEmpty ? ' · ${g.date}' : ''}', style: t.labelSmall?.copyWith(color: Ember.ok)),
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        for (final e in g.signatures.entries)
+                          PressScale(
+                            onTap: () => onUnsign(e.key),
+                            child: Container(
+                              padding: const EdgeInsets.fromLTRB(9, 4, 6, 4),
+                              decoration: BoxDecoration(
+                                color: Ember.ok.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(color: Ember.ok.withValues(alpha: 0.4)),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text('${e.value} · ${e.key}', style: t.labelSmall?.copyWith(color: Ember.ok, fontSize: 11)),
+                                  const SizedBox(width: 4),
+                                  const Icon(Icons.close_rounded, size: 13, color: Ember.ok),
+                                ],
+                              ),
+                            ),
+                          ),
+                        if (g.date.isNotEmpty) Text(g.date, style: t.labelSmall?.copyWith(color: Ember.text3)),
+                      ],
+                    ),
+                  )
+                else if (g.signed && g.items.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: _MiniButton(icon: Icons.undo_rounded, label: 'Untick all', color: Ember.text2, onTap: () => onUnsign('')),
                   ),
                 if (onSign != null)
                   Padding(

@@ -586,6 +586,34 @@ pub fn rollback(ws: &Path, f: &Feature, id: u64) -> Result<Value, String> {
     }
     let mut notes: Vec<String> = Vec::new();
     match entry.kind.as_str() {
+        // Signatures, UAT rows and plan statuses come out precisely, so a
+        // later write on the same line does not stand in the way.
+        "sign" => {
+            let gate = entry.data.get("gate").and_then(Value::as_str).unwrap_or("");
+            let role = entry.data.get("role").and_then(Value::as_str).unwrap_or("");
+            let ticked: Vec<usize> = entry.data.get("ticked").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|n| n as usize).collect()).unwrap_or_default();
+            let r = policy::unsign(ws, &f.key, gate, role, &ticked)?;
+            notes.push(format!("Signature of {role} removed{}", if r.get("committed").and_then(Value::as_bool).unwrap_or(false) { ", committed" } else { "" }));
+        }
+        "uat" => {
+            let user = entry.data.get("user").and_then(Value::as_str).unwrap_or("");
+            let r = uat_remove(ws, f, user)?;
+            notes.push(format!("UAT row of {user} removed: {} / {} unaided", r.get("unaided").and_then(Value::as_u64).unwrap_or(0), r.get("total").and_then(Value::as_u64).unwrap_or(0)));
+        }
+        "plan_status" => {
+            let n = entry.data.get("n").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let prev = entry.data.get("prev").and_then(Value::as_str).filter(|p| !p.is_empty()).unwrap_or("Not started");
+            policy::set_plan_status(ws, &f.key, n, prev, "")?;
+            // That write journals itself; drop that entry so the history stays readable.
+            update(ws, &f.key, |st| {
+                if let Some(last) = st.history.last() {
+                    if last.kind == "plan_status" && last.id != id {
+                        st.history.pop();
+                    }
+                }
+            });
+            notes.push(format!("Session {n} back to {prev}"));
+        }
         "new_feature" => {
             let branch = entry.data.get("branch").and_then(Value::as_str).unwrap_or("").to_string();
             let dir = entry.data.get("dir").and_then(Value::as_str).unwrap_or("").to_string();
@@ -978,6 +1006,82 @@ pub fn uat_user(ws: &Path, f: &Feature, user: &str, role: &str, unaided: bool, n
     journal(ws, &f.key, "uat", &format!("UAT result for {}", user.trim()), vec![format!("{}/RELEASE.md", f.dir)], &if why.is_empty() { head(ws) } else { String::new() }, true, json!({"user": user.trim()}));
     policy::invalidate();
     Ok(json!({"ok": true, "total": total, "unaided": unaided_n, "percent": pct, "pass": total >= 5 && pct >= 80, "committed": why.is_empty(), "note": why}))
+}
+
+/// Takes a user's row out of RELEASE.md's UAT table and recomputes the bar.
+fn uat_remove(ws: &Path, f: &Feature, user: &str) -> Result<Value, String> {
+    let path = ws.join(&f.dir).join("RELEASE.md");
+    let text = fs::read_to_string(&path).map_err(|_| "No RELEASE.md for this feature".to_string())?;
+    let lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut a = None;
+    let mut b = lines.len();
+    for (i, l) in lines.iter().enumerate() {
+        if l.starts_with("## ") {
+            if a.is_some() {
+                b = i;
+                break;
+            }
+            if l[3..].trim().to_ascii_lowercase().starts_with("uat") {
+                a = Some(i + 1);
+            }
+        }
+    }
+    let Some(a) = a else { return Err("RELEASE.md has no UAT section".to_string()) };
+    let Some(h) = (a..b).find(|i| lines[*i].trim().starts_with("| #")) else { return Err("RELEASE.md has no UAT table".to_string()) };
+    let mut rows_end = h + 2;
+    while rows_end < b && lines[rows_end].trim().starts_with('|') {
+        rows_end += 1;
+    }
+    let mut users: Vec<(String, String, bool, String)> = Vec::new();
+    for l in &lines[h + 2..rows_end] {
+        let c: Vec<String> = l.trim().trim_matches('|').split('|').map(|x| x.trim().to_string()).collect();
+        if c.len() >= 4 && !c[1].is_empty() && !c[1].eq_ignore_ascii_case(user) {
+            users.push((c[1].clone(), c[2].clone(), c[3].to_ascii_lowercase().starts_with('y'), c.get(4).cloned().unwrap_or_default()));
+        }
+    }
+    let total = users.len();
+    let unaided_n = users.iter().filter(|u| u.2).count();
+    let pct = unaided_n * 100 / total.max(1);
+    let mut out: Vec<String> = lines[..h + 2].to_vec();
+    if users.is_empty() {
+        out.push("| 1 | | | | |".to_string());
+    }
+    for (i, u) in users.iter().enumerate() {
+        out.push(format!("| {} | {} | {} | {} | {} |", i + 1, u.0, u.1, if u.2 { "Yes" } else { "No" }, u.3));
+    }
+    for l in &lines[rows_end..] {
+        if l.trim().starts_with("Completed unaided:") {
+            out.push(if total == 0 { "Completed unaided: {n} / {total} = {%}. Pass bar: 80%, with 5 to 8 users.".to_string() } else { format!("Completed unaided: {unaided_n} / {total} = {pct}%. Pass bar: 80%, with 5 to 8 users.") });
+        } else {
+            out.push(l.clone());
+        }
+    }
+    let mut text = out.join("\n");
+    text.push('\n');
+    fs::write(&path, text).map_err(|e| e.to_string())?;
+    let _ = commit_why(ws, &f.branch, &[format!("{}/RELEASE.md", f.dir)], &format!("{}: UAT row of {user} removed", f.key));
+    policy::invalidate();
+    Ok(json!({"ok": true, "total": total, "unaided": unaided_n}))
+}
+
+/// Removes a signature from a gate: through its journal entry when there
+/// is one, else straight from the record (a signature older than the
+/// journal, or made by hand).
+pub fn unsign(ws: &Path, f: &Feature, gate: &str, role: &str) -> Result<Value, String> {
+    let st = get(ws, &f.key);
+    let entry = st.history.iter().rev().find(|j| {
+        j.kind == "sign" && !j.undone && j.data.get("gate").and_then(Value::as_str) == Some(gate) && (role.is_empty() || j.data.get("role").and_then(Value::as_str) == Some(role))
+    });
+    if let Some(e) = entry {
+        return rollback(ws, f, e.id);
+    }
+    if gate == "prd" {
+        return Err(format!("The PRD's signature predates Mewo's journal. Remove {} by hand (and its Register row).", f.prd));
+    }
+    let r = policy::unsign(ws, &f.key, gate, role, &[])?;
+    journal(ws, &f.key, "unsign", &format!("Signature of {} removed from {}", if role.is_empty() { "the items" } else { role }, f.gates.iter().find(|g| g.id == gate).map(|g| g.title.as_str()).unwrap_or(gate)), vec![r.get("file").and_then(Value::as_str).unwrap_or("").to_string()], "", false, json!({"gate": gate, "role": role}));
+    update(ws, &f.key, |st| st.note(format!("Signature removed: {gate} / {role}")));
+    Ok(r)
 }
 
 /// Merges the feature branch into main in torch-main and every fetched

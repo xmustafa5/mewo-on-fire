@@ -740,6 +740,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return r;
   }
 
+  /// Removes a signature from a gate (v1.9): precisely, even one made by hand.
+  Future<String> unsign(String pcId, TorchFeature f, TorchGate g, String role) => _flowCmd(pcId, 'unsign', {'feature': f.key, 'workspace': f.workspace, 'gate': g.id, 'role': role});
+
   /// Rolls back one of the flow's writes (v1.9). Returns the PC's notes.
   Future<Map<String, dynamic>> rollback(String pcId, TorchFeature f, int id) async {
     final r = await policy(pcId, 'rollback', {'feature': f.key, 'workspace': f.workspace, 'id': id});

@@ -709,13 +709,13 @@ function wireFlow(box, f) {
   };
 }
 function gateHtml(f, g) {
-  const sigs = (g.signatures || []).map((s) => `<b>${esc(s.name)}</b> (${esc(s.role)})`).join(', ');
+  const sigs = (g.signatures || []).map((s) => `<b>${esc(s.name)}</b> (${esc(s.role)}) <button class="btn unsign" type="button" data-role="${esc(s.role)}" title="Remove this signature" style="padding:2px 6px;font-size:8.5px">UNSIGN</button>`).join(', ');
   const open = (g.roles || []).filter((r) => !(g.signatures || []).some((s) => s.role === r));
   const items = g.items || [];
   return `<div class="gate" data-gate="${esc(g.id)}">
     <div class="h"><span class="k">${g.checklist ? 'CHECKLIST ' + esc(g.checklist) : 'REVIEW'}</span><span class="t">${esc(g.title)}</span>${g.signed ? '<span class="ok">SIGNED</span>' : g.present ? `<button class="btn sign" type="button">SIGN…</button><button class="btn ask" type="button" title="Notify the phones">ASK</button>` : '<span class="k" style="color:var(--dim2)">NO RECORD FILE</span>'}</div>
     ${items.length ? `<div class="sig">${items.filter((i) => i.checked).length}/${items.length} ITEMS TICKED${g.roles && g.roles.length ? ' · ' : ''}${(g.roles || []).join(' · ').toUpperCase()}</div>` : ''}
-    ${sigs ? `<div class="sig">SIGNED BY ${sigs}${g.date ? ' · ' + esc(g.date) : ''}</div>` : ''}
+    ${sigs ? `<div class="sig">SIGNED BY ${sigs}${g.date ? ' · ' + esc(g.date) : ''}</div>` : g.signed && items.length ? `<div class="sig">ALL ITEMS TICKED <button class="btn unsign" type="button" data-role="" style="padding:2px 6px;font-size:8.5px">UNTICK</button></div>` : ''}
     <form onsubmit="return false">
       ${items.map((it, i) => `<label class="it${it.checked ? ' done' : ''}"><input type="checkbox" data-i="${i}" ${it.checked ? 'checked disabled' : ''}> <span>${esc(it.text)}</span></label>`).join('')}
       ${open.length ? `<div class="roles">${open.map((r, i) => `<button type="button" class="btn role${i === 0 ? ' on' : ''}" data-role="${esc(r)}">${esc(r.toUpperCase())}</button>`).join('')}</div>` : ''}
@@ -775,6 +775,13 @@ function renderFeature() {
   for (const gate of box.querySelectorAll('.gate')) {
     const form = gate.querySelector('form'); const id = gate.dataset.gate; const g = f.gates.find((x) => x.id === id);
     const signBtn = gate.querySelector('button.sign'); if (signBtn) signBtn.onclick = () => { form.classList.add('on'); form.querySelector('.name').focus(); };
+    for (const ub of gate.querySelectorAll('button.unsign')) ub.onclick = async () => {
+      if (!confirm(`Remove ${ub.dataset.role ? 'the signature of ' + ub.dataset.role : 'the ticks'} from ${g.title}?`)) return;
+      ub.disabled = true;
+      const r = await daemon({ cmd: 'unsign', feature: f.key, workspace: f.workspace, gate: id, role: ub.dataset.role });
+      if (!r.ok) { alert(r.error || 'Could not remove it'); ub.disabled = false; }
+      setTimeout(refreshFeatures, 500);
+    };
     const askBtn = gate.querySelector('button.ask'); if (askBtn) askBtn.onclick = async () => {
       askBtn.disabled = true; const role = (g.roles || []).find((r) => !(g.signatures || []).some((s) => s.role === r)) || '';
       const r = await daemon({ cmd: 'request_sign', feature: f.key, gate: id, role, name: signerName }); askBtn.textContent = r.ok ? 'ASKED' : 'FAILED';

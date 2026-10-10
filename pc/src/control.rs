@@ -251,7 +251,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
         // v1.7 (TORCH policy): signatures, plan status, the self-check scan,
         // starting a planned session, asking for a signature.
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -371,6 +371,13 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
             flow::journal(&ws, &key, "estimates_done", "Estimates marked as in the PRD", Vec::new(), "", true, Value::Null);
             json!({"ok": true})
         }
+        "unsign" => match state.feature(&ws, &key) {
+            Some(f) => match flow::unsign(&ws, &f, &s("gate"), &s("role")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
         "rollback" => match state.feature(&ws, &key) {
             Some(f) => match flow::rollback(&ws, &f, req.get("id").and_then(Value::as_u64).unwrap_or(0)) {
                 Ok(v) => v,
