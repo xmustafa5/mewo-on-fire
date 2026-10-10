@@ -740,6 +740,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return r;
   }
 
+  /// Rolls back one of the flow's writes (v1.9). Returns the PC's notes.
+  Future<Map<String, dynamic>> rollback(String pcId, TorchFeature f, int id) async {
+    final r = await policy(pcId, 'rollback', {'feature': f.key, 'workspace': f.workspace, 'id': id});
+    Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return r;
+  }
+
   /// Claims a role for the signer of this phone (the PC fills in the phone).
   Future<String> setRole(String pcId, String workspace, String role, String name) => _flowCmd(pcId, 'set_role', {'workspace': workspace, 'role': role, 'name': name, 'phone': ''});
 

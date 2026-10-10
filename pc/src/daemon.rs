@@ -171,6 +171,7 @@ impl AppState {
                     "log": st.log,
                     "released_at": st.released_at,
                     "closed_at": st.closed_at,
+                    "history": st.history.iter().rev().take(30).collect::<Vec<_>>(),
                     "action": action,
                 }),
             );
@@ -255,10 +256,12 @@ impl AppState {
                             let _ = policy::set_plan_status(ws, &f.key, a.session, "In progress", "");
                         }
                         let note = if a.kind == "start" { a.session.to_string() } else { f.prd.clone() };
+                        let started = now_ms();
                         flow::update(ws, &f.key, |st| {
-                            st.runs.push(flow::Run { step: a.step, started: now_ms(), note });
+                            st.runs.push(flow::Run { step: a.step, started, note });
                             st.note(format!("Started: {}", a.title));
                         });
+                        flow::journal(ws, &f.key, &a.kind, &format!("Started: {}", a.title), Vec::new(), "", true, json!({"started": started, "session": a.session, "step": a.step}));
                         json!({"ok": true, "did": a.kind, "title": a.title})
                     }
                     Err(e) => json!({"ok": false, "error": e}),

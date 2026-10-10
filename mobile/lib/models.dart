@@ -1114,9 +1114,34 @@ class FlowEstimate {
   final String assumptions;
 }
 
+/// One write the flow made, and whether it can be rolled back (v1.9).
+class FlowJournal {
+  const FlowJournal({required this.id, required this.ts, required this.kind, required this.title, required this.commit, required this.files, required this.undoable, required this.undone});
+  final int id;
+  final int ts;
+  final String kind;
+  final String title;
+  final String commit;
+  final List<String> files;
+  final bool undoable;
+  final bool undone;
+
+  factory FlowJournal.fromJson(Map<String, dynamic> j) => FlowJournal(
+        id: _asInt(j['id']),
+        ts: _asInt(j['ts']),
+        kind: _asString(j['kind']),
+        title: _asString(j['title']),
+        commit: _asString(j['commit']),
+        files: _asStringList(j['files']),
+        undoable: j['undoable'] == true,
+        undone: j['undone'] == true,
+      );
+}
+
 /// The flow runner's state for a feature (v1.8).
 class FlowInfo {
-  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action});
+  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action, this.history = const <FlowJournal>[]});
+  final List<FlowJournal> history;
   final bool autopilot;
   final List<FlowEstimate> estimates;
   final bool estimatesDone;
@@ -1143,6 +1168,11 @@ class FlowInfo {
         releasedAt: _asInt(j['released_at']),
         closedAt: _asInt(j['closed_at']),
         action: j['action'] is Map ? FlowAction.fromJson(Map<String, dynamic>.from(j['action'] as Map)) : FlowAction.empty,
+        history: [
+          if (j['history'] is List)
+            for (final h in j['history'] as List)
+              if (h is Map) FlowJournal.fromJson(Map<String, dynamic>.from(h)),
+        ],
       );
 }
 

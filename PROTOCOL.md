@@ -679,3 +679,20 @@ Frames and control commands, all answered as `<name>_result`:
 - `set_role {workspace, role, name, phone}`: a row of `context/roles.md`;
   from a phone, an empty `phone` means that phone.
 
+## Rollback (v1.9)
+
+Every write the flow makes lands in the feature's journal, `flow.history`
+(newest first): `{id, ts, kind, title, files, commit, undoable, undone}`.
+`kind` is `sign`, `prd`, `release`, `export`, `uat`, `estimate`,
+`estimates_done`, `plan_status`, `run`, `start`, `new_feature` or
+`close`; `commit` is the hash when the write was committed.
+
+`rollback {feature, workspace, id}` → `rollback_result {ok, notes,
+error}`: a committed entry is reverted with `git revert` on the feature
+branch (a conflict is reported, nothing is forced); an uncommitted one
+has its files restored from their last commit, or removed when they were
+new; a `run` or `start` is forgotten so the flow offers the step again;
+an `estimate` is dropped; `estimates_done` and `release` are unset; a
+`new_feature` whose branch holds nothing but its start commit is
+deleted with its folder. `close` (merged branches) is not undoable.
+

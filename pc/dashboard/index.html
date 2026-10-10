@@ -750,7 +750,19 @@ function renderFeature() {
   if (f.handoff_files && f.handoff_files.length) {
     h.push(`<div class="sec"><span>HANDOFF · ${f.handoff_files.length} FILE${f.handoff_files.length > 1 ? 'S' : ''}</span></div><div class="files">${f.handoff_files.map((x) => `<button class="btn hf" type="button" data-file="${esc(x)}">${esc(x)}</button>`).join('')}</div>`);
   }
+  const hist = ((f.flow || {}).history || []);
+  if (hist.length) {
+    h.push(`<div class="sec"><span>HISTORY · WHAT MEWO WROTE</span><span>ROLL BACK REVERTS THE ENTRY'S COMMIT</span></div>`);
+    for (const j of hist.slice(0, 12)) h.push(`<div class="srow" style="grid-template-columns:52px 1fr auto"><div class="n" style="font-size:10px">${hm(j.ts)}</div><div><div class="g" style="${j.undone ? 'text-decoration:line-through;color:var(--dim)' : ''}">${esc(j.title)}</div><div class="i">${esc((j.kind || '').toUpperCase())}${j.commit ? ' · ' + esc(j.commit.slice(0, 7)) : j.files && j.files.length ? ' · NOT COMMITTED' : ''}${j.undone ? ' · ROLLED BACK' : ''}</div></div><div class="a">${j.undoable && !j.undone ? `<button class="btn rb" type="button" data-id="${j.id}">ROLL BACK</button>` : ''}</div></div>`);
+  }
   box.innerHTML = h.join('');
+  for (const b of box.querySelectorAll('button.rb')) b.onclick = async () => {
+    if (!confirm('Roll back this entry? Its commit is reverted on the feature branch.')) return;
+    b.disabled = true; b.textContent = 'ROLLING BACK…';
+    const r = await daemon({ cmd: 'rollback', feature: f.key, workspace: f.workspace, id: +b.dataset.id });
+    if (!r.ok) { alert(r.error || 'Could not roll it back'); b.disabled = false; b.textContent = 'ROLL BACK'; }
+    setTimeout(refreshFeatures, 500);
+  };
   wireFlow(box, f);
   for (const b of box.querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
   for (const b of box.querySelectorAll('button.start')) b.onclick = async () => {

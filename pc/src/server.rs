@@ -391,7 +391,7 @@ async fn handle_frame(
             send_json(sink, &v).await
         }
         "sign" | "plan_status" | "start_session" | "request_sign" | "get_scan" | "set_check"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" => handle_policy(state, device, sink, &msg).await,
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" => handle_policy(state, device, sink, &msg).await,
         _ => Ok(()),
     }
 }

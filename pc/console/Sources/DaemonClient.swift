@@ -143,7 +143,7 @@ enum DaemonClient {
   /// A control request from the page, to this daemon (not a legacy one):
   /// the pipeline view's commands only.
   static func forward(_ req: [String: Any]) -> [String: Any] {
-    let allowed = ["features", "sign", "plan_status", "scan", "set_check", "start_session", "request_sign", "flow_next", "flow_set", "estimate", "estimates_done", "export_handoff", "uat_user", "release", "close_branches", "new_feature", "set_role"]
+    let allowed = ["features", "sign", "plan_status", "scan", "set_check", "start_session", "request_sign", "flow_next", "flow_set", "estimate", "estimates_done", "export_handoff", "uat_user", "release", "close_branches", "new_feature", "set_role", "rollback"]
     guard let cmd = req["cmd"] as? String, allowed.contains(cmd) else { return ["ok": false, "error": "not a console command"] }
     for c in candidates where !c.legacy && FileManager.default.fileExists(atPath: c.path) {
       if let r = try? request(at: c.path, req, timeout: 20) { return r }

@@ -43,11 +43,32 @@ pub struct Estimate {
     pub ts: u64,
 }
 
+/// One write the flow made (v1.9), so it can be rolled back: the files,
+/// the commit when there was one, and what else to undo.
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct Journal {
+    pub id: u64,
+    pub ts: u64,
+    /// `sign`, `prd`, `release`, `export`, `uat`, `estimate`,
+    /// `estimates_done`, `plan_status`, `run`, `start`, `ask`,
+    /// `new_feature`, `close`.
+    pub kind: String,
+    pub title: String,
+    /// Workspace-relative.
+    pub files: Vec<String>,
+    pub commit: String,
+    pub undoable: bool,
+    pub undone: bool,
+    pub data: Value,
+}
+
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 #[serde(default)]
 pub struct FlowState {
     pub autopilot: bool,
     pub runs: Vec<Run>,
+    pub history: Vec<Journal>,
     /// `gate|role` → when it was asked for.
     pub asked: HashMap<String, u64>,
     pub estimates: Vec<Estimate>,
@@ -529,21 +550,145 @@ fn commit(ws: &Path, branch: &str, files: &[String], message: &str) -> bool {
 
 /// Commits the files on the feature branch; the reason when it did not.
 fn commit_why(ws: &Path, branch: &str, files: &[String], message: &str) -> String {
-    let on = policy::branch_of(&ws.to_string_lossy());
-    if on != branch {
-        return format!("torch-main is on '{}', not {branch}", if on.is_empty() { "?" } else { &on });
+    match policy::commit_files(ws, branch, files, message) {
+        Ok(_) => String::new(),
+        Err(e) => e,
     }
-    let mut args: Vec<&str> = vec!["add", "--"];
-    args.extend(files.iter().map(String::as_str));
-    if policy::git(ws, &args).is_none() {
-        return if policy::git_blocked() { policy::FOLDER_ACCESS_HINT.to_string() } else { "git add failed".to_string() };
+}
+
+/// The commit just made, or "" (for the journal).
+fn head(ws: &Path) -> String {
+    policy::git(ws, &["rev-parse", "HEAD"]).unwrap_or_default()
+}
+
+/// Records a write in the feature's journal. Returns its id.
+pub fn journal(ws: &Path, key: &str, kind: &str, title: &str, files: Vec<String>, commit: &str, undoable: bool, data: Value) -> u64 {
+    let id = now_ms();
+    update(ws, key, |st| {
+        st.history.push(Journal { id, ts: id, kind: kind.to_string(), title: title.to_string(), files, commit: commit.to_string(), undoable, undone: false, data });
+        while st.history.len() > 60 {
+            st.history.remove(0);
+        }
+    });
+    id
+}
+
+/// Undoes one journal entry: reverts its commit (or restores the files
+/// when it was never committed) and the flow state it changed.
+pub fn rollback(ws: &Path, f: &Feature, id: u64) -> Result<Value, String> {
+    let st = get(ws, &f.key);
+    let entry = st.history.iter().find(|j| j.id == id).cloned().ok_or_else(|| "No such entry".to_string())?;
+    if entry.undone {
+        return Err("Already rolled back".to_string());
     }
-    let mut args: Vec<&str> = vec!["commit", "-q", "-m", message, "--"];
-    args.extend(files.iter().map(String::as_str));
-    if policy::git(ws, &args).is_none() {
-        return if policy::git_blocked() { policy::FOLDER_ACCESS_HINT.to_string() } else { "git commit failed (nothing to commit, or no git identity)".to_string() };
+    if !entry.undoable {
+        return Err(format!("{} cannot be rolled back by Mewo", entry.title));
     }
-    String::new()
+    let mut notes: Vec<String> = Vec::new();
+    match entry.kind.as_str() {
+        "new_feature" => {
+            let branch = entry.data.get("branch").and_then(Value::as_str).unwrap_or("").to_string();
+            let dir = entry.data.get("dir").and_then(Value::as_str).unwrap_or("").to_string();
+            if branch.is_empty() || dir.is_empty() {
+                return Err("The entry has no branch to remove".to_string());
+            }
+            let main = ["main", "master"].into_iter().find(|b| policy::git(ws, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]).is_some()).ok_or_else(|| "No main branch".to_string())?;
+            let base = entry.data.get("base").and_then(Value::as_str).filter(|b| !b.is_empty()).map(str::to_string).unwrap_or_else(|| main.to_string());
+            let extra: u32 = policy::git(ws, &["rev-list", "--count", &format!("{base}..{branch}")]).and_then(|s| s.trim().parse().ok()).unwrap_or(99);
+            if extra > 1 {
+                return Err(format!("{branch} has {extra} commits since it started; only a branch with just its start commit is removed. Delete it by hand."));
+            }
+            // Back to where the branch started: the branch it came from, else main.
+            let back = policy::git(ws, &["branch", "--format=%(refname:short)", "--contains", &base]).unwrap_or_default().lines().map(str::trim).find(|b| !b.is_empty() && *b != branch).map(str::to_string).unwrap_or_else(|| main.to_string());
+            if policy::branch_of(&ws.to_string_lossy()) == branch {
+                if policy::git(ws, &["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"]).map(|s| !s.is_empty()).unwrap_or(true) {
+                    return Err("torch-main has uncommitted changes; commit or stash them first".to_string());
+                }
+                policy::git(ws, &["switch", &back]).ok_or_else(|| format!("Could not switch torch-main to {back}"))?;
+            }
+            if policy::git(ws, &["branch", "-D", &branch]).is_none() {
+                return Err(format!("Could not delete {branch} in torch-main"));
+            }
+            let _ = fs::remove_dir_all(ws.join(&dir));
+            notes.push(format!("Removed {branch} and {dir} from torch-main"));
+            if let Some(repos) = entry.data.get("repos").and_then(Value::as_array) {
+                for r in repos.iter().filter_map(Value::as_str) {
+                    let repo = ws.join(r);
+                    let rmain = ["main", "master"].into_iter().find(|b| policy::git(&repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]).is_some());
+                    let Some(rmain) = rmain else { continue };
+                    let extra: u32 = policy::git(&repo, &["rev-list", "--count", &format!("{rmain}..{branch}")]).and_then(|s| s.trim().parse().ok()).unwrap_or(99);
+                    if extra > 0 {
+                        notes.push(format!("{r}: {branch} kept, it has commits"));
+                        continue;
+                    }
+                    if policy::branch_of(&repo.to_string_lossy()) == branch {
+                        let _ = policy::git(&repo, &["switch", rmain]);
+                    }
+                    if policy::git(&repo, &["branch", "-D", &branch]).is_some() {
+                        notes.push(format!("{r}: {branch} removed"));
+                    }
+                }
+            }
+        }
+        _ => {
+            if !entry.commit.is_empty() {
+                // Revert the commit on the feature branch.
+                let on = policy::branch_of(&ws.to_string_lossy());
+                if on != f.branch {
+                    if policy::git(ws, &["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"]).map(|s| !s.is_empty()).unwrap_or(true) {
+                        return Err(format!("torch-main is on '{on}' with uncommitted changes; the entry lives on {}", f.branch));
+                    }
+                    policy::git(ws, &["switch", &f.branch]).ok_or_else(|| format!("Could not switch torch-main to {}", f.branch))?;
+                }
+                if policy::git(ws, &["revert", "--no-edit", &entry.commit]).is_none() {
+                    let _ = policy::git(ws, &["revert", "--abort"]);
+                    return Err("The revert hit a conflict (the files changed since). Roll it back by hand.".to_string());
+                }
+                notes.push(format!("Reverted commit {}", &entry.commit[..entry.commit.len().min(8)]));
+            } else {
+                // Never committed: the files go back to their last commit, or away.
+                for file in &entry.files {
+                    let tracked = policy::git(ws, &["ls-files", "--error-unmatch", "--", file]).is_some();
+                    if tracked {
+                        let _ = policy::git(ws, &["checkout", "--", file]);
+                        notes.push(format!("{file}: back to its last commit"));
+                    } else {
+                        let p = ws.join(file);
+                        if p.is_dir() {
+                            let _ = fs::remove_dir_all(&p);
+                        } else {
+                            let _ = fs::remove_file(&p);
+                        }
+                        notes.push(format!("{file}: removed"));
+                    }
+                }
+            }
+        }
+    }
+    // The flow state the entry changed.
+    let kind = entry.kind.clone();
+    let data = entry.data.clone();
+    update(ws, &f.key, |st| {
+        match kind.as_str() {
+            "estimate" => {
+                let role = data.get("role").and_then(Value::as_str).unwrap_or("");
+                st.estimates.retain(|e| !e.role.eq_ignore_ascii_case(role));
+            }
+            "estimates_done" => st.estimates_done = false,
+            "release" => st.released_at = 0,
+            "run" | "start" => {
+                let started = data.get("started").and_then(Value::as_u64).unwrap_or(0);
+                st.runs.retain(|r| r.started != started);
+            }
+            _ => {}
+        }
+        if let Some(j) = st.history.iter_mut().find(|j| j.id == id) {
+            j.undone = true;
+        }
+        st.note(format!("Rolled back: {}", entry.title));
+    });
+    policy::invalidate();
+    Ok(json!({"ok": true, "notes": notes}))
 }
 
 fn register_path(ws: &Path) -> PathBuf {
@@ -638,6 +783,7 @@ pub fn sign_prd(ws: &Path, f: &Feature, name: &str) -> Result<Value, String> {
         files.push(register_path(ws).strip_prefix(ws).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
     }
     let committed = commit(ws, &f.branch, &files, &format!("{}: PRD V1.0 signed by {name}", f.key));
+    journal(ws, &f.key, "prd", &format!("PRD signed as V1.0 by {name}"), files, &if committed { head(ws) } else { String::new() }, true, json!({"file": new_name}));
     policy::invalidate();
     Ok(json!({"ok": true, "file": new_name, "committed": committed, "register": register.is_ok(), "register_error": register.err().unwrap_or_default()}))
 }
@@ -667,6 +813,7 @@ pub fn release(ws: &Path, f: &Feature, name: &str) -> Result<Value, String> {
         files.push(register_path(ws).strip_prefix(ws).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
     }
     let committed = commit(ws, &f.branch, &files, &format!("{}: released", f.key));
+    journal(ws, &f.key, "release", "Release recorded", files, &if committed { head(ws) } else { String::new() }, true, Value::Null);
     update(ws, &f.key, |s| {
         s.released_at = now_ms();
         s.note(format!("Released; PRD status Released, Register updated{}", if committed { ", committed" } else { "" }));
@@ -747,6 +894,7 @@ pub fn export_handoff(ws: &Path, f: &Feature, sessions: &[Session]) -> Result<Va
     fs::write(handoff.join("README.md"), readme).map_err(|e| e.to_string())?;
     let rel = format!("{}/handoff", f.dir);
     let committed = commit(ws, &f.branch, &[rel.clone()], &format!("{}: handoff exported from the design ({} boards)", f.key, rows.len()));
+    journal(ws, &f.key, "export", &format!("Handoff exported ({} boards)", rows.len()), vec![rel.clone()], &if committed { head(ws) } else { String::new() }, true, Value::Null);
     update(ws, &f.key, |s| s.note(format!("Exported {} boards to handoff/", rows.len())));
     policy::invalidate();
     Ok(json!({"ok": true, "files": rows.iter().map(|(f, _)| f.clone()).collect::<Vec<_>>(), "committed": committed}))
@@ -827,6 +975,7 @@ pub fn uat_user(ws: &Path, f: &Feature, user: &str, role: &str, unaided: bool, n
     text.push('\n');
     fs::write(&path, text).map_err(|e| e.to_string())?;
     let why = commit_why(ws, &f.branch, &[format!("{}/RELEASE.md", f.dir)], &format!("{}: UAT result for {}", f.key, user.trim()));
+    journal(ws, &f.key, "uat", &format!("UAT result for {}", user.trim()), vec![format!("{}/RELEASE.md", f.dir)], &if why.is_empty() { head(ws) } else { String::new() }, true, json!({"user": user.trim()}));
     policy::invalidate();
     Ok(json!({"ok": true, "total": total, "unaided": unaided_n, "percent": pct, "pass": total >= 5 && pct >= 80, "committed": why.is_empty(), "note": why}))
 }
@@ -880,6 +1029,7 @@ pub fn close_branches(ws: &Path, f: &Feature) -> Value {
             s.closed_at = now_ms();
             s.note("Branches merged and closed");
         });
+        journal(ws, &f.key, "close", "Branches merged and closed", Vec::new(), "", false, json!({"repos": results}));
     }
     policy::invalidate();
     json!({"ok": all_ok, "repos": results})
@@ -891,6 +1041,7 @@ pub fn new_feature(ws: &Path, app: &str, slug: &str, light: bool) -> Value {
     if !script.is_file() {
         return json!({"ok": false, "error": "This workspace has no context/scripts/new-feature.sh"});
     }
+    let base = head(ws);
     let bash = ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash"].into_iter().find(|b| Path::new(b).is_file()).unwrap_or("/bin/bash");
     let mut cmd = Command::new(bash);
     cmd.arg(&script).arg(app).arg(slug);
@@ -906,7 +1057,10 @@ pub fn new_feature(ws: &Path, app: &str, slug: &str, light: bool) -> Value {
             if o.status.success() {
                 let key = format!("{app}/{slug}");
                 let dir = format!("app-notebooks/{app}/features/{slug}");
-                let committed = commit(ws, &format!("{}/{app}-{slug}", if light { "fix" } else { "feature" }), &[dir.clone()], &format!("Start {app} {}: {slug}", if light { "fix" } else { "feature" }));
+                let branch = format!("{}/{app}-{slug}", if light { "fix" } else { "feature" });
+                let committed = commit(ws, &branch, &[dir.clone()], &format!("Start {app} {}: {slug}", if light { "fix" } else { "feature" }));
+                let repos: Vec<String> = policy::app_repos(ws).get(app).cloned().unwrap_or_default().into_iter().filter(|r| ws.join(r).join(".git").exists()).collect();
+                journal(ws, &key, "new_feature", &format!("Feature {key} created"), vec![dir.clone()], "", true, json!({"branch": branch, "dir": dir, "repos": repos, "base": base}));
                 json!({"ok": true, "key": key, "output": stdout, "note": stderr, "committed": committed})
             } else if stderr.contains("mapfile") || stderr.contains("syntax error") {
                 // macOS ships bash 3.2; do what the script does.
@@ -953,6 +1107,7 @@ fn new_feature_native(ws: &Path, app: &str, slug: &str, light: bool) -> Value {
             return json!({"ok": false, "error": format!("Branch {branch} already exists in {r}")});
         }
     }
+    let base = head(ws);
     if policy::git(ws, &["switch", "-c", &branch]).is_none() {
         return json!({"ok": false, "error": "Could not create the branch in torch-main"});
     }
@@ -981,7 +1136,9 @@ fn new_feature_native(ws: &Path, app: &str, slug: &str, light: bool) -> Value {
         }
     }
     let dir = format!("app-notebooks/{app}/features/{slug}");
-    let committed = commit(ws, &branch, &[dir.clone()], &format!("Start {app} {prefix}: {slug}"));
+    let why = commit_why(ws, &branch, &[dir.clone()], &format!("Start {app} {prefix}: {slug}"));
+    let committed = why.is_empty();
+    journal(ws, &format!("{app}/{slug}"), "new_feature", &format!("Feature {app}/{slug} created"), vec![dir.clone()], "", true, json!({"branch": branch, "dir": dir, "repos": branched, "base": base}));
     policy::invalidate();
     json!({
         "ok": true,
@@ -989,6 +1146,7 @@ fn new_feature_native(ws: &Path, app: &str, slug: &str, light: bool) -> Value {
         "branch": branch,
         "repos": branched,
         "committed": committed,
+        "note": why,
         "output": format!("Branch {branch} created in torch-main{}. Record folder: {dir}", if branched.is_empty() { String::new() } else { format!(" and in {}", branched.join(", ")) }),
     })
 }

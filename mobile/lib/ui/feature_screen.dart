@@ -74,6 +74,30 @@ class _FeatureScreenState extends State<FeatureScreen> {
     _toast(error.isEmpty ? 'Claude Desktop on ${_state.pcNameFor(widget.pcId)} starts session ${s.n}. It appears under Sessions in a moment.' : error);
   }
 
+  Future<void> _rollback(TorchFeature f, FlowJournal j) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Roll back?'),
+        content: Text('${j.title}\n\n${j.commit.isNotEmpty ? 'Its commit is reverted on ${f.branch}.' : j.files.isNotEmpty ? 'The file goes back to its last commit.' : 'The flow forgets it and offers the step again.'}'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Roll back')),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    HapticFeedback.mediumImpact();
+    final r = await _state.rollback(widget.pcId, f, j.id);
+    if (!mounted) return;
+    if (r['ok'] == true) {
+      final notes = r['notes'] is List ? (r['notes'] as List).map((e) => '$e').join('. ') : '';
+      _toast(notes.isEmpty ? 'Rolled back' : notes);
+    } else {
+      _toast('${r['error'] ?? 'Could not roll it back'}');
+    }
+  }
+
   Future<void> _ask(TorchFeature f, TorchGate g) async {
     final role = g.openRoles.isNotEmpty ? g.openRoles.first : '';
     final error = await _state.requestSign(widget.pcId, f, g, role);
@@ -223,6 +247,14 @@ class _FeatureScreenState extends State<FeatureScreen> {
         onSign: g.signed || !g.present ? null : () => showSignSheet(context, pcId: widget.pcId, feature: f, gate: g),
         onAsk: g.signed || !g.present ? null : () => _ask(f, g),
       )));
+    }
+
+    // History: what Mewo wrote, with roll back.
+    if (f.flow.history.isNotEmpty) {
+      out.add(enter(const SectionLabel('History')));
+      for (final j in f.flow.history.take(12)) {
+        out.add(enter(_JournalRow(entry: j, onRollback: j.undoable && !j.undone ? () => _rollback(f, j) : null)));
+      }
     }
 
     // Handoff.
@@ -706,5 +738,49 @@ class _FlowCard extends StatelessWidget {
     if (ts <= 0) return '';
     final d = DateTime.fromMillisecondsSinceEpoch(ts);
     return '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+/// One of Mewo's writes, with Roll back when it can be undone.
+class _JournalRow extends StatelessWidget {
+  const _JournalRow({required this.entry, required this.onRollback});
+
+  final FlowJournal entry;
+  final VoidCallback? onRollback;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final j = entry;
+    final meta = <String>[
+      j.kind.replaceAll('_', ' '),
+      if (j.commit.isNotEmpty) j.commit.substring(0, j.commit.length < 7 ? j.commit.length : 7) else if (j.files.isNotEmpty) 'not committed',
+      if (j.undone) 'rolled back',
+    ];
+    return GlassCard(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+      radius: 14,
+      fill: Ember.surface2.withValues(alpha: j.undone ? 0.5 : 0.9),
+      child: Row(
+        children: [
+          Text(_FlowCard._clock(j.ts), style: t.labelSmall?.copyWith(color: Ember.text3, fontFamily: Ember.mono(context), fontWeight: FontWeight.w400, letterSpacing: 0)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(j.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: t.bodySmall?.copyWith(color: j.undone ? Ember.text3 : Ember.text, decoration: j.undone ? TextDecoration.lineThrough : null)),
+                Text(meta.join(' · '), style: t.labelSmall?.copyWith(color: Ember.text3)),
+              ],
+            ),
+          ),
+          if (onRollback != null) ...[
+            const SizedBox(width: 8),
+            EmberButton(label: 'Roll back', icon: Icons.undo_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onRollback),
+          ],
+        ],
+      ),
+    );
   }
 }

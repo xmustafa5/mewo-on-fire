@@ -251,7 +251,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
         // v1.7 (TORCH policy): signatures, plan status, the self-check scan,
         // starting a planned session, asking for a signature.
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -360,6 +360,7 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                 st.estimates.push(flow::Estimate { role: role.clone(), name: s("name"), days, assumptions: s("assumptions"), ts: crate::config::now_ms() });
                 st.note(format!("Estimate from {}: {} days", role, days));
             });
+            flow::journal(&ws, &key, "estimate", &format!("Estimate from {role}: {days} days"), Vec::new(), "", true, json!({"role": role}));
             json!({"ok": true, "estimates": st.estimates})
         }
         "estimates_done" => {
@@ -367,8 +368,16 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                 st.estimates_done = true;
                 st.note("Estimates recorded in the PRD");
             });
+            flow::journal(&ws, &key, "estimates_done", "Estimates marked as in the PRD", Vec::new(), "", true, Value::Null);
             json!({"ok": true})
         }
+        "rollback" => match state.feature(&ws, &key) {
+            Some(f) => match flow::rollback(&ws, &f, req.get("id").and_then(Value::as_u64).unwrap_or(0)) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
         "export_handoff" => match state.feature(&ws, &key) {
             Some(f) => match flow::export_handoff(&ws, &f, &state.session_list()) {
                 Ok(v) => v,

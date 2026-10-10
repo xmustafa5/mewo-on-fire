@@ -1352,14 +1352,23 @@ fn gate_range(lines: &[&str], gate_id: &str) -> (usize, usize) {
 }
 
 /// Commits one file of the workspace when it is on the feature's branch.
-fn commit_record(ws: &Path, file: &str, branch: &str, message: &str) -> bool {
-    if branch_of(&ws.to_string_lossy()) != branch {
-        return false;
+/// Commits the files on the feature branch: the commit's hash, or why not.
+pub fn commit_files(ws: &Path, branch: &str, files: &[String], message: &str) -> Result<String, String> {
+    let on = branch_of(&ws.to_string_lossy());
+    if on != branch {
+        return Err(format!("torch-main is on '{}', not {branch}", if on.is_empty() { "?" } else { &on }));
     }
-    if git(ws, &["add", "--", file]).is_none() {
-        return false;
+    let mut args: Vec<&str> = vec!["add", "--"];
+    args.extend(files.iter().map(String::as_str));
+    if git(ws, &args).is_none() {
+        return Err(if git_blocked() { FOLDER_ACCESS_HINT.to_string() } else { "git add failed".to_string() });
     }
-    git(ws, &["commit", "-q", "-m", message, "--", file]).is_some()
+    let mut args: Vec<&str> = vec!["commit", "-q", "-m", message, "--"];
+    args.extend(files.iter().map(String::as_str));
+    if git(ws, &args).is_none() {
+        return Err(if git_blocked() { FOLDER_ACCESS_HINT.to_string() } else { "git commit failed (nothing to commit, or no git identity)".to_string() });
+    }
+    Ok(git(ws, &["rev-parse", "HEAD"]).unwrap_or_default())
 }
 
 /// Signs a gate: ticks the items the signer confirmed (`checks`, by index)
@@ -1429,7 +1438,9 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
     out.push('\n');
     fs::write(&path, out).map_err(|e| format!("Could not write {}: {e}", gate.file))?;
     invalidate();
-    let committed = commit_record(ws, &gate.file, &f.branch, &format!("{}: signed by {name} ({role})", gate.title));
+    let commit = commit_files(ws, &f.branch, &[gate.file.clone()], &format!("{}: signed by {name} ({role})", gate.title));
+    let committed = commit.is_ok();
+    crate::flow::journal(ws, key, "sign", &format!("{} signed by {name} ({role})", gate.title), vec![gate.file.clone()], commit.as_deref().unwrap_or(""), true, json!({"gate": gate_id, "role": role}));
     let blocked = git_blocked();
     let fresh = find_feature(ws, key).and_then(|f| f.gates.into_iter().find(|g| g.id == gate_id));
     Ok(json!({
@@ -1477,6 +1488,7 @@ pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> 
     let mut out = lines.join("\n");
     out.push('\n');
     fs::write(&path, out).map_err(|e| e.to_string())?;
+    crate::flow::journal(ws, key, "plan_status", &format!("Session {n}: {status}"), vec![plan.file.clone()], "", true, json!({"n": n, "status": status}));
     invalidate();
     Ok(json!({"ok": true, "file": plan.file}))
 }
