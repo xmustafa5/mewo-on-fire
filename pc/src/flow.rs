@@ -187,12 +187,7 @@ fn action(kind: &str, step: u8, title: impl Into<String>, detail: impl Into<Stri
 
 /// The app's display name: the notebook's first heading.
 pub fn app_name(ws: &Path, app: &str) -> String {
-    let text = fs::read_to_string(ws.join("app-notebooks").join(app).join("CLAUDE.md")).unwrap_or_default();
-    text.lines()
-        .find_map(|l| l.strip_prefix("# "))
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| app.to_string())
+    policy::app_display(ws, app)
 }
 
 fn feature_words(slug: &str) -> String {
@@ -488,34 +483,11 @@ fn today() -> String {
     policy::today()
 }
 
-/// The feature's newest PRD file and its version.
-fn find_prd(ws: &Path, slug: &str) -> Option<(PathBuf, u32, u32)> {
-    let needle = slug.to_ascii_lowercase().replace('-', "_");
-    let mut found: Vec<(PathBuf, u32, u32)> = Vec::new();
-    fn walk(dir: &Path, depth: u8, needle: &str, out: &mut Vec<(PathBuf, u32, u32)>) {
-        if depth > 6 {
-            return;
-        }
-        let Ok(rd) = fs::read_dir(dir) else { return };
-        for e in rd.flatten() {
-            let p = e.path();
-            let name = e.file_name().to_string_lossy().to_ascii_lowercase();
-            if p.is_dir() {
-                if !name.starts_with('.') && name != "archived" {
-                    walk(&p, depth + 1, needle, out);
-                }
-            } else if name.ends_with(".md") && name.contains(needle) && name.contains("_prd_v") {
-                let ver = name.rsplit("_prd_v").next().unwrap_or("").trim_end_matches(".md");
-                let mut it = ver.split('.');
-                let major = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-                let minor = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-                out.push((p, major, minor));
-            }
-        }
-    }
-    walk(&ws.join("torch-product"), 0, &needle, &mut found);
-    found.sort_by_key(|(_, a, b)| std::cmp::Reverse((*a, *b)));
-    found.into_iter().next()
+/// The feature's PRD file and its version (the plan's, the feature's own,
+/// or the app's).
+fn find_prd(ws: &Path, f: &Feature) -> Option<(PathBuf, u32, u32)> {
+    let named = f.plan.as_ref().map(|p| p.prd.clone()).unwrap_or_default();
+    policy::prd_file(ws, &f.app, &f.slug, &named).map(|(p, a, b, _)| (p, a, b))
 }
 
 fn set_header(lines: &mut [String], key: &str, value: &str) -> bool {
@@ -635,7 +607,7 @@ pub fn sign_prd(ws: &Path, f: &Feature, name: &str) -> Result<Value, String> {
     if name.is_empty() {
         return Err("A name is needed for the signature".to_string());
     }
-    let (path, major, minor) = find_prd(ws, &f.slug).ok_or_else(|| "No PRD file found for this feature".to_string())?;
+    let (path, major, minor) = find_prd(ws, f).ok_or_else(|| "No PRD file found for this feature".to_string())?;
     if major >= 1 {
         return Ok(json!({"ok": true, "already": true, "file": path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()}));
     }
@@ -673,7 +645,7 @@ pub fn sign_prd(ws: &Path, f: &Feature, name: &str) -> Result<Value, String> {
 /// After Checklist K: the PRD's status becomes Released and the Register
 /// says when (policy 10.4).
 pub fn release(ws: &Path, f: &Feature, name: &str) -> Result<Value, String> {
-    let (path, _, _) = find_prd(ws, &f.slug).ok_or_else(|| "No PRD file found for this feature".to_string())?;
+    let (path, _, _) = find_prd(ws, f).ok_or_else(|| "No PRD file found for this feature".to_string())?;
     let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     let date = today();

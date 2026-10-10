@@ -230,9 +230,23 @@ impl AppState {
                 let ws_s = ws.to_string_lossy().into_owned();
                 if a.kind == "run" && policy::branch_of(&ws_s) != f.branch {
                     let clean = policy::git(ws, &["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"]).map(|s| s.is_empty()).unwrap_or(false);
-                    let switched = clean && policy::git(ws, &["switch", &f.branch]).is_some();
+                    if !clean {
+                        return json!({"ok": false, "error": format!("torch-main is on '{}' with uncommitted changes. Commit or stash them, then try again: the session has to run on {}.", policy::branch_of(&ws_s), f.branch)});
+                    }
+                    let exists = policy::git(ws, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}", f.branch)]).is_some();
+                    let switched = if exists {
+                        policy::git(ws, &["switch", &f.branch]).is_some()
+                    } else {
+                        // The feature's folder exists but its branch was never made: make it, as new-feature.sh would.
+                        policy::git(ws, &["switch", "-c", &f.branch]).is_some()
+                    };
                     if !switched {
-                        return json!({"ok": false, "error": format!("torch-main is on '{}' and could not be switched to {} (commit or stash its changes first).", policy::branch_of(&ws_s), f.branch)});
+                        return json!({"ok": false, "error": format!("torch-main is on '{}' and could not be switched to {}.", policy::branch_of(&ws_s), f.branch)});
+                    }
+                    if !exists {
+                        let _ = policy::git(ws, &["add", "--", &f.dir]);
+                        let _ = policy::git(ws, &["commit", "-q", "-m", &format!("Start {} feature: {}", f.app, f.slug), "--", &f.dir]);
+                        flow::update(ws, &f.key, |st| st.note(format!("Created the branch {} in torch-main", f.branch)));
                     }
                 }
                 match desktop::open_new_session(&a.folder, &a.prompt) {

@@ -396,6 +396,9 @@ pub struct Feature {
     pub fetched_repos: Vec<String>,
     pub prd: String,
     pub prd_signed: bool,
+    /// Where the PRD came from: `plan` (named in SESSION_PLAN.md),
+    /// `feature` (named after the feature), `app` (the app's own PRD).
+    pub prd_source: String,
     pub warnings: Vec<String>,
     pub diff_files: u64,
     pub diff_additions: u64,
@@ -786,28 +789,53 @@ fn mtime(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-/// PRD files under `torch-product/` whose name carries the feature's slug.
-fn prd_for(ws: &Path, slug: &str) -> (String, bool) {
-    let needle = slug.to_ascii_lowercase().replace('-', "_");
-    let mut found: Vec<(String, (u32, u32))> = Vec::new();
-    walk_prds(&ws.join("torch-product"), 0, &mut |name| {
-        let lower = name.to_ascii_lowercase();
-        if lower.contains(&needle) && lower.contains("_prd_v") {
-            let ver = lower.rsplit("_prd_v").next().unwrap_or("").trim_end_matches(".md");
-            let mut it = ver.split('.');
-            let major: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            let minor: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            found.push((name.to_string(), (major, minor)));
-        }
-    });
-    found.sort_by_key(|(_, v)| std::cmp::Reverse(*v));
-    match found.first() {
-        Some((name, (major, _))) => (name.clone(), *major >= 1),
-        None => (String::new(), false),
-    }
+/// The app's display name: its notebook's first heading (`# Contact
+/// Center`), else the slug.
+pub fn app_display(ws: &Path, app: &str) -> String {
+    let text = fs::read_to_string(ws.join("app-notebooks").join(app).join("CLAUDE.md")).unwrap_or_default();
+    text.lines()
+        .find_map(|l| l.strip_prefix("# "))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| app.to_string())
 }
 
-fn walk_prds(dir: &Path, depth: u8, f: &mut dyn FnMut(&str)) {
+/// The feature's PRD: `(path, major, minor, source)`. The one the plan
+/// names, else the newest named after the feature
+/// (`{App}_{Feature}_PRD_V…`), else the app's own (`{App}_App_PRD_V…`),
+/// since a full-app PRD covers its features (policy 5.2).
+pub fn prd_file(ws: &Path, app: &str, slug: &str, named: &str) -> Option<(PathBuf, u32, u32, &'static str)> {
+    let mut all: Vec<(PathBuf, String, u32, u32)> = Vec::new();
+    walk_prds(&ws.join("torch-product"), 0, &mut |path| {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if !name.contains("_prd_v") {
+            return;
+        }
+        let ver = name.rsplit("_prd_v").next().unwrap_or("").trim_end_matches(".md");
+        let mut it = ver.split('.');
+        let major: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        all.push((path.to_path_buf(), name, major, minor));
+    });
+    all.sort_by_key(|(_, _, a, b)| std::cmp::Reverse((*a, *b)));
+    let named_l = named.trim().trim_matches('`').to_ascii_lowercase();
+    if !named_l.is_empty() {
+        if let Some((p, _, a, b)) = all.iter().find(|(_, n, _, _)| *n == named_l) {
+            return Some((p.clone(), *a, *b, "plan"));
+        }
+    }
+    let feature_needle = format!("_{}_prd_v", slug.to_ascii_lowercase().replace('-', "_"));
+    if let Some((p, _, a, b)) = all.iter().find(|(_, n, _, _)| n.contains(&feature_needle)) {
+        return Some((p.clone(), *a, *b, "feature"));
+    }
+    let app_needle = format!("{}_app_prd_v", app_display(ws, app).to_ascii_lowercase().replace(' ', "_").replace('&', "and"));
+    if let Some((p, _, a, b)) = all.iter().find(|(_, n, _, _)| n.contains(&app_needle)) {
+        return Some((p.clone(), *a, *b, "app"));
+    }
+    None
+}
+
+fn walk_prds(dir: &Path, depth: u8, f: &mut dyn FnMut(&Path)) {
     if depth > 6 {
         return;
     }
@@ -820,7 +848,7 @@ fn walk_prds(dir: &Path, depth: u8, f: &mut dyn FnMut(&str)) {
                 walk_prds(&p, depth + 1, f);
             }
         } else if name.ends_with(".md") {
-            f(&name);
+            f(&p);
         }
     }
 }
@@ -990,7 +1018,11 @@ fn read_features(ws: &Path) -> Vec<Feature> {
                         .count() as u32
                 })
                 .unwrap_or(0);
-            let (prd, prd_signed) = prd_for(ws, &slug);
+            let named = plan.as_ref().map(|p| p.prd.clone()).unwrap_or_default();
+            let (prd, prd_signed, prd_source) = match prd_file(ws, &app, &slug, &named) {
+                Some((path, major, _, source)) => (path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), major >= 1, source.to_string()),
+                None => (String::new(), false, String::new()),
+            };
             let mut gates = Vec::new();
             if light {
                 gates.push(light_gate(&dir, &rel));
@@ -1062,6 +1094,7 @@ fn read_features(ws: &Path) -> Vec<Feature> {
                 fetched_repos: fetched,
                 prd,
                 prd_signed,
+                prd_source,
                 warnings,
                 diff_files: diff.0,
                 diff_additions: diff.1,
