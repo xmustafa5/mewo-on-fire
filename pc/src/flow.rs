@@ -1076,12 +1076,67 @@ pub fn unsign(ws: &Path, f: &Feature, gate: &str, role: &str) -> Result<Value, S
         return rollback(ws, f, e.id);
     }
     if gate == "prd" {
-        return Err(format!("The PRD's signature predates Mewo's journal. Remove {} by hand (and its Register row).", f.prd));
+        return withdraw_prd(ws, f);
     }
     let r = policy::unsign(ws, &f.key, gate, role, &[])?;
     journal(ws, &f.key, "unsign", &format!("Signature of {} removed from {}", if role.is_empty() { "the items" } else { role }, f.gates.iter().find(|g| g.id == gate).map(|g| g.title.as_str()).unwrap_or(gate)), vec![r.get("file").and_then(Value::as_str).unwrap_or("").to_string()], "", false, json!({"gate": gate, "role": role}));
     update(ws, &f.key, |st| st.note(format!("Signature removed: {gate} / {role}")));
     Ok(r)
+}
+
+/// Withdraws a signed PRD that Mewo did not sign itself: the V1.x file
+/// is removed (the drafts stay) and its Register row with it, in one
+/// commit that History can revert.
+fn withdraw_prd(ws: &Path, f: &Feature) -> Result<Value, String> {
+    let (path, major, minor) = find_prd(ws, f).ok_or_else(|| "No PRD file found for this feature".to_string())?;
+    if major < 1 {
+        return Err("The PRD is a draft; there is no signature to withdraw".to_string());
+    }
+    let rel_ws = path.strip_prefix(ws).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tracked = policy::git(ws, &["ls-files", "--error-unmatch", "--", &rel_ws]).is_some();
+    fs::remove_file(&path).map_err(|e| format!("Could not remove {name}: {e}"))?;
+    // The Register's row for it.
+    let reg = register_path(ws);
+    let mut reg_changed = false;
+    if let Ok(text) = fs::read_to_string(&reg) {
+        let kept: Vec<&str> = text.lines().filter(|l| !(l.trim().starts_with('|') && l.contains(&name))).collect();
+        if kept.len() != text.lines().count() {
+            let mut out = kept.join("\n");
+            out.push('\n');
+            fs::write(&reg, out).map_err(|e| e.to_string())?;
+            reg_changed = true;
+        }
+    }
+    let mut files = Vec::new();
+    if tracked {
+        files.push(rel_ws.clone());
+    }
+    if reg_changed {
+        files.push(reg.strip_prefix(ws).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
+    }
+    let on = policy::branch_of(&ws.to_string_lossy());
+    let mut commit = String::new();
+    let mut note = String::new();
+    if !files.is_empty() {
+        // The removal is staged with `git add -A` on those paths, since one is gone.
+        let mut args: Vec<&str> = vec!["add", "-A", "--"];
+        args.extend(files.iter().map(String::as_str));
+        if policy::git(ws, &args).is_some() {
+            let mut cargs: Vec<&str> = vec!["commit", "-q", "-m", "PRD V1 withdrawn (signature rolled back from Mewo on Fire)", "--"];
+            cargs.extend(files.iter().map(String::as_str));
+            if policy::git(ws, &cargs).is_some() {
+                commit = head(ws);
+            }
+        }
+        if commit.is_empty() {
+            note = format!("Removed, not committed (torch-main is on '{on}').");
+        }
+    }
+    journal(ws, &f.key, "prd_withdraw", &format!("PRD V{major}.{minor} withdrawn ({name})"), files, &commit, !commit.is_empty(), json!({"file": name}));
+    update(ws, &f.key, |st| st.note(format!("PRD {name} withdrawn")));
+    policy::invalidate();
+    Ok(json!({"ok": true, "file": name, "committed": !commit.is_empty(), "note": note}))
 }
 
 /// Merges the feature branch into main in torch-main and every fetched

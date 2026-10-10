@@ -99,11 +99,18 @@ class _FeatureScreenState extends State<FeatureScreen> {
   }
 
   Future<void> _unsign(TorchFeature f, TorchGate g, String role) async {
+    final all = role.isEmpty && g.signatures.isNotEmpty;
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(role.isEmpty ? 'Untick the items?' : 'Remove the signature?'),
-        content: Text(role.isEmpty ? 'Every item of ${g.title} goes back to open.' : 'The signature of $role comes out of ${g.title}; the items it ticked go back to open.'),
+        title: Text(g.id == 'prd' ? 'Withdraw the PRD V1.0?' : all ? 'Remove every signature?' : role.isEmpty ? 'Untick the items?' : 'Remove the signature?'),
+        content: Text(g.id == 'prd'
+            ? 'The V1.0 file and its Register row are removed in one commit, so the feature goes back to the latest draft. History can revert it.'
+            : all
+                ? 'The signatures of ${g.signatures.keys.join(', ')} come out of ${g.title}; the items they ticked go back to open.'
+                : role.isEmpty
+                    ? 'Every item of ${g.title} goes back to open.'
+                    : 'The signature of $role comes out of ${g.title}; the items it ticked go back to open.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(role.isEmpty ? 'Untick' : 'Remove')),
@@ -112,9 +119,14 @@ class _FeatureScreenState extends State<FeatureScreen> {
     );
     if (yes != true || !mounted) return;
     HapticFeedback.mediumImpact();
-    final e = await _state.unsign(widget.pcId, f, g, role);
+    final roles = all ? g.signatures.keys.toList() : <String>[role];
+    var error = '';
+    for (final r in roles) {
+      error = await _state.unsign(widget.pcId, f, g, g.id == 'prd' ? '' : r);
+      if (error.isNotEmpty) break;
+    }
     if (!mounted) return;
-    _toast(e.isEmpty ? (role.isEmpty ? 'Items unticked' : 'Signature of $role removed') : e);
+    _toast(error.isEmpty ? (g.id == 'prd' ? 'PRD V1.0 withdrawn' : role.isEmpty && !all ? 'Items unticked' : 'Signature${roles.length > 1 ? 's' : ''} removed') : error);
   }
 
   Future<void> _ask(TorchFeature f, TorchGate g) async {
@@ -621,7 +633,20 @@ class _GateCard extends StatelessWidget {
                       children: [
                         EmberButton(label: 'Sign', icon: Icons.draw_rounded, small: true, onPressed: onSign),
                         _MiniButton(icon: Icons.notifications_active_outlined, label: 'Ask for it', color: Ember.text2, onTap: onAsk!),
+                        if (g.signatures.isNotEmpty)
+                          _MiniButton(icon: Icons.undo_rounded, label: 'Roll back', color: Ember.danger, onTap: () => onUnsign(g.signatures.length == 1 ? g.signatures.keys.first : '')),
                       ],
+                    ),
+                  )
+                else if (g.signed)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: EmberButton(
+                      label: g.id == 'prd' ? 'Roll back: withdraw V1.0' : 'Roll back the signature${g.signatures.length > 1 ? 's' : ''}',
+                      icon: Icons.undo_rounded,
+                      small: true,
+                      style: EmberButtonStyle.danger,
+                      onPressed: () => onUnsign(g.signatures.length == 1 ? g.signatures.keys.first : ''),
                     ),
                   ),
               ],

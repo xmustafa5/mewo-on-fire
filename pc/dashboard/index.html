@@ -709,7 +709,7 @@ function wireFlow(box, f) {
   };
 }
 function gateHtml(f, g) {
-  const sigs = (g.signatures || []).map((s) => `<b>${esc(s.name)}</b> (${esc(s.role)}) <button class="btn unsign" type="button" data-role="${esc(s.role)}" title="Remove this signature" style="padding:2px 6px;font-size:8.5px">UNSIGN</button>`).join(', ');
+  const sigs = (g.signatures || []).map((s) => `<b>${esc(s.name)}</b> (${esc(s.role)}) <button class="btn unsign" type="button" data-role="${esc(g.id === 'prd' ? '' : s.role)}" title="${g.id === 'prd' ? 'Withdraw the V1.0 file and its Register row' : 'Remove this signature'}" style="padding:2px 6px;font-size:8.5px">${g.id === 'prd' ? 'ROLL BACK · WITHDRAW V1.0' : 'ROLL BACK'}</button>`).join(', ');
   const open = (g.roles || []).filter((r) => !(g.signatures || []).some((s) => s.role === r));
   const items = g.items || [];
   return `<div class="gate" data-gate="${esc(g.id)}">
@@ -776,7 +776,7 @@ function renderFeature() {
     const form = gate.querySelector('form'); const id = gate.dataset.gate; const g = f.gates.find((x) => x.id === id);
     const signBtn = gate.querySelector('button.sign'); if (signBtn) signBtn.onclick = () => { form.classList.add('on'); form.querySelector('.name').focus(); };
     for (const ub of gate.querySelectorAll('button.unsign')) ub.onclick = async () => {
-      if (!confirm(`Remove ${ub.dataset.role ? 'the signature of ' + ub.dataset.role : 'the ticks'} from ${g.title}?`)) return;
+      if (!confirm(id === 'prd' ? 'Withdraw the PRD V1.0? The file and its Register row are removed in one commit; History can revert it.' : `Remove ${ub.dataset.role ? 'the signature of ' + ub.dataset.role : 'the ticks'} from ${g.title}?`)) return;
       ub.disabled = true;
       const r = await daemon({ cmd: 'unsign', feature: f.key, workspace: f.workspace, gate: id, role: ub.dataset.role });
       if (!r.ok) { alert(r.error || 'Could not remove it'); ub.disabled = false; }
