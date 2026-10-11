@@ -283,6 +283,7 @@ The design is the Design artifact{}: open it and apply the notes to its boards."
 }
 
 fn handle_request(state: &AppState, req: &Value) -> Value {
+    let s = |k: &str| req.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
     match req.get("cmd").and_then(Value::as_str).unwrap_or("") {
         "emit" => {
             let ev = match req.get("event").cloned().map(serde_json::from_value::<Event>) {
