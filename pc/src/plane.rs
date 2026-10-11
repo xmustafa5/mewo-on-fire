@@ -502,6 +502,8 @@ pub struct MappedItem {
     pub group: String,
     pub assignees: Vec<String>,
     pub sequence_id: u64,
+    /// The description last written, so a changed text reaches the item.
+    pub desc: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -579,13 +581,13 @@ fn desired(ws: &Path, f: &Feature, st: &flow::FlowState) -> Vec<(String, String,
         };
         let role = g.roles.first().cloned().unwrap_or_default();
         let name = format!("Sign-off: {}{}", g.title, if g.checklist.is_empty() { String::new() } else { format!(" (Checklist {})", g.checklist) });
-        out.push((format!("gate:{}", g.id), name, format!("{} / {} · {} · signed from the phone, recorded in {}", f.app, f.slug, g.title, g.file), group.to_string(), role));
+        out.push((format!("gate:{}", g.id), name, format!("{} / {} · {} · recorded in {}", f.app, f.slug, g.title, g.file), group.to_string(), role));
     }
     if !f.light {
         let prd_group = if f.prd_signed { "completed" } else if f.step == 3 && asked("prd") { "started" } else if f.step == 3 { "unstarted" } else { "backlog" };
-        out.push(("prd".to_string(), "Sign-off: PRD V1.0 (Checklist A)".to_string(), format!("{} / {} · the CEO signs the PRD from the phone", f.app, f.slug), prd_group.to_string(), "CEO".to_string()));
+        out.push(("prd".to_string(), "Sign-off: PRD V1.0 (Checklist A)".to_string(), format!("{} / {} · the CEO's signature makes the PRD V1.0", f.app, f.slug), prd_group.to_string(), "CEO".to_string()));
         let est_group = if st.estimates_done { "completed" } else if f.step == 2 { "started" } else { "backlog" };
-        out.push(("estimates".to_string(), "Estimates (policy step 2)".to_string(), format!("{} / {} · design, FE and BE leads give person-days from the phone", f.app, f.slug), est_group.to_string(), "Product lead".to_string()));
+        out.push(("estimates".to_string(), "Estimates (policy step 2)".to_string(), format!("{} / {} · design, FE and BE leads give person-days and assumptions", f.app, f.slug), est_group.to_string(), "Product lead".to_string()));
     }
     if let Some(plan) = &f.plan {
         for s in &plan.sessions {
@@ -699,6 +701,10 @@ pub fn sync_once(features: Vec<(PathBuf, Feature)>) -> Result<usize, String> {
                             it.assignees = vec![a.clone()];
                         }
                     }
+                    if it.desc != desc {
+                        patch.insert("description_html".to_string(), json!(format!("<p>{}</p>", html_escape(&desc))));
+                        it.desc = desc.clone();
+                    }
                     if !patch.is_empty() {
                         update_item(&c, &it.id, Value::Object(patch))?;
                         touched += 1;
@@ -712,7 +718,7 @@ pub fn sync_once(features: Vec<(PathBuf, Feature)>) -> Result<usize, String> {
                     let v = create_item(&mut c, body)?;
                     let id = v.get("id").and_then(Value::as_str).unwrap_or("").to_string();
                     if !id.is_empty() {
-                        fm.items.insert(item_key.clone(), MappedItem { id, name: name.clone(), group: group.clone(), assignees: assignee.into_iter().collect(), sequence_id: v.get("sequence_id").and_then(Value::as_u64).unwrap_or(0) });
+                        fm.items.insert(item_key.clone(), MappedItem { id, name: name.clone(), group: group.clone(), assignees: assignee.into_iter().collect(), sequence_id: v.get("sequence_id").and_then(Value::as_u64).unwrap_or(0), desc: desc.clone() });
                         touched += 1;
                     }
                 }

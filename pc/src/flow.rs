@@ -317,7 +317,7 @@ pub fn next_action(ws: &Path, f: &Feature, flow: &FlowState, sessions: &[Session
             return action("done", 12, "Released", "The light-path record is complete.");
         }
         let roles = gate.map(|g| g.roles.clone()).unwrap_or_default();
-        let mut a = action("ask", f.step, "Light-path record", "The product lead and the tech lead sign Checklist L from the phone.");
+        let mut a = action("ask", f.step, "Light-path record", "The product lead and the tech lead sign Checklist L.");
         a.gate = "light".to_string();
         a.roles = roles;
         return a;
@@ -341,7 +341,7 @@ pub fn next_action(ws: &Path, f: &Feature, flow: &FlowState, sessions: &[Session
                     a.auto = false;
                     return a;
                 }
-                let mut a = action("run", 1, "Draft the PRD", "A Claude session runs the prd-writer skill with grill-me. Answer its questions from your phone.");
+                let mut a = action("run", 1, "Draft the PRD", "A Claude session runs the prd-writer skill with grill-me. Answer its questions as they come.");
                 a.prompt = prompt_for(1, ws, f, flow);
                 a.folder = ws.to_string_lossy().into_owned();
                 return a;
@@ -350,7 +350,7 @@ pub fn next_action(ws: &Path, f: &Feature, flow: &FlowState, sessions: &[Session
             if !flow.estimates_done {
                 let missing: Vec<String> = ESTIMATE_ROLES.iter().filter(|r| !flow.estimates.iter().any(|e| e.role.eq_ignore_ascii_case(r))).map(|s| s.to_string()).collect();
                 if !missing.is_empty() {
-                    let mut a = action("estimates", 2, "Estimates", format!("Waiting for {} (person-days and assumptions, from the phone).", missing.join(", ")));
+                    let mut a = action("estimates", 2, "Estimates", format!("Waiting for {} (person-days and assumptions).", missing.join(", ")));
                     a.roles = missing;
                     a.auto = false;
                     return a;
@@ -373,7 +373,7 @@ pub fn next_action(ws: &Path, f: &Feature, flow: &FlowState, sessions: &[Session
                 a.folder = ws.to_string_lossy().into_owned();
                 return a;
             }
-            let mut a = action("ask", 3, "PRD signature", format!("The CEO signs {} as V1.0 from the phone.", f.prd));
+            let mut a = action("ask", 3, "PRD signature", format!("The CEO signs {} as V1.0.", f.prd));
             a.gate = "prd".to_string();
             a.roles = vec!["CEO".to_string()];
             a
@@ -426,13 +426,13 @@ pub fn next_action(ws: &Path, f: &Feature, flow: &FlowState, sessions: &[Session
         8 => {
             let has_plan = f.plan.as_ref().map(|p| !p.sessions.is_empty()).unwrap_or(false);
             if has_plan {
-                let mut a = action("ask", 8, "Plan review", "The tech lead reviews SESSION_PLAN.md and signs from the phone.");
+                let mut a = action("ask", 8, "Plan review", "The tech lead reviews SESSION_PLAN.md and signs it.");
                 a.gate = "plan".to_string();
                 a.roles = vec!["Tech lead".to_string()];
                 return a;
             }
             if fresh_run(flow, 8) {
-                let mut a = action("wait", 8, "Planning", "A session runs the session-plan skill with grill-me. Answer its questions from your phone.");
+                let mut a = action("wait", 8, "Planning", "A session runs the session-plan skill with grill-me. Answer its questions as they come.");
                 a.auto = false;
                 return a;
             }
@@ -480,19 +480,19 @@ pub fn next_action(ws: &Path, f: &Feature, flow: &FlowState, sessions: &[Session
             action("wait", 9, "Sessions", "")
         }
         10 => {
-            let mut a = action("ask", 10, "Staging sign-off", "Deploy the feature branch to staging, then the product and design leads sign Checklist I from the phone.");
+            let mut a = action("ask", 10, "Staging sign-off", "Deploy the feature branch to staging, then the product and design leads sign Checklist I.");
             a.gate = "staging".to_string();
             a.roles = open_roles("staging");
             a
         }
         11 => {
-            let mut a = action("ask", 11, "UAT sign-off", "Record the 5 to 8 UAT users and their results from the phone; at 80 percent unaided the product and design leads sign Checklist J.");
+            let mut a = action("ask", 11, "UAT sign-off", "Record the 5 to 8 UAT users and their results; at 80 percent unaided the product and design leads sign Checklist J.");
             a.gate = "uat".to_string();
             a.roles = open_roles("uat");
             a
         }
         _ => {
-            let mut a = action("ask", 12, "Production release", "The tech lead prepares Checklist K; the CEO signs from the phone.");
+            let mut a = action("ask", 12, "Production release", "The tech lead prepares Checklist K; the CEO signs.");
             a.gate = "production".to_string();
             a.roles = vec!["CEO".to_string()];
             a
