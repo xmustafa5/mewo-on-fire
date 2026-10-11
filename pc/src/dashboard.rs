@@ -159,7 +159,7 @@ fn state_json(cache: &Cache) -> String {
 /// is meant to send.
 fn forward(req: &Value) -> Value {
     let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("");
-    if !matches!(cmd, "features" | "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign" | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "peers" | "peer_scan" | "peer_pair" | "peer_remove" | "new_session" | "plane_config" | "plane_test" | "plane_status" | "plane_members" | "plane_projects" | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_sync" | "plane_disconnect") {
+    if !matches!(cmd, "features" | "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign" | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "peers" | "peer_scan" | "peer_pair" | "peer_remove" | "new_session" | "plane_config" | "plane_test" | "plane_status" | "plane_members" | "plane_projects" | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_sync" | "plane_disconnect") {
         return json!({"ok": false, "error": "not a console command"});
     }
     for (path, legacy) in sockets() {

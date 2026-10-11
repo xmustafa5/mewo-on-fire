@@ -796,6 +796,7 @@ function renderPipeline() {
   if (picked) renderFeature();
 }
 // The flow card: where the feature stands, what Mewo does next, autopilot.
+const REDO = { 1: 'DRAFT THE PRD AGAIN', 2: 'ESTIMATES INTO THE PRD AGAIN', 4: 'REDO THE DESIGN', 7: 'REDO THE INTAKE', 8: 'REDO THE SESSION PLAN' };
 function flowHtml(f) {
   const fl = f.flow || {}; const a = fl.action || {};
   const btn = { run: 'START THE SESSION', ask: 'ASK FOR THE SIGNATURE' + (a.roles && a.roles.length > 1 ? 'S' : ''), estimates: 'ASK THE LEADS', export: 'EXPORT TO HANDOFF', start: `START SESSION ${a.session || ''}`, release: 'RECORD THE RELEASE', close: 'MERGE AND CLOSE THE BRANCHES' }[a.kind];
@@ -804,7 +805,7 @@ function flowHtml(f) {
   return `<div class="flow"><div class="h"><span class="k">THE FLOW · ${a.step ? 'STEP ' + a.step : ''}</span><label><input type="checkbox" id="fl-auto" ${fl.autopilot ? 'checked' : ''}> AUTOPILOT</label></div>
     <div class="t">${esc(a.title || '')}</div><div class="d">${esc(a.detail || '')}${a.roles && a.roles.length && a.kind !== 'estimates' ? ` · ${esc(a.roles.join(', '))}` : ''}</div>
     ${est ? `<div class="d">ESTIMATES · ${est}${fl.estimates_done ? ' · IN THE PRD' : ''}</div>` : ''}
-    <div class="a">${btn ? `<button class="btn go" id="fl-go" type="button">${btn}</button>` : ''}${a.kind === 'estimates' || (a.step === 2 && !fl.estimates_done) ? '<button class="btn" id="fl-est" type="button">ADD AN ESTIMATE</button>' : ''}${a.step === 2 && !fl.estimates_done && (fl.estimates || []).length >= 3 ? '<button class="btn" id="fl-estdone" type="button">ESTIMATES ARE IN THE PRD</button>' : ''}${a.step >= 11 || a.gate === 'uat' ? '<button class="btn" id="fl-uat" type="button">ADD A UAT USER</button>' : ''}</div>
+    <div class="a">${btn ? `<button class="btn go" id="fl-go" type="button">${btn}</button>` : ''}${a.kind === 'estimates' || (a.step === 2 && !fl.estimates_done) ? '<button class="btn" id="fl-est" type="button">ADD AN ESTIMATE</button>' : ''}${a.step === 2 && !fl.estimates_done && (fl.estimates || []).length >= 3 ? '<button class="btn" id="fl-estdone" type="button">ESTIMATES ARE IN THE PRD</button>' : ''}${a.step >= 11 || a.gate === 'uat' ? '<button class="btn" id="fl-uat" type="button">ADD A UAT USER</button>' : ''}${REDO[a.step] && a.kind !== 'run' ? `<button class="btn" id="fl-redo" type="button" title="A new session with the step's prompt as it stands now">${REDO[a.step]}</button>` : ''}</div>
     <div class="form" id="fl-estform" style="display:none"><div><label>ROLE</label><select id="es-role"><option>Design lead</option><option>FE lead</option><option>BE lead</option></select></div><div><label>PERSON-DAYS</label><input id="es-days" type="number" min="0" step="0.5"></div><div class="full"><label>ASSUMPTIONS</label><input id="es-ass" placeholder="What the estimate assumes"></div><div class="full"><button class="btn go" id="es-go" type="button">RECORD MY ESTIMATE</button></div><div class="msg" id="es-msg"></div></div>
     <div class="form" id="fl-uatform" style="display:none"><div><label>USER</label><input id="ua-user"></div><div><label>THEIR ROLE</label><input id="ua-role"></div><div class="full"><label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="ua-ok" style="width:auto"> COMPLETED THE CORE FLOWS UNAIDED</label></div><div class="full"><label>NOTES</label><input id="ua-notes"></div><div class="full"><button class="btn go" id="ua-go" type="button">RECORD</button></div><div class="msg" id="ua-msg"></div></div>
     ${log ? `<div class="log">${log}</div>` : ''}</div>`;
@@ -817,6 +818,13 @@ function wireFlow(box, f) {
     go.disabled = true; go.textContent = 'WORKING…';
     const r = await daemon({ cmd: 'flow_next', feature: f.key, workspace: f.workspace, name: signerName });
     go.textContent = r.ok ? 'DONE' : 'FAILED'; if (!r.ok) alert(r.error || 'Could not do it'); setTimeout(refreshFeatures, 800);
+  };
+  const redo = box.querySelector('#fl-redo'); if (redo) redo.onclick = async () => {
+    const a = (f.flow || {}).action || {};
+    if (!confirm(a.step === 4 ? 'Start a new design session? The boards made so far stop counting; the export takes the new ones.' : `Run step ${a.step} again in a new session?`)) return;
+    redo.disabled = true; redo.textContent = 'STARTING…';
+    const r = await daemon({ cmd: 'flow_redo', feature: f.key, workspace: f.workspace, step: a.step, name: signerName });
+    redo.textContent = r.ok ? 'STARTED' : 'FAILED'; if (!r.ok) alert(r.error || 'Could not start it'); setTimeout(refreshFeatures, 800);
   };
   const est = box.querySelector('#fl-est'); if (est) est.onclick = () => { const fm = box.querySelector('#fl-estform'); fm.style.display = fm.style.display === 'none' ? 'grid' : 'none'; };
   const esgo = box.querySelector('#es-go'); if (esgo) esgo.onclick = async () => {

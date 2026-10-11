@@ -804,3 +804,13 @@ otherwise the reply's `notes` say what to run. Journaled as `design`
 (rolls back by reverting the commit). `features` carries each
 feature's `design: {name, repo, dir, reference, present, checked_out,
 glare}` and a warning when the checkout is missing.
+
+# v2.4 — a step's session again
+
+`flow_redo {feature, workspace, step, name, dry}` (also a phone frame)
+starts a new Claude session with the step's prompt as it stands now
+(steps 1, 2, 4, 7, 8), whatever the flow offers at the moment: a changed
+PRD or design system reaches it this way. With `dry: true` the reply
+only carries the `action` (its `prompt` included). For step 4 the flow
+remembers `design_since`: boards made before it no longer count, so the
+export takes the new ones; journaled as `redo`, which rolls back.

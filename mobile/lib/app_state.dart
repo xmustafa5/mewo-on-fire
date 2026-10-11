@@ -715,6 +715,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// Does the flow's next action for [f] now. Empty string on success.
   Future<String> flowNext(String pcId, TorchFeature f) => _flowCmd(pcId, 'flow_next', {'feature': f.key, 'workspace': f.workspace, 'name': settings.signerName});
 
+  /// v2.4: a step's session again (the design, the intake, the plan…).
+  Future<String> flowRedo(String pcId, TorchFeature f, int step) => _flowCmd(pcId, 'flow_redo', {'feature': f.key, 'workspace': f.workspace, 'step': step, 'name': settings.signerName});
+
   Future<String> flowSet(String pcId, TorchFeature f, bool autopilot) => _flowCmd(pcId, 'flow_set', {'feature': f.key, 'workspace': f.workspace, 'autopilot': autopilot});
 
   Future<String> estimate(String pcId, TorchFeature f, String role, double days, String assumptions) =>

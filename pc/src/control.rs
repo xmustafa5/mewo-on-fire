@@ -298,7 +298,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             tokio::task::block_in_place(|| plane_request(state, req))
         }
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -530,6 +530,39 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
         // v1.8: the flow runner.
         "flow_next" => match state.feature(&ws, &key) {
             Some(f) => state.flow_execute(&ws, &f, None, &s("name")),
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
+        // v2.4: a step's session again. `dry` only shows the action.
+        "flow_redo" => match state.feature(&ws, &key) {
+            Some(f) => {
+                let step = req.get("step").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let st = flow::get(&ws, &f.key);
+                match flow::redo_action(&ws, &f, &st, step) {
+                    Some(a) => {
+                        if req.get("dry").and_then(Value::as_bool).unwrap_or(false) {
+                            return json!({"ok": true, "action": a});
+                        }
+                        let prev = st.design_since;
+                        if step == 4 {
+                            flow::update(&ws, &f.key, |st| {
+                                st.design_since = crate::config::now_ms();
+                                st.note("Design restarted: the earlier boards no longer count");
+                            });
+                        }
+                        let r = state.flow_execute(&ws, &f, Some(a), &s("name"));
+                        let ok = r.get("ok").and_then(Value::as_bool).unwrap_or(false);
+                        if step == 4 {
+                            if ok {
+                                flow::journal(&ws, &f.key, "redo", "Design restarted", Vec::new(), "", true, json!({"prev": prev, "step": step}));
+                            } else {
+                                flow::update(&ws, &f.key, |st| st.design_since = prev);
+                            }
+                        }
+                        r
+                    }
+                    None => json!({"ok": false, "error": format!("Step {step} has no session to run again")}),
+                }
+            }
             None => json!({"ok": false, "error": "unknown feature"}),
         },
         "flow_set" => {

@@ -79,6 +79,9 @@ pub struct FlowState {
     /// v2.2: the PRD family the feature follows (`{App}_{Name}`, the file
     /// name before `_PRD_V`); empty when the name match decides.
     pub prd: String,
+    /// v2.4: the design was restarted at this time (ms); boards made
+    /// before it no longer count.
+    pub design_since: u64,
 }
 
 impl FlowState {
@@ -251,10 +254,15 @@ fn fresh_run(flow: &FlowState, step: u8) -> bool {
 }
 
 
-fn design_artifacts(f: &Feature, sessions: &[Session]) -> Vec<(String, String)> {
+fn design_artifacts(f: &Feature, sessions: &[Session], since: u64) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for s in sessions.iter().filter(|s| s.feature == f.key) {
         for a in &s.artifacts {
+            // Boards from before a restart of the design (v2.4) are out.
+            let ts = if a.ts < 10_000_000_000 { a.ts * 1000 } else { a.ts };
+            if since > 0 && ts < since {
+                continue;
+            }
             if a.kind == "design" && a.local && !a.id.is_empty() {
                 out.push((a.id.clone(), a.title.clone()));
             }
@@ -267,7 +275,10 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
     let app = app_name(ws, &f.app);
     let feature = feature_words(&f.slug);
     let dir = &f.dir;
-    let prd_folder = format!("torch-product/Business OS/Business OS - apps/{app}/PRD/");
+    // The folder the PRD really is in; the app's usual one when none is found.
+    let prd_folder = find_prd(ws, f)
+        .and_then(|(p, _, _)| p.parent().and_then(|d| d.strip_prefix(ws).ok()).map(|d| format!("{}/", d.display())))
+        .unwrap_or_else(|| format!("torch-product/Business OS/Business OS - apps/{app}/PRD/"));
     // v2.3: the design system the feature follows.
     let ds_glare = f.design["glare"].as_bool().unwrap_or(true);
     let ds_name = f.design["name"].as_str().unwrap_or("Glare").to_string();
@@ -279,7 +290,7 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
         format!(
             "following the {ds_name} design system, not Glare: its checkout is {} in the workspace (see {dir}/DESIGN_SYSTEM.md); read {} first, and draw every screen on its app shell and its components, with its tokens, and the app's design principles",
             if ds_dir.is_empty() { "not in the workspace yet".to_string() } else { ds_dir.clone() },
-            if ds_ref.is_empty() { format!("{dir}/DESIGN_SYSTEM.md") } else { ds_ref.clone() }
+            if ds_ref.is_empty() { format!("{dir}/DESIGN_SYSTEM.md") } else if ds_dir.is_empty() { ds_ref.clone() } else { format!("{ds_ref} (paths under {ds_dir})") }
         )
     };
     let design_note = if ds_glare {
@@ -318,6 +329,31 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
         ),
         _ => String::new(),
     }
+}
+
+/// v2.4: a step's session again (1 PRD draft, 2 estimates into the
+/// PRD, 4 design, 7 intake, 8 session plan), whatever the flow offers
+/// now; the prompt is the step's as it stands, so a changed design
+/// system or PRD reaches it. For the design, the boards made earlier
+/// are superseded.
+pub fn redo_action(ws: &Path, f: &Feature, flow: &FlowState, step: u8) -> Option<Action> {
+    let prompt = prompt_for(step, ws, f, flow);
+    if prompt.is_empty() {
+        return None;
+    }
+    let title = match step {
+        1 => "Draft the PRD again",
+        2 => "Put the estimates in the PRD again",
+        4 => "Design the screens again",
+        7 => "Run the handoff intake again",
+        8 => "Write the session plan again",
+        _ => "Run the step again",
+    };
+    let mut a = action("run", step, title, "A new Claude session with the step's prompt as it stands now.");
+    a.prompt = if step == 4 { format!("{prompt} Start a new Design artifact: the boards made earlier for this feature are superseded.") } else { prompt };
+    a.folder = ws.to_string_lossy().into_owned();
+    a.auto = false;
+    Some(a)
 }
 
 /// Where the flow stands and what it does next.
@@ -406,7 +442,7 @@ pub fn next_action(ws: &Path, f: &Feature, flow: &FlowState, sessions: &[Session
             a
         }
         4 => {
-            let designs = design_artifacts(f, sessions);
+            let designs = design_artifacts(f, sessions, flow.design_since);
             if !designs.is_empty() {
                 return action("export", 4, "Export the design to the handoff folder", format!("{} design artifact(s) from this feature's sessions become the handoff HTML, one file per board.", designs.len()));
             }
@@ -864,6 +900,7 @@ pub fn rollback(ws: &Path, f: &Feature, id: u64) -> Result<Value, String> {
             }
             "estimates_done" => st.estimates_done = false,
             "prd_pick" => st.prd = data.get("prev").and_then(Value::as_str).unwrap_or("").to_string(),
+            "redo" => st.design_since = data.get("prev").and_then(Value::as_u64).unwrap_or(0),
             "release" => st.released_at = 0,
             "run" | "start" => {
                 let started = data.get("started").and_then(Value::as_u64).unwrap_or(0);
@@ -1029,7 +1066,7 @@ fn slugify(s: &str) -> String {
 /// Copies the feature's design boards (the daemon's rendered copies) into
 /// `handoff/`, one HTML file per board, and lists them in the README.
 pub fn export_handoff(ws: &Path, f: &Feature, sessions: &[Session]) -> Result<Value, String> {
-    let designs = design_artifacts(f, sessions);
+    let designs = design_artifacts(f, sessions, get(ws, &f.key).design_since);
     if designs.is_empty() {
         return Err("No design artifact from this feature's sessions yet".to_string());
     }

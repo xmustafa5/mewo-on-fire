@@ -60,6 +60,30 @@ class _FeatureScreenState extends State<FeatureScreen> {
     _toast(error.isEmpty ? 'Done: ${a.title}' : error);
   }
 
+  /// v2.4: the step's session again; for the design the earlier boards stop counting.
+  Future<void> _doRedo(TorchFeature f) async {
+    if (_flowBusy) return;
+    final a = f.flow.action;
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_FlowCard.redoLabels[a.step] ?? 'Run the step again?'),
+        content: Text(a.step == 4 ? 'A new design session starts on the PC. The boards made so far stop counting; the export takes the new ones.' : 'A new session starts on the PC with the step\'s prompt as it stands now.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Start')),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    HapticFeedback.mediumImpact();
+    setState(() => _flowBusy = true);
+    final error = await _state.flowRedo(widget.pcId, f, a.step);
+    if (!mounted) return;
+    setState(() => _flowBusy = false);
+    _toast(error.isEmpty ? 'Started: ${_FlowCard.redoLabels[a.step] ?? 'the step'}' : error);
+  }
+
   TorchFeature? get _feature => _state.featuresOf(widget.pcId)?.features.where((f) => f.key == widget.featureKey).firstOrNull;
 
   void _toast(String text) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -246,6 +270,7 @@ class _FeatureScreenState extends State<FeatureScreen> {
       feature: f,
       busy: _flowBusy,
       onNext: () => _doNext(f),
+      onRedo: () => _doRedo(f),
       onAutopilot: (v) async {
         final e = await _state.flowSet(widget.pcId, f, v);
         if (e.isNotEmpty && mounted) _toast(e);
@@ -743,6 +768,7 @@ class _FlowCard extends StatelessWidget {
     required this.feature,
     required this.busy,
     required this.onNext,
+    required this.onRedo,
     required this.onAutopilot,
     required this.onEstimate,
     required this.onEstimatesDone,
@@ -752,10 +778,13 @@ class _FlowCard extends StatelessWidget {
   final TorchFeature feature;
   final bool busy;
   final VoidCallback onNext;
+  final VoidCallback onRedo;
   final ValueChanged<bool> onAutopilot;
   final VoidCallback onEstimate;
   final VoidCallback onEstimatesDone;
   final VoidCallback onUat;
+
+  static const Map<int, String> redoLabels = <int, String>{1: 'Draft the PRD again', 2: 'Estimates into the PRD again', 4: 'Redo the design', 7: 'Redo the intake', 8: 'Redo the session plan'};
 
   static String buttonFor(FlowAction a) {
     switch (a.kind) {
@@ -838,6 +867,7 @@ class _FlowCard extends StatelessWidget {
                     onPressed: busy ? null : onNext,
                   ),
                 if (estimatesPhase && a.kind != 'estimates') EmberButton(label: 'Add my estimate', icon: Icons.timelapse_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onEstimate),
+                if (redoLabels.containsKey(a.step) && a.kind != 'run') EmberButton(label: redoLabels[a.step]!, icon: Icons.replay_rounded, small: true, style: EmberButtonStyle.ghost, onPressed: busy ? null : onRedo),
                 if (estimatesPhase && fl.estimates.length >= 3) EmberButton(label: 'Estimates are in the PRD', small: true, style: EmberButtonStyle.ghost, onPressed: onEstimatesDone),
                 if (a.gate == 'uat' || a.step >= 11 && a.step <= 12 && !feature.released) EmberButton(label: 'Add a UAT user', icon: Icons.groups_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onUat),
               ],
