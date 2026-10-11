@@ -15,6 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
 use crate::ask;
+use crate::notes;
 use crate::daemon::AppState;
 use crate::hook;
 use crate::paths;
@@ -159,6 +160,57 @@ async fn handle_conn(state: Arc<AppState>, stream: tokio::net::UnixStream) -> Re
                 "sessions" => {
                     state.refresh_sessions(None).await;
                     json!({"ok": true, "sessions": state.session_list()})
+                }
+                // v2.5: the open notes of a design go to the session that made
+                // it, as one review message; to a new session when that one
+                // is gone. `dry` only shows the message.
+                "notes_send" => {
+                    let artifact = req.get("artifact").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    let all = notes::list(&artifact);
+                    let wanted: Vec<u64> = req.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+                    let send: Vec<&notes::Note> = all.iter().filter(|n| n.status == "open" && (wanted.is_empty() || wanted.contains(&n.id))).collect();
+                    if send.is_empty() {
+                        json!({"ok": false, "error": "No open notes to send"})
+                    } else {
+                        let sessions = state.session_list();
+                        let owner = sessions.iter().find(|x| x.artifacts.iter().any(|a| a.id == artifact)).cloned();
+                        let art = owner.as_ref().and_then(|x| x.artifacts.iter().find(|a| a.id == artifact).cloned());
+                        let title = art.as_ref().map(|a| a.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| req.get("title").and_then(Value::as_str).unwrap_or("").to_string());
+                        let url = art.as_ref().map(|a| a.url.clone()).filter(|u| !u.is_empty()).unwrap_or_else(|| req.get("url").and_then(Value::as_str).unwrap_or("").to_string());
+                        let text = notes::message(&title, &url, &all, &send);
+                        if req.get("dry").and_then(Value::as_bool).unwrap_or(false) {
+                            json!({"ok": true, "dry": true, "message": text, "session": owner.as_ref().map(|x| x.id.clone()), "count": send.len()})
+                        } else {
+                            let ids: Vec<u64> = send.iter().map(|n| n.id).collect();
+                            let client_id = format!("notes-{}", crate::config::now_ms());
+                            let mut how = String::new();
+                            let mut err = String::new();
+                            if let Some(sess) = &owner {
+                                match state.send_message(&sess.id, &text, &client_id, Vec::new()).await {
+                                    crate::sessions::SendOutcome::Delivered => how = "delivered".to_string(),
+                                    crate::sessions::SendOutcome::Queued => how = "queued".to_string(),
+                                    crate::sessions::SendOutcome::Rejected(r) => err = r.to_string(),
+                                }
+                            }
+                            if how.is_empty() {
+                                // A new session, in the design session's folder when known.
+                                let cwd = owner.as_ref().map(|x| x.cwd.clone()).unwrap_or_default();
+                                let prompt = format!("{text}
+
+The design is the Design artifact{}: open it and apply the notes to its boards.", if url.is_empty() { String::new() } else { format!(" at {url}") });
+                                match desktop::open_new_session(&cwd, &prompt) {
+                                    Ok(()) => how = "new_session".to_string(),
+                                    Err(e) => err = if err.is_empty() { e } else { format!("{err}; {e}") },
+                                }
+                            }
+                            if how.is_empty() {
+                                json!({"ok": false, "error": err})
+                            } else {
+                                notes::mark_sent(&artifact, &ids);
+                                json!({"ok": true, "how": how, "count": ids.len(), "session": owner.as_ref().map(|x| x.id.clone())})
+                            }
+                        }
+                    }
                 }
                 // v2.4: a session gone for good, with its feed events. The
                 // transcript itself is the caller's to delete.
@@ -315,6 +367,25 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             tokio::task::block_in_place(|| policy_request(state, req))
         }
         // v1.6: a new session in Claude Desktop (the console's "New session").
+        // v2.5: review notes pinned on a design's boards.
+        "notes" => json!({"ok": true, "notes": notes::list(&s("artifact")).iter().map(notes::to_json).collect::<Vec<_>>()}),
+        "note_add" => match notes::add(
+            &s("artifact"),
+            &s("board"),
+            &s("board_title"),
+            req.get("x").and_then(Value::as_f64).unwrap_or(0.5),
+            req.get("y").and_then(Value::as_f64).unwrap_or(0.5),
+            &s("text"),
+            &s("by"),
+        ) {
+            Ok(n) => json!({"ok": true, "note": notes::to_json(&n)}),
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "note_set" => match notes::set(&s("artifact"), req.get("id").and_then(Value::as_u64).unwrap_or(0), req.get("text").and_then(Value::as_str), req.get("status").and_then(Value::as_str)) {
+            Ok(n) => json!({"ok": true, "note": notes::to_json(&n)}),
+            Err(e) => json!({"ok": false, "error": e}),
+        },
+        "note_remove" => json!({"ok": true, "removed": notes::remove(&s("artifact"), req.get("id").and_then(Value::as_u64).unwrap_or(0))}),
         "new_session" => {
             let cwd = req.get("cwd").and_then(Value::as_str).unwrap_or("");
             let prompt = req.get("prompt").and_then(Value::as_str).unwrap_or("");

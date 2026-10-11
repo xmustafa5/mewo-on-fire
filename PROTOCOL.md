@@ -819,3 +819,19 @@ export takes the new ones; journaled as `redo`, which rolls back.
 works) drops a session from the daemon for good with its feed events,
 after its transcript under `~/.claude/projects/` was deleted; the
 phones learn on their next list.
+
+# v2.5 — review notes on a design
+
+Notes pinned on a design's boards, the way a product team reviews with
+a designer, kept per artifact under `<state>/notes/<artifact>.json`:
+`{id, board, board_title, x, y (fractions of the board), text, status
+open|sent|done, by, ts, sent_ts}`. Control commands: `notes {artifact}`;
+`note_add {artifact, board, board_title, x, y, text, by}`; `note_set
+{artifact, id, text?, status?}`; `note_remove {artifact, id}`;
+`notes_send {artifact, ids?, title?, url?, dry?}` sends the open notes
+as one review message to the session that made the design (the
+phone's send path: `how` is `delivered` or `queued`), or opens a new
+session with them when that session is gone (`how: new_session`), and
+marks them `sent`; `dry: true` only returns the `message`. The console
+draws the pins over the boards (NOTES, or N) with a rail of the notes
+and the designer's latest word.

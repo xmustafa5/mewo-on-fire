@@ -305,6 +305,33 @@ main {
 #preview .boards button { cursor: pointer; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--dim); font: 11px var(--sans); padding: 5px 10px; }
 #preview .boards button.on { border-color: var(--amber); color: var(--amber); background: rgba(255,179,71,0.08); }
 #preview .stage { flex: 1; position: relative; overflow: hidden; margin: 12px 14px 14px; }
+#preview .body { flex: 1; display: flex; min-height: 0; }
+#preview .rail { width: 290px; flex: none; border-left: 1px solid var(--cyan-dim); display: none; flex-direction: column; min-height: 0; }
+#preview.notes .rail { display: flex; }
+#preview .rail .rh { padding: 10px 12px; font: 10px var(--mono); letter-spacing: .16em; color: var(--dim); border-bottom: 1px solid var(--cyan-dim); display: flex; align-items: center; gap: 8px; }
+#preview .rail .list { flex: 1; overflow: auto; padding: 8px 10px; }
+#preview .rail .note { border: 1px solid var(--cyan-dim); padding: 7px 9px; margin-bottom: 6px; font-size: 12px; line-height: 1.45; color: var(--text); cursor: pointer; }
+#preview .rail .note.on { border-color: var(--amber); }
+#preview .rail .note .b { font: 9px var(--mono); letter-spacing: .12em; color: var(--dim); margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+#preview .rail .note .b .n { background: var(--amber); color: #1a1000; border-radius: 50%; width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; }
+#preview .rail .note.sent .b .n { background: var(--cyan); color: #06121a; } #preview .rail .note.done .b .n { background: #3a3f46; color: #ccc; }
+#preview .rail .note.done { opacity: .6; }
+#preview .rail .note .x { margin-left: auto; cursor: pointer; background: none; border: 0; color: var(--dim); font-size: 13px; line-height: 1; }
+#preview .rail .note .x:hover { color: var(--fire); }
+#preview .rail .reply { padding: 8px 12px; font-size: 12px; line-height: 1.45; color: var(--dim); border-top: 1px solid var(--cyan-dim); max-height: 140px; overflow: auto; }
+#preview .rail .reply b { color: var(--text); font: 9px var(--mono); letter-spacing: .14em; display: block; margin-bottom: 3px; }
+#preview .rail .foot { padding: 10px 12px; border-top: 1px solid var(--cyan-dim); }
+#preview .rail .foot .msg { font: 10px var(--mono); letter-spacing: .1em; color: var(--amber); min-height: 14px; margin-top: 6px; }
+#preview .stage .pins { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; }
+#preview .stage.noting .pins { pointer-events: auto; cursor: crosshair; }
+#preview .pin { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: var(--amber); color: #1a1000; display: flex; align-items: center; justify-content: center; border: 2px solid rgba(255,255,255,.35); box-shadow: 0 3px 12px rgba(0,0,0,.6); pointer-events: auto; cursor: pointer; }
+#preview .pin span { transform: rotate(45deg); font: 700 10px var(--mono); }
+#preview .pin.sent { background: var(--cyan); color: #06121a; } #preview .pin.done { background: #3a3f46; color: #ccc; opacity: .75; }
+#preview .pin.on { outline: 2px solid #fff; outline-offset: 1px; }
+#preview .composer { position: absolute; width: 270px; background: rgba(6,12,20,.98); border: 1px solid var(--amber); padding: 10px; z-index: 4; box-shadow: 0 10px 30px rgba(0,0,0,.7); }
+#preview .composer .b { font: 9px var(--mono); letter-spacing: .12em; color: var(--dim); margin-bottom: 6px; }
+#preview .composer textarea { width: 100%; box-sizing: border-box; min-height: 66px; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 12px var(--sans); padding: 6px 8px; outline: none; resize: vertical; }
+#preview .composer .row { display: flex; gap: 6px; margin-top: 8px; }
 #preview .stage iframe { border: 0; background: #0C0A09; position: absolute; left: 0; top: 0; }
 #preview .stage.fill iframe { width: 100%; height: 100%; }
 #preview .stage.board iframe { transform-origin: top left; border-radius: 22px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
@@ -499,9 +526,17 @@ footer .seg { display: flex; gap: 22px; }
       <div class="msg" id="ns-msg"></div>
     </div>
     <div id="preview">
-      <div class="hd"><span class="k" id="pv-kind">DESIGN</span><div class="t" id="pv-title"></div><button class="lnk" id="pv-full" type="button" title="Full screen · F to toggle, Esc to leave, ← → between boards">FULL SCREEN</button><button class="lnk" id="pv-open" type="button">OPEN ON CLAUDE.AI</button><button class="x" id="pv-close" type="button" aria-label="Close">×</button></div>
+      <div class="hd"><span class="k" id="pv-kind">DESIGN</span><div class="t" id="pv-title"></div><button class="lnk" id="pv-notes" type="button" title="Review notes · N to pin on the board">NOTES</button><button class="lnk" id="pv-full" type="button" title="Full screen · F to toggle, Esc to leave, ← → between boards">FULL SCREEN</button><button class="lnk" id="pv-open" type="button">OPEN ON CLAUDE.AI</button><button class="x" id="pv-close" type="button" aria-label="Close">×</button></div>
       <div class="boards" id="pv-boards"></div>
-      <div class="stage fill" id="pv-stage"></div>
+      <div class="body">
+        <div class="stage fill" id="pv-stage"></div>
+        <div class="rail" id="pv-rail">
+          <div class="rh"><span>REVIEW NOTES</span><span style="flex:1"></span><span title="N turns pinning on and off; then click on the board">PIN · N</span></div>
+          <div class="list"></div>
+          <div class="reply"></div>
+          <div class="foot"><button class="btn go" id="pv-send" type="button" disabled>NOTHING TO SEND</button><div class="msg" id="pv-sendmsg"></div></div>
+        </div>
+      </div>
     </div>
     <div id="detail"></div>
     <div id="legacy">LEGACY DAEMON · FEED OFF UNTIL <b>mewo install</b></div>
@@ -954,7 +989,7 @@ const pv = { box: $('preview'), kind: $('pv-kind'), title: $('pv-title'), boards
 let pvCurrent = null;
 const inMacApp = () => !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo);
 const artifactBase = (a) => inMacApp() ? `mewo-artifact://a/${a.id}/` : `/artifact/${a.id}/`;
-function closePreview() { setFull(false); pv.box.classList.remove('on'); pv.stage.innerHTML = ''; pvCurrent = null; }
+function closePreview() { setFull(false); setNotesMode(false); pv.box.classList.remove('on', 'notes'); pv.stage.innerHTML = ''; pvCurrent = null; }
 $('pv-close').addEventListener('click', closePreview);
 window.__preview = preview;
 $('pv-open').addEventListener('click', () => { if (pvCurrent) openUrl(pvCurrent.url); });
@@ -963,7 +998,85 @@ function fitBoard() {
   const w = +f.dataset.w, h = +f.dataset.h, r = pv.stage.getBoundingClientRect();
   const k = Math.min(r.width / w, r.height / h, pv.box.classList.contains('full') ? 2 : 1);
   f.style.transform = `scale(${k})`; f.style.left = `${Math.max(0, (r.width - w * k) / 2)}px`; f.style.top = `${Math.max(0, (r.height - h * k) / 2)}px`;
+  layoutPins();
 }
+// v2.5: review notes, pinned on the boards, sent to the session that made the design.
+const notes = { on: false, list: [], sel: null };
+function noteBoard() { const f = pv.stage.querySelector('iframe'); return f ? f.title : ''; }
+function boardTitle(file) { const b = [...pv.boards.querySelectorAll('button')].find((x) => x.dataset.file === file); return b ? b.textContent : (file || '').split('/').pop().replace(/\.dc\.html$/, ''); }
+function placeWord(x, y) { const col = x < 1 / 3 ? 'LEFT' : x > 2 / 3 ? 'RIGHT' : ''; const row = y < 1 / 3 ? 'TOP' : y > 2 / 3 ? 'BOTTOM' : ''; return [row, col].filter(Boolean).join(' ') || 'CENTRE'; }
+async function loadNotes() {
+  if (!pvCurrent || !pvCurrent.id) return; const id = pvCurrent.id;
+  const r = await daemon({ cmd: 'notes', artifact: id });
+  if (!pvCurrent || pvCurrent.id !== id) return;
+  notes.list = r.ok ? (r.notes || []) : []; renderNotes(); layoutPins();
+}
+function layoutPins() {
+  const f = pv.stage.querySelector('iframe'); let layer = pv.stage.querySelector('.pins');
+  if (!f || !pv.stage.classList.contains('board')) { if (layer) layer.remove(); return; }
+  if (!layer) { layer = document.createElement('div'); layer.className = 'pins'; layer.onclick = onPinLayerClick; pv.stage.appendChild(layer); }
+  const w = +f.dataset.w, h = +f.dataset.h, k = parseFloat((f.style.transform.match(/scale\(([\d.]+)\)/) || [])[1] || 1);
+  layer.style.left = f.style.left; layer.style.top = f.style.top; layer.style.width = `${w * k}px`; layer.style.height = `${h * k}px`;
+  const board = noteBoard();
+  layer.innerHTML = notes.list.map((n, i) => n.board === board ? `<div class="pin ${n.status} ${notes.sel === n.id ? 'on' : ''}" data-id="${n.id}" style="left:${(n.x * 100).toFixed(2)}%;top:${(n.y * 100).toFixed(2)}%" title="${esc(n.text)}"><span>${i + 1}</span></div>` : '').join('');
+  for (const p of layer.querySelectorAll('.pin')) p.onclick = (e) => { e.stopPropagation(); selectNote(+p.dataset.id); };
+}
+function onPinLayerClick(e) {
+  if (!notes.on || !pvCurrent) return;
+  const r = e.currentTarget.getBoundingClientRect(), sr = pv.stage.getBoundingClientRect();
+  const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  openComposer(x, y, e.clientX - sr.left, e.clientY - sr.top);
+}
+function closeComposer() { const c = pv.stage.querySelector('.composer'); if (c) c.remove(); }
+function openComposer(x, y, px, py) {
+  closeComposer(); const c = document.createElement('div'); c.className = 'composer';
+  const sr = pv.stage.getBoundingClientRect(); c.style.left = `${Math.max(0, Math.min(px + 12, sr.width - 282))}px`; c.style.top = `${Math.max(0, Math.min(py + 12, sr.height - 150))}px`;
+  c.innerHTML = `<div class="b">NOTE · ${esc(boardTitle(noteBoard()).toUpperCase())} · ${placeWord(x, y)}</div><textarea placeholder="What should change here, and why?"></textarea><div class="row"><button class="btn go" type="button">ADD THE NOTE</button><button class="btn" type="button">CANCEL</button></div>`;
+  const [add, cancel] = c.querySelectorAll('button'); const ta = c.querySelector('textarea');
+  add.onclick = async () => {
+    const text = ta.value.trim(); if (!text) { ta.focus(); return; }
+    add.disabled = true;
+    const r = await daemon({ cmd: 'note_add', artifact: pvCurrent.id, board: noteBoard(), board_title: boardTitle(noteBoard()), x, y, text, by: signerName });
+    if (!r.ok) { add.disabled = false; alert(r.error || 'Could not add the note'); return; }
+    closeComposer(); await loadNotes(); selectNote(r.note.id);
+  };
+  cancel.onclick = closeComposer;
+  ta.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) add.click(); if (e.key === 'Escape') { closeComposer(); e.stopPropagation(); } };
+  pv.stage.appendChild(c); ta.focus();
+}
+function selectNote(id) {
+  notes.sel = id; const n = notes.list.find((x) => x.id === id);
+  if (n && n.board && n.board !== noteBoard()) { const b = [...pv.boards.querySelectorAll('button')].find((x) => x.dataset.file === n.board); if (b) b.click(); }
+  renderNotes(); layoutPins();
+  const el = $('pv-rail').querySelector(`.note[data-id="${id}"]`); if (el) el.scrollIntoView({ block: 'nearest' });
+}
+function renderNotes() {
+  const rail = $('pv-rail'); if (!pvCurrent) return;
+  const open = notes.list.filter((n) => n.status === 'open');
+  $('pv-notes').textContent = `NOTES${notes.list.length ? ' · ' + notes.list.length : ''}`;
+  pv.box.classList.toggle('notes', notes.on || notes.list.length > 0);
+  rail.querySelector('.list').innerHTML = notes.list.length
+    ? notes.list.map((n, i) => `<div class="note ${n.status} ${notes.sel === n.id ? 'on' : ''}" data-id="${n.id}"><div class="b"><span class="n">${i + 1}</span><span>${esc((n.board_title || boardTitle(n.board)).toUpperCase())} · ${placeWord(n.x, n.y)}${n.status !== 'open' ? ' · ' + n.status.toUpperCase() : ''}</span><button class="x" title="Remove the note" data-x="${n.id}">×</button></div>${esc(n.text)}${n.status !== 'done' ? `<div style="margin-top:6px"><button class="btn" data-done="${n.id}" style="padding:2px 6px;font-size:8.5px">${n.status === 'sent' ? 'CLOSE · DONE' : 'DONE'}</button></div>` : ''}</div>`).join('')
+    : `<div style="padding:10px 2px;font:10px var(--mono);letter-spacing:.12em;color:var(--dim);line-height:1.7">${notes.on ? 'CLICK ON THE BOARD WHERE SOMETHING SHOULD CHANGE AND WRITE THE NOTE.' : 'PRESS N OR THE NOTES BUTTON, THEN CLICK ON THE BOARD WHERE SOMETHING SHOULD CHANGE.'}</div>`;
+  for (const el of rail.querySelectorAll('.note')) el.onclick = () => selectNote(+el.dataset.id);
+  for (const b of rail.querySelectorAll('button[data-x]')) b.onclick = async (e) => { e.stopPropagation(); await daemon({ cmd: 'note_remove', artifact: pvCurrent.id, id: +b.dataset.x }); if (notes.sel === +b.dataset.x) notes.sel = null; loadNotes(); };
+  for (const b of rail.querySelectorAll('button[data-done]')) b.onclick = async (e) => { e.stopPropagation(); await daemon({ cmd: 'note_set', artifact: pvCurrent.id, id: +b.dataset.done, status: 'done' }); loadNotes(); };
+  const send = $('pv-send'); send.disabled = !open.length; send.textContent = open.length ? `SEND ${open.length} NOTE${open.length > 1 ? 'S' : ''} TO THE DESIGNER` : 'NOTHING TO SEND';
+  const s = (model.sessions || []).find((x) => (x.artifacts || []).some((a) => a.id === pvCurrent.id));
+  rail.querySelector('.reply').innerHTML = s
+    ? `<b>THE DESIGNER · ${esc((s.title || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}</b>${esc(s.last_text || 'Nothing said yet.')}`
+    : '<b>THE DESIGNER</b>No session of this design on this PC: the notes open a new one.';
+}
+async function sendNotes() {
+  if (!pvCurrent) return; const msg = $('pv-sendmsg'); const b = $('pv-send'); b.disabled = true; msg.textContent = 'SENDING…';
+  const r = await daemon({ cmd: 'notes_send', artifact: pvCurrent.id, title: pvCurrent.title || '', url: pvCurrent.url || '' });
+  msg.textContent = r.ok ? ({ delivered: 'DELIVERED: THE DESIGNER IS ON IT', queued: 'QUEUED: THE SESSION GETS IT AS SOON AS IT IS FREE', new_session: 'A NEW SESSION OPENED WITH THE NOTES' }[r.how] || 'SENT') : (r.error || 'could not send').toUpperCase();
+  loadNotes();
+}
+function setNotesMode(on) { notes.on = on; pv.stage.classList.toggle('noting', on); $('pv-notes').classList.toggle('on', on); if (!on) closeComposer(); if (pvCurrent) { renderNotes(); layoutPins(); fitBoard(); } }
+$('pv-notes').addEventListener('click', () => setNotesMode(!notes.on));
+$('pv-send').addEventListener('click', sendNotes);
+setInterval(() => { if (pvCurrent && pv.box.classList.contains('on') && pv.box.classList.contains('notes')) renderNotes(); }, 10000);
 // Full screen: the panel over the whole window, the board as large as it fits (up to 2x).
 function setFull(on) {
   pv.box.classList.toggle('full', on);
@@ -981,11 +1094,12 @@ addEventListener('keydown', (e) => {
   if (!pv.box.classList.contains('on')) return;
   const tag = (e.target && e.target.tagName) || '';
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (e.target && e.target.isContentEditable);
-  if (e.key === 'Escape') { if (pv.box.classList.contains('full')) setFull(false); else closePreview(); e.preventDefault(); return; }
+  if (e.key === 'Escape') { if (pv.stage.querySelector('.composer')) closeComposer(); else if (notes.on) setNotesMode(false); else if (pv.box.classList.contains('full')) setFull(false); else closePreview(); e.preventDefault(); return; }
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === 'ArrowRight') { stepBoard(1); e.preventDefault(); }
   else if (e.key === 'ArrowLeft') { stepBoard(-1); e.preventDefault(); }
   else if (e.key === 'f' || e.key === 'F') { setFull(!pv.box.classList.contains('full')); e.preventDefault(); }
+  else if (e.key === 'n' || e.key === 'N') { setNotesMode(!notes.on); e.preventDefault(); }
 });
 addEventListener('resize', fitBoard);
 function showBoard(base, file, w, h) {
@@ -994,6 +1108,7 @@ function showBoard(base, file, w, h) {
   f.onload = fitBoard;
   pv.stage.appendChild(f); fitBoard(); requestAnimationFrame(fitBoard);
   for (const b of pv.boards.querySelectorAll('button')) b.classList.toggle('on', b.dataset.file === file);
+  closeComposer(); layoutPins();
 }
 async function preview(a) {
   pvCurrent = a;
@@ -1001,6 +1116,7 @@ async function preview(a) {
   pv.title.textContent = a.title || 'Untitled ' + a.kind;
   pv.boards.innerHTML = ''; pv.stage.innerHTML = ''; pv.stage.className = 'stage fill';
   pv.box.classList.add('on');
+  notes.list = []; notes.sel = null; setNotesMode(false); loadNotes();
   const base = artifactBase(a), entry = a.entry || 'index.html';
   if (entry.endsWith('canvas.json')) {
     const dir = entry.slice(0, entry.length - 'canvas.json'.length);

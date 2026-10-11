@@ -15,6 +15,7 @@ mod install;
 mod listen;
 mod mdns;
 mod net;
+mod notes;
 mod paths;
 mod peers;
 mod plane;
