@@ -1277,7 +1277,7 @@ class TorchFeature {
     required this.sessionsMerged,
     required this.sessionsTotal,
     this.prdSource = '',
-    this.design = DesignInfo.glare,
+    this.design = DesignInfo.policyDefault,
     this.flow = FlowInfo.empty,
     this.planeParentUrl = '',
     this.planeItems = const <String, PlaneItem>{},
@@ -1357,7 +1357,7 @@ class TorchFeature {
         prd: _asString(j['prd']),
         prdSigned: j['prd_signed'] == true,
         prdSource: _asString(j['prd_source']),
-        design: j['design'] is Map ? DesignInfo.fromJson(Map<String, dynamic>.from(j['design'] as Map)) : DesignInfo.glare,
+        design: j['design'] is Map ? DesignInfo.fromJson(Map<String, dynamic>.from(j['design'] as Map)) : DesignInfo.policyDefault,
         warnings: _asStringList(j['warnings']),
         sessionsMerged: _asInt(j['sessions_merged']),
         sessionsTotal: _asInt(j['sessions_total']),
@@ -1376,7 +1376,8 @@ class TorchFeature {
 class DesignInfo {
   const DesignInfo({required this.name, required this.repo, required this.dir, required this.reference, required this.present, required this.checkedOut, required this.glare});
 
-  static const DesignInfo glare = DesignInfo(name: 'Glare', repo: '', dir: '', reference: 'context/rules/', present: false, checkedOut: true, glare: true);
+  /// The policy's default: Glare, with its rules in context/rules/.
+  static const DesignInfo policyDefault = DesignInfo(name: 'Glare', repo: '', dir: '', reference: 'context/rules/', present: false, checkedOut: true, glare: true);
 
   final String name;
   final String repo;

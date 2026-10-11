@@ -837,7 +837,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final r = await policy(pcId, 'set_design', {'feature': f.key, 'workspace': f.workspace, 'name': name, 'repo': repo, 'dir': dir, 'reference': reference});
     if (r['ok'] != true) return ('${r['error'] ?? 'The PC could not save it'}', const <String>[]);
     Timer(const Duration(milliseconds: 600), refreshFeatures);
-    return ('', _asStringList(r['notes']));
+    return ('', <String>[for (final n in (r['notes'] is List ? r['notes'] as List : const <dynamic>[])) '$n']);
   }
 
   /// Claims a role for the signer of this phone (the PC fills in the phone).

@@ -4,7 +4,7 @@ import WebKit
 /// The operations console as a Mac app: one dark window with the same page
 /// `mewo dashboard` serves, fed straight from the daemon's control socket
 /// (no HTTP server, nothing listening). Dock icon, full screen, ⌘R reloads.
-final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
   private var window: NSWindow!
   private var web: WKWebView!
   private var timer: Timer?
@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     config.setURLSchemeHandler(ArtifactSchemeHandler(), forURLScheme: "mewo-artifact")
     web = WKWebView(frame: .zero, configuration: config)
     web.navigationDelegate = self
+    web.uiDelegate = self
     web.setValue(false, forKey: "drawsBackground")
 
     window = NSWindow(
@@ -163,6 +164,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 /// `mewo-artifact://a/<id>/<path>`: the daemon's copy of what a session
 /// published, from its state folder, so the page can show a design, a page
 /// or a document in an iframe without a server.
+extension AppDelegate {
+  // The page's alert() and confirm(): without these a WKWebView answers
+  // confirm() with false, and a button that asks first does nothing.
+  func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+    let a = NSAlert()
+    a.messageText = message
+    a.addButton(withTitle: "OK")
+    a.runModal()
+    completionHandler()
+  }
+
+  func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+    let a = NSAlert()
+    a.messageText = message
+    a.addButton(withTitle: "OK")
+    a.addButton(withTitle: "Cancel")
+    completionHandler(a.runModal() == .alertFirstButtonReturn)
+  }
+}
+
 final class ArtifactSchemeHandler: NSObject, WKURLSchemeHandler {
   static let root = URL(fileURLWithPath: NSHomeDirectory() + "/.local/state/mewo-on-fire/artifacts").standardizedFileURL
 
