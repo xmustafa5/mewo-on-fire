@@ -298,7 +298,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             tokio::task::block_in_place(|| plane_request(state, req))
         }
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -561,6 +561,18 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
             flow::journal(&ws, &key, "estimates_done", "Estimates marked as in the PRD", Vec::new(), "", true, Value::Null);
             json!({"ok": true})
         }
+        // v2.2: which PRD a feature follows.
+        "prds" => match state.feature(&ws, &key) {
+            Some(f) => json!({"ok": true, "prd": f.prd, "source": f.prd_source, "prds": policy::prd_choices(&ws, &f.app, &flow::picked_prd(&ws, &f.key))}),
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
+        "set_prd" => match state.feature(&ws, &key) {
+            Some(f) => match flow::set_prd(&ws, &f, &s("prd")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
         "unsign" => match state.feature(&ws, &key) {
             Some(f) => match flow::unsign(&ws, &f, &s("gate"), &s("role")) {
                 Ok(v) => v,

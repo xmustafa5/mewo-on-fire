@@ -765,3 +765,20 @@ token}` (an empty token keeps the saved one); `plane_status` →
 connection, no token) and each feature `plane: {parent, parent_url,
 items: {key: {id, url, group, assignees, sequence_id}}}`.
 
+# v2.2 — which PRD a feature follows
+
+A feature's PRD is found by name: the file the session plan names, else
+the newest `{App}_{Feature}_PRD_V…`, else the app's own
+`{App}_App_PRD_V…`. When the PRD is named differently (a module PRD
+such as `Contact_Center_Conversation_PRD_V1.0.md` for a feature called
+`contacts-ui`), the feature can be pointed at a PRD *family*: the part
+of the file name before `_PRD_V`. The newest version of that family
+counts, so the pick survives the rename to V1.0 at signature.
+
+Control commands (also phone frames): `prds {feature, workspace}` →
+`{prd (file in use), source, prds: [{stem, display, file, folder,
+version, signed, app, current}]}`, the app's own families first;
+`set_prd {feature, workspace, prd}` with a stem or a file name (cut at
+`_PRD_V`), empty to go back to the name match. The pick lives in the
+flow state, is journaled as `prd_pick` (rolls back to the previous
+pick) and shows in `features` as `prd_source: "picked"`.

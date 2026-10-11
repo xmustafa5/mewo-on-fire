@@ -472,6 +472,119 @@ class _RolesSheetState extends State<_RolesSheet> {
   }
 }
 
+// ---- which PRD a feature follows (v2.2) ----
+
+Future<void> showPrdSheet(BuildContext context, {required String pcId, required TorchFeature feature}) {
+  return showModalBottomSheet<void>(context: context, isScrollControlled: true, builder: (_) => _PrdSheet(pcId: pcId, feature: feature));
+}
+
+class _PrdSheet extends StatefulWidget {
+  const _PrdSheet({required this.pcId, required this.feature});
+  final String pcId;
+  final TorchFeature feature;
+  @override
+  State<_PrdSheet> createState() => _PrdSheetState();
+}
+
+class _PrdSheetState extends State<_PrdSheet> {
+  final AppState _state = AppState.instance;
+  List<PrdChoice>? _list;
+  String _inUse = '';
+  String _busy = '';
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final r = await _state.prds(widget.pcId, widget.feature);
+    if (!mounted) return;
+    setState(() {
+      _list = r.$1;
+      _inUse = r.$2;
+      _error = r.$3;
+    });
+  }
+
+  Future<void> _use(String stem) async {
+    setState(() {
+      _busy = stem.isEmpty ? '-' : stem;
+      _error = '';
+    });
+    final e = await _state.setPrd(widget.pcId, widget.feature, stem);
+    if (!mounted) return;
+    setState(() {
+      _busy = '';
+      _error = e;
+    });
+    if (e.isEmpty) {
+      HapticFeedback.mediumImpact();
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final f = widget.feature;
+    final list = _list;
+    final rows = <Widget>[];
+    if (list == null) {
+      rows.add(const Padding(padding: EdgeInsets.symmetric(vertical: 24), child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)))));
+    } else if (list.isEmpty) {
+      rows.add(Padding(padding: const EdgeInsets.only(top: 12), child: Text('No …_PRD_V….md file under torch-product.', style: t.bodySmall?.copyWith(color: Ember.text2))));
+    } else {
+      for (final p in list) {
+        final inUse = p.file == _inUse;
+        rows.add(GlassCard(
+          margin: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+          radius: 14,
+          borderColor: inUse ? Ember.amber.withValues(alpha: 0.5) : null,
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(p.display, style: t.titleSmall?.copyWith(fontSize: 14)),
+                    Text('${p.version} · ${p.signed ? 'signed' : 'draft'}${inUse ? ' · in use' : ''}${p.current ? ' · picked' : ''}', style: t.labelSmall?.copyWith(color: p.signed ? Ember.ok : Ember.text3)),
+                    Text(p.folder, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.labelSmall?.copyWith(color: Ember.text3, fontSize: 10)),
+                  ],
+                ),
+              ),
+              EmberButton(label: inUse ? 'In use' : 'Use', small: true, style: inUse ? EmberButtonStyle.ghost : EmberButtonStyle.secondary, busy: _busy == p.stem, onPressed: inUse || _busy.isNotEmpty ? null : () => _use(p.stem)),
+            ],
+          ),
+        ));
+      }
+    }
+    final picked = f.prdSource == 'picked';
+    return _sheet(
+      context,
+      Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(context, Icons.description_rounded, 'PRD', 'The PRD ${f.app} / ${f.slug} follows. Its newest version counts, and V1.0 means signed.'),
+          _label(context, picked ? 'PICKED BY HAND' : 'MATCHED BY NAME'),
+          ...rows,
+          if (picked)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: EmberButton(label: 'Back to the automatic match', small: true, style: EmberButtonStyle.ghost, busy: _busy == '-', onPressed: _busy.isNotEmpty ? null : () => _use('')),
+            ),
+          _errorLine(context, _error),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
 // ---- tasks under a session, in Plane (v2.1) ----
 
 Future<void> showTasksSheet(BuildContext context, {required String pcId, required TorchFeature feature, required PlanSession session}) {

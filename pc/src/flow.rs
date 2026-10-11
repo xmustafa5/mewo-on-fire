@@ -76,6 +76,9 @@ pub struct FlowState {
     pub log: Vec<Value>,
     pub released_at: u64,
     pub closed_at: u64,
+    /// v2.2: the PRD family the feature follows (`{App}_{Name}`, the file
+    /// name before `_PRD_V`); empty when the name match decides.
+    pub prd: String,
 }
 
 impl FlowState {
@@ -512,7 +515,38 @@ fn today() -> String {
 /// or the app's).
 fn find_prd(ws: &Path, f: &Feature) -> Option<(PathBuf, u32, u32)> {
     let named = f.plan.as_ref().map(|p| p.prd.clone()).unwrap_or_default();
-    policy::prd_file(ws, &f.app, &f.slug, &named).map(|(p, a, b, _)| (p, a, b))
+    policy::prd_file(ws, &f.app, &f.slug, &named, &picked_prd(ws, &f.key)).map(|(p, a, b, _)| (p, a, b))
+}
+
+/// v2.2: the PRD family a feature was pointed at; empty for the name match.
+pub fn picked_prd(ws: &Path, key: &str) -> String {
+    load_all().get(&flow_key(ws, key)).map(|s| s.prd.clone()).unwrap_or_default()
+}
+
+/// v2.2: points the feature at a PRD family (a stem like
+/// `Contact_Center_Conversation`, or a file name, cut at `_PRD_V`); an
+/// empty value goes back to the name match. Journaled, so it rolls back.
+pub fn set_prd(ws: &Path, f: &Feature, stem: &str) -> Result<Value, String> {
+    let stem = stem.trim().trim_end_matches(".md");
+    let stem = match stem.to_ascii_lowercase().find("_prd_v") {
+        Some(i) => &stem[..i],
+        None => stem,
+    };
+    if !stem.is_empty() && !matches!(policy::prd_file(ws, &f.app, &f.slug, "", stem), Some((_, _, _, "picked"))) {
+        return Err(format!("No {stem}_PRD_V….md was found under torch-product"));
+    }
+    let prev = picked_prd(ws, &f.key);
+    if prev.eq_ignore_ascii_case(stem) {
+        return Ok(json!({"ok": true, "already": true, "prd": stem}));
+    }
+    let title = if stem.is_empty() { "PRD back to the automatic match".to_string() } else { format!("PRD set to {}", stem.replace('_', " ")) };
+    update(ws, &f.key, |st| {
+        st.prd = stem.to_string();
+        st.note(title.clone());
+    });
+    policy::invalidate();
+    journal(ws, &f.key, "prd_pick", &title, Vec::new(), "", true, json!({"prev": prev, "prd": stem}));
+    Ok(json!({"ok": true, "prd": stem}))
 }
 
 fn set_header(lines: &mut [String], key: &str, value: &str) -> bool {
@@ -571,7 +605,7 @@ pub fn journal(ws: &Path, key: &str, kind: &str, title: &str, files: Vec<String>
     // The board hears about it too (v2.1).
     let item = match kind {
         "sign" | "unsign" => format!("gate:{}", data.get("gate").and_then(Value::as_str).unwrap_or("")),
-        "prd" | "prd_withdraw" => "prd".to_string(),
+        "prd" | "prd_withdraw" | "prd_pick" => "prd".to_string(),
         "estimate" | "estimates_done" => "estimates".to_string(),
         "start" | "plan_status" => format!("session:{}", data.get("n").or_else(|| data.get("session")).and_then(Value::as_u64).unwrap_or(0)),
         "uat" => "gate:uat".to_string(),
@@ -719,6 +753,7 @@ pub fn rollback(ws: &Path, f: &Feature, id: u64) -> Result<Value, String> {
                 st.estimates.retain(|e| !e.role.eq_ignore_ascii_case(role));
             }
             "estimates_done" => st.estimates_done = false,
+            "prd_pick" => st.prd = data.get("prev").and_then(Value::as_str).unwrap_or("").to_string(),
             "release" => st.released_at = 0,
             "run" | "start" => {
                 let started = data.get("started").and_then(Value::as_u64).unwrap_or(0);

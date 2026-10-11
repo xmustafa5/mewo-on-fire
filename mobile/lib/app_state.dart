@@ -813,6 +813,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return r;
   }
 
+  /// v2.2: the PRD families a feature can follow: `(list, file in use, error)`.
+  Future<(List<PrdChoice>, String, String)> prds(String pcId, TorchFeature f) async {
+    final r = await policy(pcId, 'prds', {'feature': f.key, 'workspace': f.workspace});
+    if (r['ok'] != true) return (const <PrdChoice>[], '', '${r['error'] ?? 'The PC could not list them'}');
+    final list = <PrdChoice>[
+      if (r['prds'] is List)
+        for (final p in r['prds'] as List)
+          if (p is Map) PrdChoice.fromJson(Map<String, dynamic>.from(p)),
+    ];
+    return (list, '${r['prd'] ?? ''}', '');
+  }
+
+  /// v2.2: points the feature at a PRD family; empty goes back to the name match.
+  Future<String> setPrd(String pcId, TorchFeature f, String stem) => _flowCmd(pcId, 'set_prd', {'feature': f.key, 'workspace': f.workspace, 'prd': stem});
+
   /// Claims a role for the signer of this phone (the PC fills in the phone).
   Future<String> setRole(String pcId, String workspace, String role, String name) => _flowCmd(pcId, 'set_role', {'workspace': workspace, 'role': role, 'name': name, 'phone': ''});
 

@@ -397,7 +397,8 @@ pub struct Feature {
     pub prd: String,
     pub prd_signed: bool,
     /// Where the PRD came from: `plan` (named in SESSION_PLAN.md),
-    /// `feature` (named after the feature), `app` (the app's own PRD).
+    /// `feature` (named after the feature), `app` (the app's own PRD),
+    /// `picked` (chosen for the feature, v2.2).
     pub prd_source: String,
     pub warnings: Vec<String>,
     pub diff_files: u64,
@@ -809,22 +810,16 @@ pub fn app_display(ws: &Path, app: &str) -> String {
 /// names, else the newest named after the feature
 /// (`{App}_{Feature}_PRD_V…`), else the app's own (`{App}_App_PRD_V…`),
 /// since a full-app PRD covers its features (policy 5.2).
-pub fn prd_file(ws: &Path, app: &str, slug: &str, named: &str) -> Option<(PathBuf, u32, u32, &'static str)> {
-    let mut all: Vec<(PathBuf, String, u32, u32, u32)> = Vec::new();
-    walk_prds(&ws.join("torch-product"), 0, &mut |path| {
-        let name = path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        if !name.contains("_prd_v") {
-            return;
+pub fn prd_file(ws: &Path, app: &str, slug: &str, named: &str, pick: &str) -> Option<(PathBuf, u32, u32, &'static str)> {
+    let all = all_prds(ws);
+    // v2.2: the family the feature was pointed at, its newest version.
+    let pick_l = pick.trim().to_ascii_lowercase();
+    if !pick_l.is_empty() {
+        let needle = format!("{pick_l}_prd_v");
+        if let Some((p, _, a, b, _)) = all.iter().find(|(_, n, _, _, _)| n.starts_with(&needle)) {
+            return Some((p.clone(), *a, *b, "picked"));
         }
-        let ver = name.rsplit("_prd_v").next().unwrap_or("").trim_end_matches(".md");
-        let mut it = ver.split('.');
-        let major: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let minor: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        // A third number when there is one; a suffix like `_delta` ranks below the plain file.
-        let patch: u32 = it.next().and_then(|s| s.split('_').next()).and_then(|s| s.parse().ok()).map(|p: u32| if ver.contains('_') { p * 2 } else { p * 2 + 1 }).unwrap_or(1);
-        all.push((path.to_path_buf(), name, major, minor, patch));
-    });
-    all.sort_by_key(|(_, _, a, b, c)| std::cmp::Reverse((*a, *b, *c)));
+    }
     let named_l = named.trim().trim_matches('`').to_ascii_lowercase();
     if !named_l.is_empty() {
         if let Some((p, _, a, b, _)) = all.iter().find(|(_, n, _, _, _)| *n == named_l) {
@@ -840,6 +835,58 @@ pub fn prd_file(ws: &Path, app: &str, slug: &str, named: &str) -> Option<(PathBu
         return Some((p.clone(), *a, *b, "app"));
     }
     None
+}
+
+/// Every `…_PRD_V….md` under torch-product: `(path, lowercased name,
+/// major, minor, patch rank)`, newest first.
+fn all_prds(ws: &Path) -> Vec<(PathBuf, String, u32, u32, u32)> {
+    let mut all: Vec<(PathBuf, String, u32, u32, u32)> = Vec::new();
+    walk_prds(&ws.join("torch-product"), 0, &mut |path| {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if !name.contains("_prd_v") {
+            return;
+        }
+        let ver = name.rsplit("_prd_v").next().unwrap_or("").trim_end_matches(".md");
+        let mut it = ver.split('.');
+        let major: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        // A third number when there is one; a suffix like `_delta` ranks below the plain file.
+        let patch: u32 = it.next().and_then(|s| s.split('_').next()).and_then(|s| s.parse().ok()).map(|p: u32| if ver.contains('_') { p * 2 } else { p * 2 + 1 }).unwrap_or(1);
+        all.push((path.to_path_buf(), name, major, minor, patch));
+    });
+    all.sort_by_key(|(_, _, a, b, c)| std::cmp::Reverse((*a, *b, *c)));
+    all
+}
+
+/// v2.2: the PRD families of the workspace (the part of the file name
+/// before `_PRD_V`), the newest version of each, the app's own first.
+pub fn prd_choices(ws: &Path, app: &str, pick: &str) -> Vec<Value> {
+    let app_l = app_display(ws, app).to_ascii_lowercase().replace(' ', "_").replace('&', "and");
+    let pick_l = pick.trim().to_ascii_lowercase();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<Value> = Vec::new();
+    for (p, n, a, _, _) in all_prds(ws) {
+        let Some(i) = n.find("_prd_v") else { continue };
+        if !seen.insert(n[..i].to_string()) {
+            continue;
+        }
+        let file = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+        let stem = file.get(..i).unwrap_or(&file).to_string();
+        let version = n[i + "_prd_v".len()..].trim_end_matches(".md").to_ascii_uppercase();
+        let folder = p.parent().and_then(|d| d.strip_prefix(ws).ok()).map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+        out.push(json!({
+            "stem": stem,
+            "display": stem.replace('_', " "),
+            "file": file,
+            "folder": folder,
+            "version": format!("V{version}"),
+            "signed": a >= 1,
+            "app": n[..i].starts_with(&app_l),
+            "current": !pick_l.is_empty() && n[..i] == pick_l,
+        }));
+    }
+    out.sort_by_key(|v| !v["app"].as_bool().unwrap_or(false));
+    out
 }
 
 fn walk_prds(dir: &Path, depth: u8, f: &mut dyn FnMut(&Path)) {
@@ -1026,7 +1073,8 @@ fn read_features(ws: &Path) -> Vec<Feature> {
                 })
                 .unwrap_or(0);
             let named = plan.as_ref().map(|p| p.prd.clone()).unwrap_or_default();
-            let (prd, prd_signed, prd_source) = match prd_file(ws, &app, &slug, &named) {
+            let pick = crate::flow::picked_prd(ws, &format!("{app}/{slug}"));
+            let (prd, prd_signed, prd_source) = match prd_file(ws, &app, &slug, &named, &pick) {
                 Some((path, major, _, source)) => (path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), major >= 1, source.to_string()),
                 None => (String::new(), false, String::new()),
             };

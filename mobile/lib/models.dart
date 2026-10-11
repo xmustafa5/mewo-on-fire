@@ -1276,6 +1276,7 @@ class TorchFeature {
     required this.warnings,
     required this.sessionsMerged,
     required this.sessionsTotal,
+    this.prdSource = '',
     this.flow = FlowInfo.empty,
     this.planeParentUrl = '',
     this.planeItems = const <String, PlaneItem>{},
@@ -1283,6 +1284,9 @@ class TorchFeature {
 
   final FlowInfo flow;
   final String planeParentUrl;
+
+  /// Where the PRD came from: `plan`, `feature`, `app`, or `picked` (v2.2).
+  final String prdSource;
 
   /// `gate:<id>`, `prd`, `estimates`, `session:<n>` → the Plane item.
   final Map<String, PlaneItem> planeItems;
@@ -1348,6 +1352,7 @@ class TorchFeature {
         repos: _asStringList(j['repos']),
         prd: _asString(j['prd']),
         prdSigned: j['prd_signed'] == true,
+        prdSource: _asString(j['prd_source']),
         warnings: _asStringList(j['warnings']),
         sessionsMerged: _asInt(j['sessions_merged']),
         sessionsTotal: _asInt(j['sessions_total']),
@@ -1358,6 +1363,31 @@ class TorchFeature {
             for (final e in ((j['plane'] as Map)['items'] as Map).entries)
               if (e.value is Map) '${e.key}': PlaneItem.fromJson(Map<String, dynamic>.from(e.value as Map)),
         },
+      );
+}
+
+/// A PRD family of the workspace (v2.2): the newest `{stem}_PRD_V….md`.
+class PrdChoice {
+  const PrdChoice({required this.stem, required this.display, required this.file, required this.folder, required this.version, required this.signed, required this.current});
+
+  final String stem;
+  final String display;
+  final String file;
+  final String folder;
+  final String version;
+  final bool signed;
+
+  /// Picked for the feature by hand.
+  final bool current;
+
+  factory PrdChoice.fromJson(Map<String, dynamic> j) => PrdChoice(
+        stem: _asString(j['stem']),
+        display: _asString(j['display']),
+        file: _asString(j['file']),
+        folder: _asString(j['folder']),
+        version: _asString(j['version']),
+        signed: j['signed'] == true,
+        current: j['current'] == true,
       );
 }
 

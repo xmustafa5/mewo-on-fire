@@ -86,6 +86,17 @@ header {
 #addpc textarea { width: 100%; box-sizing: border-box; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 11px var(--mono); padding: 7px 9px; outline: none; min-height: 54px; resize: vertical; }
 #addpc .row2 { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
 #addpc .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-top: 8px; color: var(--amber); min-height: 14px; }
+#pickprd { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); width: 560px; display: none; z-index: 9; background: rgba(6, 12, 20, 0.97); border: 1px solid var(--cyan-line); padding: 14px 16px; box-shadow: 0 16px 50px rgba(0,0,0,.7), 0 0 30px rgba(79,209,255,.12); }
+#pickprd.on { display: block; }
+#pickprd .t { font-weight: 700; color: #fff; font-size: 14px; }
+#pickprd .m { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); margin: 4px 0 10px; line-height: 1.6; }
+#pickprd .found { border: 1px solid var(--cyan-dim); max-height: 300px; overflow: auto; margin-bottom: 10px; }
+#pickprd .found .row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 7px 10px; border-bottom: 1px dashed rgba(79,209,255,0.12); }
+#pickprd .found .row.cur { background: rgba(255,176,32,0.07); }
+#pickprd .found .row .n { color: #fff; font-size: 12.5px; } #pickprd .found .row .h { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; color: var(--dim); }
+#pickprd .found .row .v { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; color: var(--amber); white-space: nowrap; } #pickprd .found .row .v.ok { color: #6ee7a8; }
+#pickprd .row2 { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+#pickprd .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-top: 8px; color: var(--amber); min-height: 14px; }
 #addpc .msg.bad { color: var(--heat); }
 .views { display: flex; gap: 6px; margin-left: 26px; }
 .views button { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); font: 10px var(--mono); letter-spacing: 0.28em; padding: 7px 12px; }
@@ -446,6 +457,13 @@ footer .seg { display: flex; gap: 22px; }
       <textarea id="ap-paste" placeholder='Or paste the line: {"v":1,"id":"…","name":"…","hosts":[…],"port":47822,"fp":"…","code":"…"}'></textarea>
       <div class="row2"><button class="btn go" id="ap-go" type="button">PAIR FROM THE PASTED LINE</button><button class="btn" id="ap-scan" type="button">SCAN AGAIN</button><button class="btn" id="ap-close" type="button">CLOSE</button></div>
       <div class="msg" id="ap-msg"></div>
+    </div>
+    <div id="pickprd">
+      <div class="t" id="pp-title">PRD</div>
+      <div class="m">THE PRD THIS FEATURE FOLLOWS. BY ITSELF MEWO TAKES THE ONE THE SESSION PLAN NAMES, ELSE THE ONE NAMED AFTER THE FEATURE, ELSE THE APP'S OWN. PICK ANOTHER FAMILY HERE: ITS NEWEST VERSION COUNTS, AND V1.0 MEANS SIGNED.</div>
+      <div class="found" id="pp-found"><div class="row"><span class="h">READING TORCH-PRODUCT…</span></div></div>
+      <div class="row2"><button class="btn" id="pp-auto" type="button">BACK TO THE AUTOMATIC MATCH</button><button class="btn" id="pp-close" type="button">CLOSE</button></div>
+      <div class="msg" id="pp-msg"></div>
     </div>
     <div id="newsess">
       <div class="t">New session</div>
@@ -819,7 +837,7 @@ function renderFeature() {
   const h = [];
   const plItem = (k) => (f.plane && f.plane.items && f.plane.items[k]) || null;
   const plLink = (k) => { const it = plItem(k); return it ? `<button class="plink" type="button" data-url="${esc(it.url)}" title="Open in Plane">PLANE${it.sequence_id ? ' #' + it.sequence_id : ''}${it.assignees && it.assignees.length ? ' · ASSIGNED' : ''}</button>` : ''; };
-  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}` : ' · NO PRD FOUND'}</div></div>${f.plane && f.plane.parent_url ? `<button class="plink" type="button" data-url="${esc(f.plane.parent_url)}">ON PLANE</button>` : ''}${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
+  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}${f.prd_source === 'picked' ? ' · PICKED' : ''}` : ' · NO PRD FOUND'} <button class="btn pickprd" type="button" title="${esc(f.prd || 'No PRD file matched')}" style="padding:2px 6px;font-size:8.5px;margin-left:6px">PRD…</button></div></div>${f.plane && f.plane.parent_url ? `<button class="plink" type="button" data-url="${esc(f.plane.parent_url)}">ON PLANE</button>` : ''}${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
   for (const w of (f.warnings || [])) h.push(`<div class="warn" style="margin-top:10px">${esc(w)}</div>`);
   if (pcs.length) h.push(`<div class="sec" style="margin-top:12px"><span>ON THE NETWORK</span></div><div class="files">${pcs.map((p) => `<span class="pill ${p.ready ? 'merged' : 'waiting'}" title="${esc(p.name)}">${esc((p.name || '').toUpperCase())}${p.sync.remote ? ` · ↑${p.sync.ahead || 0} ↓${p.sync.behind || 0}` : p.sync.local ? ' · NO REMOTE' : ' · NO BRANCH'}${p.ready ? '' : ' · REPO NOT FETCHED'}</span>`).join('')}</div>`);
   h.push(flowHtml(f));
@@ -864,6 +882,7 @@ function renderFeature() {
     setTimeout(refreshFeatures, 1500);
   };
   for (const b of box.querySelectorAll('button.hf')) b.onclick = () => preview({ id: f.handoff_id, entry: b.dataset.file, kind: 'page', title: `${f.app} / ${f.slug} · ${b.dataset.file}`, url: '' });
+  const ppb = box.querySelector('button.pickprd'); if (ppb) ppb.onclick = () => openPrdPicker(f);
   for (const gate of box.querySelectorAll('.gate')) {
     const form = gate.querySelector('form'); const id = gate.dataset.gate; const g = f.gates.find((x) => x.id === id);
     const signBtn = gate.querySelector('button.sign'); if (signBtn) signBtn.onclick = () => { form.classList.add('on'); form.querySelector('.name').focus(); };
@@ -1047,6 +1066,30 @@ async function scanPcs() {
 }
 function openAddPc() { $('addpc').classList.add('on'); $('ap-msg').textContent = ''; scanPcs(); }
 $('ap-close').addEventListener('click', () => $('addpc').classList.remove('on'));
+
+// v2.2: which PRD a feature follows.
+let ppFeature = null;
+function pcArg(f) { const me = (model.daemon || {}).pc_id; return f.pc_id && f.pc_id !== me ? { pc_id: f.pc_id } : {}; }
+async function openPrdPicker(f) {
+  ppFeature = f; $('pickprd').classList.add('on'); $('pp-msg').textContent = '';
+  $('pp-title').textContent = `PRD for ${f.app} / ${f.slug}`;
+  const box = $('pp-found'); box.innerHTML = '<div class="row"><span class="h">READING TORCH-PRODUCT…</span></div>';
+  const r = await daemon({ cmd: 'prds', feature: f.key, workspace: f.workspace, ...pcArg(f) });
+  if (!r.ok) { box.innerHTML = `<div class="row"><span class="h">${esc((r.error || 'could not read the PRDs').toUpperCase())}</span></div>`; return; }
+  const list = r.prds || [];
+  if (!list.length) { box.innerHTML = '<div class="row"><span class="h">NO …_PRD_V….MD FILE UNDER TORCH-PRODUCT</span></div>'; return; }
+  box.innerHTML = list.map((p, i) => { const inUse = p.file === r.prd; return `<div class="row ${inUse ? 'cur' : ''}"><div><div class="n">${esc(p.display)}</div><div class="h">${esc(p.folder)}</div></div><span class="v ${p.signed ? 'ok' : ''}">${esc(p.version)} · ${p.signed ? 'SIGNED' : 'DRAFT'}${inUse ? ' · IN USE' : ''}</span><button class="btn go ppuse" type="button" data-i="${i}" ${inUse ? 'disabled' : ''}>USE</button></div>`; }).join('');
+  for (const b of box.querySelectorAll('button.ppuse')) b.onclick = () => setPrd(list[+b.dataset.i].stem);
+}
+async function setPrd(stem) {
+  const f = ppFeature; if (!f) return; const msg = $('pp-msg'); msg.textContent = 'SAVING…';
+  const r = await daemon({ cmd: 'set_prd', feature: f.key, workspace: f.workspace, prd: stem, ...pcArg(f) });
+  if (!r.ok) { msg.textContent = (r.error || 'could not set it').toUpperCase(); return; }
+  msg.textContent = stem ? `NOW FOLLOWING ${stem.replace(/_/g, ' ').toUpperCase()}` : 'BACK TO THE AUTOMATIC MATCH';
+  setTimeout(() => { $('pickprd').classList.remove('on'); refreshFeatures(); }, 900);
+}
+$('pp-close').addEventListener('click', () => $('pickprd').classList.remove('on'));
+$('pp-auto').addEventListener('click', () => setPrd(''));
 $('ap-scan').addEventListener('click', scanPcs);
 $('ap-go').addEventListener('click', async () => {
   const msg = $('ap-msg'); const text = $('ap-paste').value.trim();

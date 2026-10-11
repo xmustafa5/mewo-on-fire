@@ -218,8 +218,14 @@ class _FeatureScreenState extends State<FeatureScreen> {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Text(f.branch, style: t.labelSmall?.copyWith(fontFamily: mono, color: Ember.text2, fontWeight: FontWeight.w400, letterSpacing: 0)),
-          if (f.prd.isNotEmpty) _tag(context, f.prdSigned ? 'PRD signed' : 'PRD draft', f.prdSigned ? Ember.ok : Ember.amber),
-          if (f.prd.isEmpty) _tag(context, 'No PRD found', Ember.text3),
+          PressScale(
+            onTap: () => showPrdSheet(context, pcId: widget.pcId, feature: f),
+            child: _tag(
+              context,
+              f.prd.isEmpty ? 'No PRD found · pick one' : '${f.prdSigned ? 'PRD signed' : 'PRD draft'}${f.prdSource == 'picked' ? ' · picked' : ''} ▾',
+              f.prd.isEmpty ? Ember.text3 : f.prdSigned ? Ember.ok : Ember.amber,
+            ),
+          ),
           if (f.planeParentUrl.isNotEmpty)
             PressScale(onTap: () => _openPlane(f.planeParentUrl), child: _tag(context, 'On Plane ↗', Ember.mewoSoft)),
           if (f.openQuestions > 0) _tag(context, '${f.openQuestions} open question${f.openQuestions == 1 ? '' : 's'}', Ember.amber),
