@@ -782,3 +782,25 @@ version, signed, app, current}]}`, the app's own families first;
 `_PRD_V`), empty to go back to the name match. The pick lives in the
 flow state, is journaled as `prd_pick` (rolls back to the previous
 pick) and shows in `features` as `prd_source: "picked"`.
+
+# v2.3 — the design system a feature follows
+
+The policy's default is Glare. A feature can follow another system (a
+template such as `TORCH-Corp/tauri-templete`): the record is
+`DESIGN_SYSTEM.md` in the feature folder, a `| Field | Value |` table
+with System, Repository, Checkout (under the workspace, like
+`code/tauri-templete`) and Reference (what to read first), committed on
+the feature branch so every session and every PC reads the same. The
+design prompt (step 4) draws on that system's shell, components and
+tokens instead of Glare, the intake prompt (step 7) maps values to its
+tokens, the session-plan prompt (step 8) names it, and the self-check
+accepts its name and checkout folder in a line with a colour as it
+accepts "glare".
+
+Control command (also a phone frame): `set_design {feature, workspace,
+name, repo, dir, reference}`; an empty name or "Glare" removes the
+record. A missing checkout is cloned from `repo` when the daemon can;
+otherwise the reply's `notes` say what to run. Journaled as `design`
+(rolls back by reverting the commit). `features` carries each
+feature's `design: {name, repo, dir, reference, present, checked_out,
+glare}` and a warning when the checkout is missing.

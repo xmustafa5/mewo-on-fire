@@ -226,6 +226,10 @@ class _FeatureScreenState extends State<FeatureScreen> {
               f.prd.isEmpty ? Ember.text3 : f.prdSigned ? Ember.ok : Ember.amber,
             ),
           ),
+          PressScale(
+            onTap: () => showDesignSheet(context, pcId: widget.pcId, feature: f),
+            child: _tag(context, 'Design · ${f.design.name}${f.design.checkedOut ? '' : ' · checkout missing'} ▾', f.design.checkedOut ? (f.design.glare ? Ember.text3 : Ember.mewoSoft) : Ember.amber),
+          ),
           if (f.planeParentUrl.isNotEmpty)
             PressScale(onTap: () => _openPlane(f.planeParentUrl), child: _tag(context, 'On Plane ↗', Ember.mewoSoft)),
           if (f.openQuestions > 0) _tag(context, '${f.openQuestions} open question${f.openQuestions == 1 ? '' : 's'}', Ember.amber),

@@ -298,7 +298,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             tokio::task::block_in_place(|| plane_request(state, req))
         }
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -481,7 +481,8 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
         } else {
             feature_branch_of(&dir, &feature)
         };
-        return serde_json::to_value(policy::scan(&dir, &feature_branch)).unwrap_or(Value::Null);
+        let ok_words = design_words(&dir, &feature);
+        return serde_json::to_value(policy::scan(&dir, &feature_branch, &ok_words)).unwrap_or(Value::Null);
     }
     if cmd == "set_check" {
         let index = req.get("index").and_then(Value::as_u64).unwrap_or(99) as usize;
@@ -573,6 +574,14 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
             },
             None => json!({"ok": false, "error": "unknown feature"}),
         },
+        // v2.3: the design system the feature follows.
+        "set_design" => match state.feature(&ws, &key) {
+            Some(f) => match flow::set_design(&ws, &f, &s("name"), &s("repo"), &s("dir"), &s("reference")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            },
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
         "unsign" => match state.feature(&ws, &key) {
             Some(f) => match flow::unsign(&ws, &f, &s("gate"), &s("role")) {
                 Ok(v) => v,
@@ -653,6 +662,25 @@ fn feature_branch_of(dir: &str, feature: &str) -> String {
     }
     let Some(ws) = policy::workspace_for(dir) else { return String::new() };
     policy::features(&ws).into_iter().find(|f| f.key == feature).map(|f| f.branch).unwrap_or_default()
+}
+
+/// v2.3: the feature's design system words (its name, its checkout
+/// folder) the self-check accepts in a line with a colour, like "glare".
+fn design_words(dir: &str, feature: &str) -> Vec<String> {
+    if feature.is_empty() {
+        return Vec::new();
+    }
+    let Some(ws) = policy::workspace_for(dir) else { return Vec::new() };
+    let Some(f) = policy::features(&ws).into_iter().find(|f| f.key == feature) else { return Vec::new() };
+    let mut out = Vec::new();
+    for k in ["name", "dir"] {
+        let v = f.design[k].as_str().unwrap_or("");
+        let base = v.rsplit('/').next().unwrap_or(v).trim();
+        if base.len() >= 3 && !base.eq_ignore_ascii_case("glare") {
+            out.push(base.to_string());
+        }
+    }
+    out
 }
 
 fn workspace_of(workspace: &str, key: &str) -> Option<std::path::PathBuf> {

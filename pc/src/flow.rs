@@ -268,6 +268,30 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
     let feature = feature_words(&f.slug);
     let dir = &f.dir;
     let prd_folder = format!("torch-product/Business OS/Business OS - apps/{app}/PRD/");
+    // v2.3: the design system the feature follows.
+    let ds_glare = f.design["glare"].as_bool().unwrap_or(true);
+    let ds_name = f.design["name"].as_str().unwrap_or("Glare").to_string();
+    let ds_dir = f.design["dir"].as_str().unwrap_or("").to_string();
+    let ds_ref = f.design["reference"].as_str().unwrap_or("").to_string();
+    let design_rule = if ds_glare {
+        "following the Glare design system (the rules in context/rules/) and the app's design principles".to_string()
+    } else {
+        format!(
+            "following the {ds_name} design system, not Glare: its checkout is {} in the workspace (see {dir}/DESIGN_SYSTEM.md); read {} first, and draw every screen on its app shell and its components, with its tokens, and the app's design principles",
+            if ds_dir.is_empty() { "not in the workspace yet".to_string() } else { ds_dir.clone() },
+            if ds_ref.is_empty() { format!("{dir}/DESIGN_SYSTEM.md") } else { ds_ref.clone() }
+        )
+    };
+    let design_note = if ds_glare {
+        String::new()
+    } else {
+        format!(" The feature's design system is {ds_name}{} (see {dir}/DESIGN_SYSTEM.md): map values to its tokens and components, not Glare's, and say so in the README.", if ds_dir.is_empty() { String::new() } else { format!(" at {ds_dir}") })
+    };
+    let design_plan = if ds_glare {
+        String::new()
+    } else {
+        format!(" Design system: {ds_name}{} (see {dir}/DESIGN_SYSTEM.md); the build sessions start from it, copying the structure of its example module, not from Glare alone.", if ds_dir.is_empty() { String::new() } else { format!(" at {ds_dir}") })
+    };
     match step {
         1 => format!(
             "We are starting the feature \"{feature}\" of the {app} app (notebook app-notebooks/{}/, branch {}). Use the prd-writer skill to draft its PRD. Read the root CLAUDE.md, the app's CLAUDE.md, the Apps Catalog and the app's existing PRDs in \"{prd_folder}\" first. Run grill-me: ask me your questions in rounds and do not fill gaps yourself. Save the result as {}_{}_PRD_V0.1.md in \"{prd_folder}\", status Draft, with the changelog, and report the readiness checklist (policy Checklist A) line by line.",
@@ -281,15 +305,15 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
             )
         }
         4 => format!(
-            "The PRD {} of the {app} app, feature \"{feature}\", is signed (\"{prd_folder}\"). Design every screen of its In-Scope items with Claude Design: start a Design artifact (one for the whole feature) and add one board per screen and per state the policy asks for: empty, loading, error, filled and permission-denied, following the Glare design system (the rules in context/rules/) and the app's design principles. Name each board after its flow and screen. Ask me when a decision is the product team's. When every In-Scope item has its boards, say that the design is ready for handoff.",
+            "The PRD {} of the {app} app, feature \"{feature}\", is signed (\"{prd_folder}\"). Design every screen of its In-Scope items with Claude Design: start a Design artifact (one for the whole feature) and add one board per screen and per state the policy asks for: empty, loading, error, filled and permission-denied, {design_rule}. Name each board after its flow and screen. Ask me when a decision is the product team's. When every In-Scope item has its boards, say that the design is ready for handoff.",
             f.prd
         ),
         7 => format!(
-            "Use the handoff-intake skill on the handoff in {dir}/handoff/ for the {app} app, feature \"{feature}\", against the signed PRD {} in \"{prd_folder}\". Validate first and report the gaps, then clean, write the handoff README from context/templates/HANDOFF_README.md, add open questions to {dir}/OPEN_QUESTIONS.md, and fill in the intake section of {dir}/HANDOFF_CHECKLIST.md for the FE and BE leads to confirm.",
+            "Use the handoff-intake skill on the handoff in {dir}/handoff/ for the {app} app, feature \"{feature}\", against the signed PRD {} in \"{prd_folder}\". Validate first and report the gaps, then clean, write the handoff README from context/templates/HANDOFF_README.md, add open questions to {dir}/OPEN_QUESTIONS.md, and fill in the intake section of {dir}/HANDOFF_CHECKLIST.md for the FE and BE leads to confirm.{design_note}",
             f.prd
         ),
         8 => format!(
-            "Use the session-plan skill for the {app} app, feature \"{feature}\": the signed PRD {} in \"{prd_folder}\", the handoff in {dir}/handoff/ with its README, {dir}/HANDOFF_CHECKLIST.md and {dir}/OPEN_QUESTIONS.md. Run grill-me first and ask me in rounds. Write {dir}/SESSION_PLAN.md from context/templates/SESSION_PLAN.md with the header, the order table and one section per session with its paste-ready prompt, done-when checks and dependencies. Branch: {}. Code repositories: {}.",
+            "Use the session-plan skill for the {app} app, feature \"{feature}\": the signed PRD {} in \"{prd_folder}\", the handoff in {dir}/handoff/ with its README, {dir}/HANDOFF_CHECKLIST.md and {dir}/OPEN_QUESTIONS.md. Run grill-me first and ask me in rounds. Write {dir}/SESSION_PLAN.md from context/templates/SESSION_PLAN.md with the header, the order table and one section per session with its paste-ready prompt, done-when checks and dependencies. Branch: {}. Code repositories: {}.{design_plan}",
             f.prd, f.branch, if f.repos.is_empty() { "see context/scripts/app-repos.conf".to_string() } else { f.repos.join(", ") }
         ),
         _ => String::new(),
@@ -516,6 +540,92 @@ fn today() -> String {
 fn find_prd(ws: &Path, f: &Feature) -> Option<(PathBuf, u32, u32)> {
     let named = f.plan.as_ref().map(|p| p.prd.clone()).unwrap_or_default();
     policy::prd_file(ws, &f.app, &f.slug, &named, &picked_prd(ws, &f.key)).map(|(p, a, b, _)| (p, a, b))
+}
+
+/// v2.3: the design system the feature follows. An empty name, or
+/// "Glare", removes the record (the policy's default); anything else is
+/// written to DESIGN_SYSTEM.md in the feature folder and committed, so
+/// every session and every PC reads the same. A missing checkout is
+/// cloned when a repository is given. Journaled: it rolls back.
+pub fn set_design(ws: &Path, f: &Feature, name: &str, repo: &str, dir: &str, reference: &str) -> Result<Value, String> {
+    let name = name.trim();
+    let repo = repo.trim();
+    let reference = reference.trim();
+    let dir = dir.trim().trim_matches('/').to_string();
+    if dir.contains("..") || dir.starts_with('/') {
+        return Err("The checkout folder must be inside the workspace, like code/tauri-templete".to_string());
+    }
+    let file = format!("{}/DESIGN_SYSTEM.md", f.dir);
+    let path = ws.join(&file);
+    let glare = name.is_empty() || name.eq_ignore_ascii_case("glare");
+    let mut notes: Vec<String> = Vec::new();
+    let mut extra_files: Vec<String> = Vec::new();
+    let mut to_commit = true;
+    if glare {
+        if !path.exists() {
+            return Ok(json!({"ok": true, "already": true}));
+        }
+        to_commit = policy::git(ws, &["ls-files", "--error-unmatch", "--", &file]).is_some();
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+    } else {
+        let mut dir_out = dir.clone();
+        if dir_out.is_empty() && !repo.is_empty() {
+            let base = repo.trim_end_matches('/').trim_end_matches(".git").rsplit('/').next().unwrap_or("").to_string();
+            if !base.is_empty() {
+                dir_out = format!("code/{base}");
+            }
+        }
+        // The checkout: a submodule where the workspace keeps its code
+        // repositories that way (torch-main does), else a plain clone.
+        let submodules = ws.join(".gitmodules").is_file();
+        if !dir_out.is_empty() && !repo.is_empty() {
+            let registered = submodules && fs::read_to_string(ws.join(".gitmodules")).map(|t| t.contains(&format!("path = {dir_out}"))).unwrap_or(false);
+            if submodules && !registered {
+                let _ = policy::git_long(ws, &["submodule", "add", "-q", repo, &dir_out]);
+                if ws.join(&dir_out).is_dir() {
+                    extra_files.push(".gitmodules".to_string());
+                    extra_files.push(dir_out.clone());
+                    notes.push(format!("{dir_out} added as a submodule of the workspace"));
+                } else {
+                    notes.push(format!("Could not add it from the daemon; run `git submodule add {repo} {dir_out}` in the workspace"));
+                }
+            } else if !submodules && !ws.join(&dir_out).is_dir() {
+                let _ = policy::git_long(ws, &["clone", "-q", repo, &dir_out]);
+                if ws.join(&dir_out).is_dir() {
+                    notes.push(format!("Cloned {repo} into {dir_out}"));
+                } else {
+                    notes.push(format!("Could not clone it from the daemon; run `git clone {repo} {dir_out}` in the workspace"));
+                }
+            }
+        }
+        let text = format!(
+            "# Design system: {} / {}\n\n| Field | Value |\n|---|---|\n| System | {} |\n| Repository | {} |\n| Checkout | {} |\n| Reference | {} |\n| Instead of | Glare |\n\nThe designs and the build sessions of this feature follow this system: screens are drawn on its shell and its components, values map to its tokens, and the intake and the self-check accept its variables where the policy says Glare. Written from Mewo on Fire; edit by hand if you like.\n",
+            f.app, f.slug, name, repo, dir_out, reference
+        );
+        // The same record, already committed: nothing to do.
+        if extra_files.is_empty() && fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) && policy::git(ws, &["ls-files", "--error-unmatch", "--", &file]).is_some() && policy::git(ws, &["diff", "--quiet", "--", &file]).is_some() {
+            return Ok(json!({"ok": true, "already": true, "notes": notes, "committed": true}));
+        }
+        let _ = fs::create_dir_all(path.parent().unwrap_or(ws));
+        fs::write(&path, text).map_err(|e| e.to_string())?;
+    }
+    policy::invalidate();
+    let title = if glare { "Design system back to Glare".to_string() } else { format!("Design system: {name}") };
+    let commit = if to_commit {
+        let mut files = vec![file.clone()];
+        files.extend(extra_files.iter().cloned());
+        match policy::commit_files(ws, &f.branch, &files, &format!("{}: {}", f.slug, title)) {
+            Ok(h) => h,
+            Err(e) => {
+                notes.push(format!("Not committed: {e}"));
+                String::new()
+            }
+        }
+    } else {
+        String::new()
+    };
+    journal(ws, &f.key, "design", &title, vec![file], &commit, true, json!({"name": name, "repo": repo, "dir": dir, "reference": reference}));
+    Ok(json!({"ok": true, "notes": notes, "committed": !commit.is_empty()}))
 }
 
 /// v2.2: the PRD family a feature was pointed at; empty for the name match.

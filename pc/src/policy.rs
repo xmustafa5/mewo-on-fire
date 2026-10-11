@@ -400,6 +400,10 @@ pub struct Feature {
     /// `feature` (named after the feature), `app` (the app's own PRD),
     /// `picked` (chosen for the feature, v2.2).
     pub prd_source: String,
+    /// v2.3: the design system the feature follows, from DESIGN_SYSTEM.md
+    /// in its folder: `{name, repo, dir, reference, present, checked_out,
+    /// glare}`. Glare, the policy's default, when there is no record.
+    pub design: Value,
     pub warnings: Vec<String>,
     pub diff_files: u64,
     pub diff_additions: u64,
@@ -889,6 +893,46 @@ pub fn prd_choices(ws: &Path, app: &str, pick: &str) -> Vec<Value> {
     out
 }
 
+/// v2.3: the design system a feature follows, read from
+/// `DESIGN_SYSTEM.md` in its folder (a `| Field | Value |` table with
+/// System, Repository, Checkout and Reference). Glare, the policy's
+/// default, when there is no record.
+pub fn design_system(ws: &Path, feature_dir: &Path) -> Value {
+    let mut name = String::new();
+    let mut repo = String::new();
+    let mut dir = String::new();
+    let mut reference = String::new();
+    let present = match read_lines(&feature_dir.join("DESIGN_SYSTEM.md")) {
+        Some(text) => {
+            for l in text.lines() {
+                let c = cells(l);
+                if c.len() < 2 {
+                    continue;
+                }
+                let v = c[1].trim().trim_matches('`').to_string();
+                match c[0].trim().to_ascii_lowercase().as_str() {
+                    "system" => name = v,
+                    "repository" => repo = v,
+                    "checkout" => dir = v.trim_matches('/').to_string(),
+                    "reference" => reference = v,
+                    _ => {}
+                }
+            }
+            true
+        }
+        None => false,
+    };
+    let glare = !present || name.is_empty() || name.eq_ignore_ascii_case("glare");
+    if glare {
+        name = "Glare".to_string();
+        if reference.is_empty() {
+            reference = "context/rules/".to_string();
+        }
+    }
+    let checked_out = dir.is_empty() || ws.join(&dir).is_dir();
+    json!({"name": name, "repo": repo, "dir": dir, "reference": reference, "present": present, "checked_out": checked_out, "glare": glare})
+}
+
 fn walk_prds(dir: &Path, depth: u8, f: &mut dyn FnMut(&Path)) {
     if depth > 6 {
         return;
@@ -1112,6 +1156,14 @@ fn read_features(ws: &Path) -> Vec<Feature> {
             }
             let too_big = light && (diff.0 > 15 || diff.1 > 400);
             let mut warnings = Vec::new();
+            let design = design_system(ws, &dir);
+            if design["present"].as_bool() == Some(true) && design["checked_out"].as_bool() == Some(false) {
+                warnings.push(format!(
+                    "The design system checkout {} is missing. Clone {} there.",
+                    design["dir"].as_str().unwrap_or(""),
+                    design["repo"].as_str().filter(|r| !r.is_empty()).unwrap_or("its repository")
+                ));
+            }
             if too_big {
                 warnings.push(format!(
                     "Bigger than a light path: {} files, {} lines added. Policy 11: stop and move to the full flow.",
@@ -1127,6 +1179,7 @@ fn read_features(ws: &Path) -> Vec<Feature> {
                 "HANDOFF_CHECKLIST.md",
                 "LIGHT_PATH.md",
                 "OPEN_QUESTIONS.md",
+                "DESIGN_SYSTEM.md",
             ]
             .iter()
             .map(|f| mtime(&dir.join(f)))
@@ -1154,6 +1207,7 @@ fn read_features(ws: &Path) -> Vec<Feature> {
                 prd,
                 prd_signed,
                 prd_source,
+                design,
                 warnings,
                 diff_files: diff.0,
                 diff_additions: diff.1,
@@ -1782,6 +1836,7 @@ fn check_added(path: &str, n: u32, line: &str, findings: &mut Vec<Finding>) {
         if matches!(ext, "ts" | "tsx" | "js" | "jsx" | "css" | "scss" | "html" | "dart" | "swift")
             && !lower.contains("token")
             && !lower.contains("glare")
+            && !SCAN_OK_WORDS.lock().unwrap_or_else(|p| p.into_inner()).iter().any(|w| lower.contains(w.as_str()))
             && !lower.contains("--")
             && (has_hex_colour(t) || lower.contains("rgb(") || lower.contains("rgba(") || lower.contains("hsl("))
         {
@@ -1820,7 +1875,12 @@ fn has_hex_colour(t: &str) -> bool {
 /// Scans the session's changes against the branch they will be reviewed
 /// into: the feature branch when the session has its own branch, else
 /// main. Working tree included, so the owner sees it before committing.
-pub fn scan(dir: &str, feature_branch: &str) -> Scan {
+/// v2.3: words of the feature's design system (its name, its checkout
+/// folder) that make a line with a colour acceptable, like "glare" does.
+static SCAN_OK_WORDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn scan(dir: &str, feature_branch: &str, ok_words: &[String]) -> Scan {
+    *SCAN_OK_WORDS.lock().unwrap_or_else(|p| p.into_inner()) = ok_words.iter().map(|w| w.trim().to_ascii_lowercase()).filter(|w| w.len() >= 3).collect();
     let repo = Path::new(dir);
     if dir.is_empty() || !repo.is_dir() {
         return Scan { error: "The session's folder is not on this PC".to_string(), ..Scan::default() };

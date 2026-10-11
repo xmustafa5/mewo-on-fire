@@ -472,6 +472,110 @@ class _RolesSheetState extends State<_RolesSheet> {
   }
 }
 
+// ---- the design system a feature follows (v2.3) ----
+
+Future<void> showDesignSheet(BuildContext context, {required String pcId, required TorchFeature feature}) {
+  return showModalBottomSheet<void>(context: context, isScrollControlled: true, builder: (_) => _DesignSheet(pcId: pcId, feature: feature));
+}
+
+class _DesignSheet extends StatefulWidget {
+  const _DesignSheet({required this.pcId, required this.feature});
+  final String pcId;
+  final TorchFeature feature;
+  @override
+  State<_DesignSheet> createState() => _DesignSheetState();
+}
+
+class _DesignSheetState extends State<_DesignSheet> {
+  final AppState _state = AppState.instance;
+  late final TextEditingController _name;
+  late final TextEditingController _repo;
+  late final TextEditingController _dir;
+  late final TextEditingController _ref;
+  bool _busy = false;
+  String _error = '';
+  String _note = '';
+
+  @override
+  void initState() {
+    super.initState();
+    final d = widget.feature.design;
+    _name = TextEditingController(text: d.glare ? '' : d.name);
+    _repo = TextEditingController(text: d.glare ? '' : d.repo);
+    _dir = TextEditingController(text: d.glare ? '' : d.dir);
+    _ref = TextEditingController(text: d.glare ? '' : d.reference);
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _repo.dispose();
+    _dir.dispose();
+    _ref.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save({bool glare = false}) async {
+    final name = glare ? '' : _name.text.trim();
+    if (!glare && name.isEmpty) {
+      setState(() => _error = 'Name the system');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = '';
+      _note = '';
+    });
+    final r = await _state.setDesign(widget.pcId, widget.feature, name: name, repo: glare ? '' : _repo.text.trim(), dir: glare ? '' : _dir.text.trim(), reference: glare ? '' : _ref.text.trim());
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = r.$1;
+      _note = r.$2.join(' · ');
+    });
+    if (r.$1.isEmpty) {
+      HapticFeedback.mediumImpact();
+      if (_note.isEmpty) Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final f = widget.feature;
+    final d = f.design;
+    return _sheet(
+      context,
+      Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(context, Icons.palette_rounded, 'Design system', 'What the designs and build sessions of ${f.app} / ${f.slug} follow. The policy\'s default is Glare.'),
+          _label(context, d.glare ? 'NOW GLARE' : 'NOW ${d.name.toUpperCase()}${d.checkedOut ? '' : ' · CHECKOUT MISSING'}'),
+          _label(context, 'SYSTEM'),
+          TextField(controller: _name, textCapitalization: TextCapitalization.words, decoration: const InputDecoration(hintText: 'Tauri Template')),
+          _label(context, 'REPOSITORY'),
+          TextField(controller: _repo, keyboardType: TextInputType.url, autocorrect: false, decoration: const InputDecoration(hintText: 'https://github.com/TORCH-Corp/tauri-templete')),
+          _label(context, 'CHECKOUT, IN THE WORKSPACE'),
+          TextField(controller: _dir, autocorrect: false, decoration: const InputDecoration(hintText: 'code/tauri-templete (empty: code/ + the repository name)')),
+          _label(context, 'READ FIRST'),
+          TextField(controller: _ref, minLines: 1, maxLines: 3, autocorrect: false, decoration: const InputDecoration(hintText: 'src/app/modules/example, src/app/components/ui/components, src/styles/theme.css')),
+          const SizedBox(height: 14),
+          EmberButton(label: 'Save for this feature', icon: Icons.check_rounded, expand: true, busy: _busy, onPressed: _busy ? null : () => _save()),
+          if (!d.glare)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: EmberButton(label: 'Back to Glare', small: true, style: EmberButtonStyle.ghost, onPressed: _busy ? null : () => _save(glare: true)),
+            ),
+          if (_note.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_note, style: t.bodySmall?.copyWith(color: Ember.amber))),
+          _errorLine(context, _error),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
 // ---- which PRD a feature follows (v2.2) ----
 
 Future<void> showPrdSheet(BuildContext context, {required String pcId, required TorchFeature feature}) {

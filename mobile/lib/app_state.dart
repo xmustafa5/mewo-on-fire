@@ -828,6 +828,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// v2.2: points the feature at a PRD family; empty goes back to the name match.
   Future<String> setPrd(String pcId, TorchFeature f, String stem) => _flowCmd(pcId, 'set_prd', {'feature': f.key, 'workspace': f.workspace, 'prd': stem});
 
+  /// v2.3: the design system the feature follows; an empty name means Glare.
+  /// Returns `(error, notes)`: the notes say what the PC did about the checkout.
+  Future<(String, List<String>)> setDesign(String pcId, TorchFeature f, {required String name, required String repo, required String dir, required String reference}) async {
+    final r = await policy(pcId, 'set_design', {'feature': f.key, 'workspace': f.workspace, 'name': name, 'repo': repo, 'dir': dir, 'reference': reference});
+    if (r['ok'] != true) return ('${r['error'] ?? 'The PC could not save it'}', const <String>[]);
+    Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return ('', _asStringList(r['notes']));
+  }
+
   /// Claims a role for the signer of this phone (the PC fills in the phone).
   Future<String> setRole(String pcId, String workspace, String role, String name) => _flowCmd(pcId, 'set_role', {'workspace': workspace, 'role': role, 'name': name, 'phone': ''});
 

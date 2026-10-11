@@ -97,6 +97,15 @@ header {
 #pickprd .found .row .v { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; color: var(--amber); white-space: nowrap; } #pickprd .found .row .v.ok { color: #6ee7a8; }
 #pickprd .row2 { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
 #pickprd .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-top: 8px; color: var(--amber); min-height: 14px; }
+#dsys { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); width: 560px; display: none; z-index: 9; background: rgba(6, 12, 20, 0.97); border: 1px solid var(--cyan-line); padding: 14px 16px; box-shadow: 0 16px 50px rgba(0,0,0,.7), 0 0 30px rgba(79,209,255,.12); }
+#dsys.on { display: block; }
+#dsys .t { font-weight: 700; color: #fff; font-size: 14px; }
+#dsys .m { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); margin: 4px 0 6px; line-height: 1.6; }
+#dsys label { display: block; font: 9px var(--mono); letter-spacing: 0.16em; color: var(--dim); margin: 9px 0 4px; }
+#dsys input { width: 100%; box-sizing: border-box; background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 12px var(--mono); padding: 6px 8px; outline: none; }
+#dsys input:focus { border-color: var(--cyan); }
+#dsys .row2 { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+#dsys .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-top: 8px; color: var(--amber); min-height: 14px; }
 #addpc .msg.bad { color: var(--heat); }
 .views { display: flex; gap: 6px; margin-left: 26px; }
 .views button { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); font: 10px var(--mono); letter-spacing: 0.28em; padding: 7px 12px; }
@@ -468,6 +477,16 @@ footer .seg { display: flex; gap: 22px; }
       <div class="found" id="pp-found"><div class="row"><span class="h">READING TORCH-PRODUCT…</span></div></div>
       <div class="row2"><button class="btn" id="pp-auto" type="button">BACK TO THE AUTOMATIC MATCH</button><button class="btn" id="pp-close" type="button">CLOSE</button></div>
       <div class="msg" id="pp-msg"></div>
+    </div>
+    <div id="dsys">
+      <div class="t" id="ds-title">Design system</div>
+      <div class="m">WHAT THE DESIGNS AND THE BUILD SESSIONS OF THIS FEATURE FOLLOW. THE POLICY'S DEFAULT IS GLARE. NAME ANOTHER SYSTEM AND ITS REPOSITORY: THE CHECKOUT GOES UNDER CODE/ IN THE WORKSPACE, THE RECORD INTO THE FEATURE FOLDER, COMMITTED.</div>
+      <label for="ds-name">SYSTEM</label><input id="ds-name" placeholder="Tauri Template">
+      <label for="ds-repo">REPOSITORY</label><input id="ds-repo" placeholder="https://github.com/TORCH-Corp/tauri-templete">
+      <label for="ds-dir">CHECKOUT · IN THE WORKSPACE</label><input id="ds-dir" placeholder="code/tauri-templete (empty: code/ plus the repository's name)">
+      <label for="ds-ref">READ FIRST · WHERE ITS SHELL, COMPONENTS AND TOKENS ARE</label><input id="ds-ref" placeholder="src/app/modules/example, src/app/components/ui/components, src/styles/theme.css">
+      <div class="row2"><button class="btn go" id="ds-save" type="button">SAVE</button><button class="btn" id="ds-glare" type="button">BACK TO GLARE</button><button class="btn" id="ds-close" type="button">CLOSE</button></div>
+      <div class="msg" id="ds-msg"></div>
     </div>
     <div id="newsess">
       <div class="t">New session</div>
@@ -841,7 +860,7 @@ function renderFeature() {
   const h = [];
   const plItem = (k) => (f.plane && f.plane.items && f.plane.items[k]) || null;
   const plLink = (k) => { const it = plItem(k); return it ? `<button class="plink" type="button" data-url="${esc(it.url)}" title="Open in Plane">PLANE${it.sequence_id ? ' #' + it.sequence_id : ''}${it.assignees && it.assignees.length ? ' · ASSIGNED' : ''}</button>` : ''; };
-  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}${f.prd_source === 'picked' ? ' · PICKED' : ''}` : ' · NO PRD FOUND'} <button class="btn pickprd" type="button" title="${esc(f.prd || 'No PRD file matched')}" style="padding:2px 6px;font-size:8.5px;margin-left:6px">PRD…</button></div></div>${f.plane && f.plane.parent_url ? `<button class="plink" type="button" data-url="${esc(f.plane.parent_url)}">ON PLANE</button>` : ''}${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
+  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}${f.prd_source === 'picked' ? ' · PICKED' : ''}` : ' · NO PRD FOUND'} <button class="btn pickprd" type="button" title="${esc(f.prd || 'No PRD file matched')}" style="padding:2px 6px;font-size:8.5px;margin-left:6px">PRD…</button><button class="btn design" type="button" title="${esc((f.design || {}).repo || 'The design system the feature follows')}" style="padding:2px 6px;font-size:8.5px;margin-left:6px;${(f.design || {}).checked_out === false ? 'border-color:var(--amber);color:var(--amber)' : ''}">DESIGN · ${esc(((f.design || {}).name || 'Glare').toUpperCase())}</button></div></div>${f.plane && f.plane.parent_url ? `<button class="plink" type="button" data-url="${esc(f.plane.parent_url)}">ON PLANE</button>` : ''}${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
   for (const w of (f.warnings || [])) h.push(`<div class="warn" style="margin-top:10px">${esc(w)}</div>`);
   if (pcs.length) h.push(`<div class="sec" style="margin-top:12px"><span>ON THE NETWORK</span></div><div class="files">${pcs.map((p) => `<span class="pill ${p.ready ? 'merged' : 'waiting'}" title="${esc(p.name)}">${esc((p.name || '').toUpperCase())}${p.sync.remote ? ` · ↑${p.sync.ahead || 0} ↓${p.sync.behind || 0}` : p.sync.local ? ' · NO REMOTE' : ' · NO BRANCH'}${p.ready ? '' : ' · REPO NOT FETCHED'}</span>`).join('')}</div>`);
   h.push(flowHtml(f));
@@ -887,6 +906,7 @@ function renderFeature() {
   };
   for (const b of box.querySelectorAll('button.hf')) b.onclick = () => preview({ id: f.handoff_id, entry: b.dataset.file, kind: 'page', title: `${f.app} / ${f.slug} · ${b.dataset.file}`, url: '' });
   const ppb = box.querySelector('button.pickprd'); if (ppb) ppb.onclick = () => openPrdPicker(f);
+  const dsb = box.querySelector('button.design'); if (dsb) dsb.onclick = () => openDesign(f);
   for (const gate of box.querySelectorAll('.gate')) {
     const form = gate.querySelector('form'); const id = gate.dataset.gate; const g = f.gates.find((x) => x.id === id);
     const signBtn = gate.querySelector('button.sign'); if (signBtn) signBtn.onclick = () => { form.classList.add('on'); form.querySelector('.name').focus(); };
@@ -1116,6 +1136,32 @@ async function setPrd(stem) {
   setTimeout(() => { $('pickprd').classList.remove('on'); refreshFeatures(); }, 900);
 }
 $('pp-close').addEventListener('click', () => $('pickprd').classList.remove('on'));
+// v2.3: the design system a feature follows.
+let dsFeature = null;
+function openDesign(f) {
+  dsFeature = f; const d = f.design || {};
+  $('dsys').classList.add('on'); $('ds-title').textContent = `Design system for ${f.app} / ${f.slug}`;
+  $('ds-msg').textContent = d.present && d.checked_out === false ? `CHECKOUT ${d.dir} IS MISSING IN THE WORKSPACE` : d.glare ? 'GLARE, THE POLICY\'S DEFAULT' : `NOW ${(d.name || '').toUpperCase()}`;
+  $('ds-name').value = d.glare ? '' : (d.name || ''); $('ds-repo').value = d.glare ? '' : (d.repo || '');
+  $('ds-dir').value = d.glare ? '' : (d.dir || ''); $('ds-ref').value = d.glare ? '' : (d.reference || '');
+  $('ds-name').focus();
+}
+async function saveDesign(glare) {
+  const f = dsFeature; if (!f) return; const msg = $('ds-msg');
+  const name = glare ? '' : $('ds-name').value.trim();
+  if (!glare && !name) { msg.textContent = 'NAME THE SYSTEM'; $('ds-name').focus(); return; }
+  msg.textContent = 'SAVING… (A MISSING CHECKOUT IS CLONED FIRST)';
+  for (const b of ['ds-save', 'ds-glare']) $(b).disabled = true;
+  const r = await daemon({ cmd: 'set_design', feature: f.key, workspace: f.workspace, name, repo: glare ? '' : $('ds-repo').value.trim(), dir: glare ? '' : $('ds-dir').value.trim(), reference: glare ? '' : $('ds-ref').value.trim(), ...pcArg(f) });
+  for (const b of ['ds-save', 'ds-glare']) $(b).disabled = false;
+  if (!r.ok) { msg.textContent = (r.error || 'could not save it').toUpperCase(); return; }
+  const notes = r.notes || [];
+  msg.textContent = (notes.length ? notes.join(' · ') : glare ? 'BACK TO GLARE' : `NOW ${name}${r.committed ? ', COMMITTED' : ''}`).toUpperCase();
+  setTimeout(() => { $('dsys').classList.remove('on'); refreshFeatures(); }, notes.length ? 3000 : 900);
+}
+$('ds-save').addEventListener('click', () => saveDesign(false));
+$('ds-glare').addEventListener('click', () => saveDesign(true));
+$('ds-close').addEventListener('click', () => $('dsys').classList.remove('on'));
 $('pp-auto').addEventListener('click', () => setPrd(''));
 $('ap-scan').addEventListener('click', scanPcs);
 $('ap-go').addEventListener('click', async () => {

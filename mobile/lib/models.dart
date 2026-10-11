@@ -1277,6 +1277,7 @@ class TorchFeature {
     required this.sessionsMerged,
     required this.sessionsTotal,
     this.prdSource = '',
+    this.design = DesignInfo.glare,
     this.flow = FlowInfo.empty,
     this.planeParentUrl = '',
     this.planeItems = const <String, PlaneItem>{},
@@ -1287,6 +1288,9 @@ class TorchFeature {
 
   /// Where the PRD came from: `plan`, `feature`, `app`, or `picked` (v2.2).
   final String prdSource;
+
+  /// v2.3: the design system the feature follows (Glare unless recorded).
+  final DesignInfo design;
 
   /// `gate:<id>`, `prd`, `estimates`, `session:<n>` → the Plane item.
   final Map<String, PlaneItem> planeItems;
@@ -1353,6 +1357,7 @@ class TorchFeature {
         prd: _asString(j['prd']),
         prdSigned: j['prd_signed'] == true,
         prdSource: _asString(j['prd_source']),
+        design: j['design'] is Map ? DesignInfo.fromJson(Map<String, dynamic>.from(j['design'] as Map)) : DesignInfo.glare,
         warnings: _asStringList(j['warnings']),
         sessionsMerged: _asInt(j['sessions_merged']),
         sessionsTotal: _asInt(j['sessions_total']),
@@ -1363,6 +1368,36 @@ class TorchFeature {
             for (final e in ((j['plane'] as Map)['items'] as Map).entries)
               if (e.value is Map) '${e.key}': PlaneItem.fromJson(Map<String, dynamic>.from(e.value as Map)),
         },
+      );
+}
+
+/// The design system a feature follows (v2.3), from DESIGN_SYSTEM.md in
+/// its folder; Glare, the policy's default, when there is no record.
+class DesignInfo {
+  const DesignInfo({required this.name, required this.repo, required this.dir, required this.reference, required this.present, required this.checkedOut, required this.glare});
+
+  static const DesignInfo glare = DesignInfo(name: 'Glare', repo: '', dir: '', reference: 'context/rules/', present: false, checkedOut: true, glare: true);
+
+  final String name;
+  final String repo;
+
+  /// The checkout, relative to the workspace (`code/tauri-templete`).
+  final String dir;
+
+  /// What to read first: where its shell, components and tokens are.
+  final String reference;
+  final bool present;
+  final bool checkedOut;
+  final bool glare;
+
+  factory DesignInfo.fromJson(Map<String, dynamic> j) => DesignInfo(
+        name: _asString(j['name']).isEmpty ? 'Glare' : _asString(j['name']),
+        repo: _asString(j['repo']),
+        dir: _asString(j['dir']),
+        reference: _asString(j['reference']),
+        present: j['present'] == true,
+        checkedOut: j['checked_out'] != false,
+        glare: j['glare'] != false,
       );
 }
 
