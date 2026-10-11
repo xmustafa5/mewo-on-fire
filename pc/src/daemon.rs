@@ -670,6 +670,13 @@ impl AppState {
         lock(&self.sessions).find(prefix)
     }
 
+    /// v2.4: drops a session and its events; `(had the session, events removed)`.
+    pub fn forget_session(&self, id: &str) -> (bool, usize) {
+        let had = lock(&self.sessions).forget(id);
+        let n = lock(&self.store).forget_session(id);
+        (had, n)
+    }
+
     pub fn prune_sessions(&self) {
         lock(&self.sessions).prune_and_persist();
     }

@@ -814,3 +814,8 @@ PRD or design system reaches it this way. With `dry: true` the reply
 only carries the `action` (its `prompt` included). For step 4 the flow
 remembers `design_since`: boards made before it no longer count, so the
 export takes the new ones; journaled as `redo`, which rolls back.
+
+`session_forget {session_id}` (control socket; a prefix of the id
+works) drops a session from the daemon for good with its feed events,
+after its transcript under `~/.claude/projects/` was deleted; the
+phones learn on their next list.

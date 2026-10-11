@@ -110,6 +110,17 @@ impl Store {
             .collect()
     }
 
+    /// v2.4: the events of a forgotten session go with it.
+    pub fn forget_session(&mut self, session_id: &str) -> usize {
+        let before = self.events.len();
+        self.events.retain(|e| e.session_id != session_id);
+        let n = before - self.events.len();
+        if n > 0 {
+            let _ = self.persist();
+        }
+        n
+    }
+
     fn persist(&self) -> std::io::Result<()> {
         let data = PersistRef {
             next_id: self.next_id,

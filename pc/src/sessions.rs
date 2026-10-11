@@ -831,6 +831,16 @@ impl Sessions {
         self.entries.len() != before
     }
 
+    /// v2.4: drops a session for good (its transcript was deleted); the
+    /// phones learn on the next list.
+    pub fn forget(&mut self, id: &str) -> bool {
+        let had = self.entries.remove(id).is_some();
+        if had {
+            self.persist();
+        }
+        had
+    }
+
     pub fn prune_and_persist(&mut self) {
         if self.prune() {
             self.persist();

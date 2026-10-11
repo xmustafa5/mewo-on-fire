@@ -160,6 +160,17 @@ async fn handle_conn(state: Arc<AppState>, stream: tokio::net::UnixStream) -> Re
                     state.refresh_sessions(None).await;
                     json!({"ok": true, "sessions": state.session_list()})
                 }
+                // v2.4: a session gone for good, with its feed events. The
+                // transcript itself is the caller's to delete.
+                "session_forget" => {
+                    let id = req.get("session_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    let full = match state.find_session(&id) {
+                        Ok(s) => s.id,
+                        Err(e) => return json!({"ok": false, "error": e}),
+                    };
+                    let removed = state.forget_session(&full);
+                    json!({"ok": true, "session_id": full, "removed": removed.0, "events": removed.1})
+                }
                 "chat" => handle_chat(&state, &req).await,
                 // v2.0: a command for another PC of the network goes through this hub.
                 cmd if is_for_peer(&state, &req) => {
