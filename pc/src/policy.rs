@@ -968,37 +968,75 @@ pub fn prepare_repo(repo: &Path, branch: &str) -> Result<String, String> {
     if !is_repo(repo) {
         return Err(format!("{} is not a git repository", repo.display()));
     }
-    let on = git(repo, &["branch", "--show-current"]).unwrap_or_default();
+    // These run on their own clock: the daemon's "git is blocked" marker
+    // (set when some other call hung) must not read as a dirty tree.
+    let g = |args: &[&str], secs: u64| git_now(repo, args, secs);
+    let on = g(&["branch", "--show-current"], 20).ok_or_else(|| format!("git did not answer in {}", repo.display()))?;
     if on == branch {
         return Ok("already on the branch".to_string());
     }
-    let clean = git(repo, &["status", "--porcelain", "--untracked-files=no"]).map(|s| s.trim().is_empty()).unwrap_or(false);
-    if !clean {
+    let status = g(&["status", "--porcelain", "--untracked-files=no"], 40).ok_or_else(|| format!("git status did not answer in {}", repo.display()))?;
+    if !status.trim().is_empty() {
         return Err(format!("{} has uncommitted changes on '{}'; commit or stash them so the session can switch to {branch}", repo.display(), if on.is_empty() { "a detached HEAD" } else { &on }));
     }
-    let _ = git_long(repo, &["fetch", "--quiet", "origin"]);
-    let local = git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_some();
-    let remote = git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_some();
+    let _ = g(&["fetch", "--quiet", "origin"], 60);
+    let local = g(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")], 20).is_some();
+    let remote = g(&["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")], 20).is_some();
     if local {
-        git(repo, &["switch", "--quiet", branch]).ok_or_else(|| format!("could not switch {} to {branch}", repo.display()))?;
+        g(&["switch", "--quiet", branch], 40).ok_or_else(|| format!("could not switch {} to {branch}", repo.display()))?;
         if remote {
-            let _ = git_long(repo, &["pull", "--quiet", "--ff-only"]);
+            let _ = g(&["pull", "--quiet", "--ff-only"], 60);
         }
         return Ok("switched to the branch".to_string());
     }
     if remote {
-        git(repo, &["switch", "--quiet", "--track", "-c", branch, &format!("origin/{branch}")]).ok_or_else(|| format!("could not check out origin/{branch} in {}", repo.display()))?;
+        g(&["switch", "--quiet", "--track", "-c", branch, &format!("origin/{branch}")], 40).ok_or_else(|| format!("could not check out origin/{branch} in {}", repo.display()))?;
         return Ok("checked out the branch from origin".to_string());
     }
-    let base = ["origin/main", "main", "origin/master", "master"].into_iter().find(|b| git(repo, &["rev-parse", "--verify", "--quiet", b]).is_some()).ok_or_else(|| format!("{} has no main branch to branch from", repo.display()))?;
-    git(repo, &["switch", "--quiet", "-c", branch, base]).ok_or_else(|| format!("could not create {branch} in {}", repo.display()))?;
-    if git(repo, &["remote", "get-url", "origin"]).is_some() {
-        if git_long(repo, &["push", "--quiet", "-u", "origin", branch]).is_none() {
+    let base = ["origin/main", "main", "origin/master", "master"].into_iter().find(|b| g(&["rev-parse", "--verify", "--quiet", b], 20).is_some()).ok_or_else(|| format!("{} has no main branch to branch from", repo.display()))?;
+    g(&["switch", "--quiet", "-c", branch, base], 40).ok_or_else(|| format!("could not create {branch} in {}", repo.display()))?;
+    if g(&["remote", "get-url", "origin"], 20).is_some() {
+        if g(&["push", "--quiet", "-u", "origin", branch], 90).is_none() {
             return Ok(format!("created the branch from {base}; the push failed, so the pull request will need it pushed"));
         }
         return Ok(format!("created the branch from {base} and pushed it"));
     }
     Ok(format!("created the branch from {base}"))
+}
+
+/// `git <args>` in `dir` with its own timeout, ignoring the blocked
+/// marker and never setting it: for work that must not be mistaken
+/// for a hang elsewhere.
+fn git_now(dir: &Path, args: &[&str], secs: u64) -> Option<String> {
+    let mut child = Command::new(git_bin())
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut out = String::new();
+                if let Some(mut so) = child.stdout.take() {
+                    use std::io::Read;
+                    let _ = so.read_to_string(&mut out);
+                }
+                return if status.success() { Some(out.trim().to_string()) } else { None };
+            }
+            Ok(None) if started.elapsed() < Duration::from_secs(secs) => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// v2.3: the design system a feature follows, read from
