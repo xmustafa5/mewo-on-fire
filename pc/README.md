@@ -220,6 +220,13 @@ itself and shows its page. It lands in the application menu as "Mewo Console"
 and as `mewo-console`; the tray's **Open Console** opens it (or the browser
 page when it is not installed). Ctrl+R reloads, F11 is full screen.
 
+**Build with me** (beside Build everything on a feature's build) opens each
+session of the plan in a Mewo Session window of its own, where you watch
+Claude work and answer its questions. On Linux it needs GTK 3 and VTE for
+Python (`sudo apt install python3-gi gir1.2-vte-2.91`, there on a stock
+Ubuntu desktop); without them, and on a Mac, the session opens in a
+terminal in the console's colours.
+
 Claude Desktop for Linux works like the Mac app: sessions are tagged from
 `~/.config/Claude/claude-code-sessions`, **Open** and **New session** go
 through its `claude://` handler (`xdg-open`), and the build autopilot's

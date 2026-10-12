@@ -927,11 +927,19 @@ reading, records the choice in OPEN_QUESTIONS.md, and continues.
 
 `build_set {attended: true}` (with `on: true`; the console's BUILD WITH
 ME button) runs the same build autopilot, but each session opens in a
-terminal window of its own on the PC (Terminal on macOS; on Linux the
-desktop's default terminal through `xdg-terminal-exec`, else the first
-known one), running Claude Code interactively in its worktree with the
-session's prompt as its first message, on the tier's model, permissions
-skipped as for a headless run. Its brief says someone is watching:
+window of its own on the PC, running Claude Code interactively in its
+worktree with the session's prompt as its first message, on the tier's
+model, permissions skipped as for a headless run. On Linux it is the
+Mewo Session window (`pc/console/linux/mewo-session`, GTK 3 and VTE for
+Python; built into the binary and written to `<state>/mewo-session`),
+started in a systemd scope of its own so a restart of the service leaves
+it open: its header shows the session's number, goal, worktree branch
+and model, its state (working, needs you, finished, closed, from the
+daemon's `sessions`) and its plan status and pull request (from
+`session_detail`); it asks before closing a running session. Elsewhere
+(macOS, or Linux without VTE for Python) it is a terminal in the
+console's colours: Terminal on macOS; on Linux the desktop's default
+terminal through `xdg-terminal-exec`, else the first known one. Its brief says someone is watching:
 where the plan says to ask or to run grill-me, it asks and waits, and
 the hooks bring the question to the phones too. A small script under
 `<state>/runs/` records the pid and then becomes Claude Code, so the run

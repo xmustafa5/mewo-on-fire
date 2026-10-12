@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Mewo Session for Linux: one build session of "Build with me" in a window
+of its own, in the Mewo on Fire look (GTK + the VTE terminal widget).
+
+The daemon writes this file next to its state and starts it with an info
+file (JSON): the session's number, goal, feature, worktree, model, the
+script to run and the daemon's socket. The script records its pid and then
+becomes Claude Code, so the daemon tracks the run as it tracks a headless
+one. The header follows the session through the daemon: its state (working,
+needs you, finished), its plan status and its pull request.
+
+Ctrl+Shift+C / Ctrl+Shift+V copy and paste, Ctrl+= / Ctrl+- / Ctrl+0 zoom.
+"""
+
+import json
+import os
+import socket
+import sys
+import threading
+
+import gi
+
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("Vte", "2.91")
+from gi.repository import Gdk, GLib, Gtk, Pango, Vte  # noqa: E402
+
+# The console's colours (dashboard/index.html :root).
+BG = "#04070c"
+BG2 = "#070c14"
+CYAN = "#4fd1ff"
+TEXT = "#dbeafe"
+DIM = "#7b93ab"
+FIRE = "#ff6b35"
+AMBER = "#ffb347"
+OK = "#3dd68c"
+ASH = "#6b7280"
+
+# Black, red, green, yellow, blue, magenta, cyan, white; then the bright ones.
+PALETTE = [
+    "#0b1220", "#ff3d1f", "#3dd68c", "#ffb347", "#2f6bff", "#b98cff", "#4fd1ff", "#dbeafe",
+    "#3a4a5e", "#ff6b35", "#6ee7a8", "#ffd08a", "#6b93ff", "#d4b0ff", "#8fe3ff", "#ffffff",
+]
+
+CSS = f"""
+window, .mewo {{ background-color: {BG}; }}
+headerbar {{
+  background-image: none; background-color: {BG2}; box-shadow: none;
+  border-bottom: 1px solid rgba(79, 209, 255, 0.18); min-height: 54px; padding: 0 12px;
+}}
+headerbar button {{ color: {DIM}; background: none; border: none; box-shadow: none; }}
+headerbar button:hover {{ color: {TEXT}; background-color: rgba(79, 209, 255, 0.08); }}
+.goal {{ color: {TEXT}; font-weight: 600; font-size: 11pt; }}
+.meta {{
+  background-color: {BG}; color: {DIM}; font-family: monospace; font-size: 8.5pt;
+  padding: 6px 14px; border-bottom: 1px solid rgba(79, 209, 255, 0.10);
+}}
+.chip {{ font-family: monospace; font-weight: 700; font-size: 8.5pt; padding: 3px 10px; border: 1px solid; border-radius: 2px; }}
+.chip.starting {{ color: {CYAN}; border-color: {CYAN}; background-color: rgba(79, 209, 255, 0.08); }}
+.chip.working {{ color: {FIRE}; border-color: {FIRE}; background-color: rgba(255, 107, 53, 0.10); }}
+.chip.waiting {{ color: {AMBER}; border-color: {AMBER}; background-color: rgba(255, 179, 71, 0.12); }}
+.chip.finished {{ color: {OK}; border-color: {OK}; background-color: rgba(61, 214, 140, 0.10); }}
+.chip.ended {{ color: {ASH}; border-color: {ASH}; }}
+.status {{ color: {DIM}; font-family: monospace; font-size: 8.5pt; }}
+button.pr {{
+  color: {CYAN}; font-family: monospace; font-weight: 700; font-size: 8.5pt; padding: 2px 10px;
+  border: 1px solid rgba(79, 209, 255, 0.28); border-radius: 2px; background: none;
+}}
+button.pr:hover {{ background-color: rgba(79, 209, 255, 0.10); }}
+.edge {{ min-height: 2px; background-color: rgba(79, 209, 255, 0.18); }}
+.edge.working {{ background-color: {FIRE}; }}
+.edge.waiting {{ background-color: {AMBER}; }}
+.edge.finished {{ background-color: {OK}; }}
+box.pane {{ background-color: {BG}; }}
+scrollbar, scrollbar trough {{ background-color: {BG}; border: none; box-shadow: none; }}
+scrollbar slider {{ background-color: rgba(79, 209, 255, 0.30); border: none; min-width: 6px; min-height: 28px; border-radius: 3px; }}
+scrollbar slider:hover {{ background-color: rgba(79, 209, 255, 0.50); }}
+"""
+
+STATES = {
+    "starting": "STARTING",
+    "working": "WORKING",
+    "waiting": "NEEDS YOU",
+    "finished": "FINISHED",
+    "idle": "FINISHED",
+    "ended": "CLOSED",
+}
+
+
+def rgba(hex_colour):
+    c = Gdk.RGBA()
+    c.parse(hex_colour)
+    return c
+
+
+def spaced(text, colour, size="9pt", weight="bold"):
+    """Letter-spaced capitals, the console's label look."""
+    return (
+        f"<span font_family='monospace' size='{size}' weight='{weight}' letter_spacing='2600' "
+        f"foreground='{colour}'>{GLib.markup_escape_text(text)}</span>"
+    )
+
+
+def ask_daemon(sock, request, timeout=4):
+    """One JSON line to the daemon's control socket, one JSON line back."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        s.connect(sock)
+        s.sendall(json.dumps(request).encode() + b"\n")
+        buf = b""
+        while not buf.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    return json.loads(buf or b"{}")
+
+
+class SessionWindow(Gtk.Window):
+    def __init__(self, info):
+        super().__init__(title=info.get("title", "Mewo Session"))
+        self.info = info
+        self.folder = os.path.realpath(info["folder"])
+        self.alive = False
+        self.ended = False
+        self.state = "starting"
+        self.pr_url = ""
+        self.font_scale = 1.0
+
+        self.set_default_size(1100, 760)
+        icon = info.get("icon", "")
+        if icon and os.path.exists(icon):
+            self.set_icon_from_file(icon)
+        self.get_style_context().add_class("mewo")
+
+        # Header: the brand line and the goal; the state chip and the pull request on the right.
+        bar = Gtk.HeaderBar()
+        bar.set_show_close_button(True)
+        titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
+        brand = Gtk.Label(xalign=0)
+        brand.set_markup(
+            spaced("◉ MEWO ON FIRE", CYAN) + spaced(f"  ·  SESSION {info.get('n', '')}", DIM)
+        )
+        goal = Gtk.Label(label=info.get("goal", ""), xalign=0)
+        goal.get_style_context().add_class("goal")
+        goal.set_ellipsize(Pango.EllipsizeMode.END)
+        goal.set_max_width_chars(70)
+        titles.pack_start(brand, False, False, 0)
+        titles.pack_start(goal, False, False, 0)
+        bar.pack_start(titles)
+        self.chip = Gtk.Label(label=STATES["starting"], valign=Gtk.Align.CENTER)
+        self.chip.get_style_context().add_class("chip")
+        self.chip.get_style_context().add_class("starting")
+        self.pr = Gtk.Button(label="PULL REQUEST ↗", valign=Gtk.Align.CENTER)
+        self.pr.get_style_context().add_class("pr")
+        self.pr.set_no_show_all(True)
+        self.pr.connect("clicked", self.open_pr)
+        self.status = Gtk.Label(label="", valign=Gtk.Align.CENTER)
+        self.status.get_style_context().add_class("status")
+        bar.pack_end(self.chip)
+        bar.pack_end(self.pr)
+        bar.pack_end(self.status)
+        self.set_titlebar(bar)
+
+        # Under it: where the session runs, and a line lit by its state.
+        meta = Gtk.Label(xalign=0)
+        meta.get_style_context().add_class("meta")
+        meta.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        bits = [info.get("feature", ""), info.get("branch", ""), os.path.basename(self.folder), info.get("model_label", "")]
+        meta.set_text("   ·   ".join(b for b in bits if b))
+        self.edge = Gtk.Box()
+        self.edge.get_style_context().add_class("edge")
+
+        # The terminal, in the console's colours.
+        term = Vte.Terminal()
+        term.set_colors(rgba(TEXT), rgba(BG), [rgba(c) for c in PALETTE])
+        term.set_color_cursor(rgba(CYAN))
+        term.set_color_cursor_foreground(rgba(BG))
+        term.set_color_highlight(rgba("#1aa3d6"))
+        term.set_color_highlight_foreground(rgba(BG))
+        term.set_color_bold(rgba("#ffffff"))
+        term.set_font(Pango.FontDescription.from_string("Ubuntu Mono, DejaVu Sans Mono, Monospace 12"))
+        term.set_cursor_blink_mode(Vte.CursorBlinkMode.ON)
+        term.set_cursor_shape(Vte.CursorShape.BLOCK)
+        term.set_scrollback_lines(20000)
+        term.set_mouse_autohide(True)
+        term.connect("child-exited", self.on_exit)
+        term.connect("key-press-event", self.on_key)
+        self.term = term
+        scroll = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL, adjustment=term.get_vadjustment())
+        # Breathing room around the text, painted in the terminal's own colour.
+        term.set_margin_start(12)
+        term.set_margin_top(8)
+        term.set_margin_bottom(4)
+        pane = Gtk.Box()
+        pane.get_style_context().add_class("pane")
+        pane.pack_start(term, True, True, 0)
+        pane.pack_end(scroll, False, False, 0)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.pack_start(self.edge, False, False, 0)
+        box.pack_start(meta, False, False, 0)
+        box.pack_start(pane, True, True, 0)
+        self.add(box)
+        self.connect("delete-event", self.on_close)
+
+        term.spawn_async(
+            Vte.PtyFlags.DEFAULT, self.folder, ["/bin/sh", info["script"]], None,
+            GLib.SpawnFlags.DEFAULT, None, None, -1, None, self.on_spawned,
+        )
+        GLib.timeout_add_seconds(2, self.poll)
+        self.poll()
+
+    # ---------- the session ----------
+
+    def on_spawned(self, _term, pid, error, *_):
+        if error is not None or pid == -1:
+            self.term.feed(f"\r\n  Could not start the session: {error.message if error else 'unknown error'}\r\n".encode())
+            self.set_state("ended")
+            return
+        self.alive = True
+        self.term.grab_focus()
+
+    def on_exit(self, _term, _status):
+        self.alive = False
+        self.ended = True
+        self.set_state("ended")
+        self.term.feed("\r\n\x1b[38;2;123;147;171m  The session ended. You can close this window.\x1b[0m\r\n".encode())
+
+    def set_state(self, state):
+        state = "finished" if state == "idle" else state
+        if self.ended:
+            state = "ended"
+        if state == self.state:
+            return
+        for w in (self.chip, self.edge):
+            ctx = w.get_style_context()
+            ctx.remove_class(self.state)
+            ctx.add_class(state)
+        self.state = state
+        self.chip.set_text(STATES.get(state, state.upper()))
+        # A question waits: the dock and the shell say so, without taking the focus.
+        self.set_urgency_hint(state == "waiting")
+
+    # ---------- the daemon ----------
+
+    def poll(self):
+        threading.Thread(target=self.fetch, daemon=True).start()
+        return True
+
+    def fetch(self):
+        sock = self.info.get("socket", "")
+        out = {}
+        try:
+            sessions = ask_daemon(sock, {"cmd": "sessions"}).get("sessions") or []
+            mine = [s for s in sessions if os.path.realpath(s.get("cwd") or "/") == self.folder]
+            if mine:
+                out["state"] = max(mine, key=lambda s: s.get("last_ts") or 0).get("state", "")
+            if self.info.get("feature") and self.info.get("n"):
+                d = ask_daemon(sock, {"cmd": "session_detail", "feature": self.info["feature"], "workspace": self.info.get("workspace", ""), "n": self.info["n"]})
+                ps = d.get("session") or {}
+                out["status"] = ps.get("status", "")
+                out["pr"] = ps.get("pr_url", "")
+        except (OSError, ValueError):
+            pass
+        GLib.idle_add(self.show_fetched, out)
+
+    def show_fetched(self, out):
+        if out.get("state"):
+            self.set_state(out["state"])
+        if "status" in out:
+            self.status.set_markup(spaced(out["status"].upper(), DIM, size="8pt"))
+        if out.get("pr") and out["pr"] != self.pr_url:
+            self.pr_url = out["pr"]
+            self.pr.show()
+        return False
+
+    def open_pr(self, _btn):
+        if self.pr_url:
+            Gtk.show_uri_on_window(self, self.pr_url, Gdk.CURRENT_TIME)
+
+    # ---------- keys and closing ----------
+
+    def on_key(self, _term, event):
+        ctrl = event.state & Gdk.ModifierType.CONTROL_MASK
+        shift = event.state & Gdk.ModifierType.SHIFT_MASK
+        key = Gdk.keyval_to_lower(event.keyval)
+        if ctrl and shift and key == Gdk.KEY_c:
+            self.term.copy_clipboard_format(Vte.Format.TEXT)
+            return True
+        if ctrl and shift and key == Gdk.KEY_v:
+            self.term.paste_clipboard()
+            return True
+        if ctrl and key in (Gdk.KEY_equal, Gdk.KEY_plus, Gdk.KEY_minus, Gdk.KEY_0):
+            self.font_scale = 1.0 if key == Gdk.KEY_0 else max(0.6, min(2.5, self.font_scale + (0.1 if key != Gdk.KEY_minus else -0.1)))
+            self.term.set_font_scale(self.font_scale)
+            return True
+        return False
+
+    def on_close(self, *_):
+        if not self.alive:
+            return False
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE, text=f"Close session {self.info.get('n', '')}?",
+        )
+        dialog.format_secondary_text(
+            "Claude stops. If the session has not opened its pull request yet, the build starts it again in a new window."
+        )
+        dialog.add_buttons("Keep it open", Gtk.ResponseType.CANCEL, "Close", Gtk.ResponseType.OK)
+        answer = dialog.run()
+        dialog.destroy()
+        return answer != Gtk.ResponseType.OK
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: mewo-session <info.json>", file=sys.stderr)
+        sys.exit(2)
+    with open(sys.argv[1], encoding="utf-8") as f:
+        info = json.load(f)
+    # Grouped with Mewo Console in the dock (its desktop entry and window class).
+    GLib.set_prgname(info.get("app_id") or "mewo-console")
+    GLib.set_application_name("Mewo Session")
+    Gtk.Settings.get_default().set_property("gtk-application-prefer-dark-theme", True)
+    provider = Gtk.CssProvider()
+    provider.load_from_data(CSS.encode())
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    win = SessionWindow(info)
+    win.connect("destroy", Gtk.main_quit)
+    win.show_all()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

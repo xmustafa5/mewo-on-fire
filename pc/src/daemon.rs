@@ -1469,8 +1469,10 @@ async fn start_build_session(state: &Arc<AppState>, ws: &Path, f: &policy::Featu
     // Its own worktree on its own branch, so sessions of one repository run side by side.
     let mut folder = s.folder.clone();
     let mut prompt = prompt.to_string();
+    let mut run_branch = f.branch.clone();
     if !s.repo.is_empty() && s.folder != ws.to_string_lossy() {
         let branch = format!("{}-s{}", f.branch, s.n);
+        run_branch = branch.clone();
         let (ws2, repo, n, b2, base) = (ws.to_path_buf(), s.repo.clone(), s.n, branch.clone(), f.branch.clone());
         let wt = tokio::task::spawn_blocking(move || policy::worktree_for(&ws2, &repo, &format!("S{n}"), &b2, &base)).await.map_err(|e| e.to_string())??;
         let who = if attended {
@@ -1483,8 +1485,19 @@ async fn start_build_session(state: &Arc<AppState>, ws: &Path, f: &policy::Featu
     }
     let tag = format!("{}-S{}", f.slug, s.n);
     let pid = if attended {
-        let (folder2, prompt2, window) = (folder.clone(), prompt.clone(), format!("{} · Session {}", f.slug, s.n));
-        tokio::task::spawn_blocking(move || runner::spawn_visible(&folder2, &prompt2, runner::model_for(tier), &tag, &window)).await.map_err(|e| e.to_string())??
+        // What the session's window shows in its header.
+        let model = runner::model_for(tier);
+        let info = json!({
+            "title": format!("Session {} · {}", s.n, f.slug),
+            "n": s.n,
+            "goal": s.goal,
+            "feature": f.key,
+            "workspace": ws.to_string_lossy(),
+            "branch": run_branch,
+            "model_label": format!("TIER {tier} · {}", model.unwrap_or("default model").to_uppercase()),
+        });
+        let (folder2, prompt2) = (folder.clone(), prompt.clone());
+        tokio::task::spawn_blocking(move || runner::spawn_visible(&folder2, &prompt2, model, &tag, info)).await.map_err(|e| e.to_string())??
     } else {
         runner::spawn(&folder, &prompt, runner::model_for(tier), &tag)?
     };

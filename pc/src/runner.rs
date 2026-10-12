@@ -128,13 +128,25 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
     Ok(pid)
 }
 
-/// v3.0: a session you watch ("Build with me"): Claude Code in a terminal
-/// window of its own, in `folder`, with `prompt` as its first message.
-/// Permissions are skipped as for a headless run, but a question waits
-/// for you, in the window and on the phones. A small script under
-/// `<state>/runs/` records its pid and then becomes Claude Code, so the
-/// returned pid is the session's own: alive while the window is open.
-pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str, title: &str) -> Result<u32, String> {
+/// v3.0: the Mewo Session window (console/linux/mewo-session), written
+/// next to the state when a session opens, so it always matches the daemon.
+const SESSION_WINDOW: &str = include_str!("../console/linux/mewo-session");
+
+/// The console's colours, for a terminal that is not the Mewo Session
+/// window: foreground, background, cursor, then the sixteen ANSI colours.
+const COLOURS: &str = "printf '\\033]10;#dbeafe\\007\\033]11;#04070c\\007\\033]12;#4fd1ff\\007\\033]4;0;#0b1220;1;#ff3d1f;2;#3dd68c;3;#ffb347;4;#2f6bff;5;#b98cff;6;#4fd1ff;7;#dbeafe;8;#3a4a5e;9;#ff6b35;10;#6ee7a8;11;#ffd08a;12;#6b93ff;13;#d4b0ff;14;#8fe3ff;15;#ffffff\\007'";
+
+/// v3.0: a session you watch ("Build with me"): Claude Code in a window of
+/// its own, in `folder`, with `prompt` as its first message. On Linux it is
+/// the Mewo Session window (GTK and VTE, in the console's look, its header
+/// following the session through the daemon), else a terminal in the
+/// console's colours. Permissions are skipped as for a headless run, but a
+/// question waits for you, in the window and on the phones. A small script
+/// under `<state>/runs/` records its pid and then becomes Claude Code, so
+/// the returned pid is the session's own: alive while the window is open.
+/// `info` carries what the header shows (n, goal, feature, workspace,
+/// branch, model_label, title).
+pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str, info: serde_json::Value) -> Result<u32, String> {
     ready()?;
     let bin = claude_bin().ok_or_else(|| format!("Claude Code is not installed on {HERE}"))?;
     if !std::path::Path::new(folder).is_dir() {
@@ -148,6 +160,7 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
     let pid_file = dir.join(format!("{base}.pid"));
     let script = dir.join(format!("{base}.sh"));
     fs::write(&prompt_file, prompt).map_err(|e| e.to_string())?;
+    let title = info.get("title").and_then(serde_json::Value::as_str).unwrap_or(tag).to_string();
     let sq = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
     let mut sh = String::from("#!/bin/sh\n# Mewo on Fire: a build session to watch (Build with me).\n");
     sh.push_str(&format!("export PATH={}\n", sq(&session_path())));
@@ -157,7 +170,9 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
         sh.push_str(&format!("GH_TOKEN=$(env -u GH_TOKEN {} auth token --user {} 2>/dev/null) && [ -n \"$GH_TOKEN\" ] && export GH_TOKEN\n", sq(&gh.to_string_lossy()), sq(&user)));
     }
     sh.push_str(&format!("echo $$ > {}\n", sq(&pid_file.to_string_lossy())));
-    sh.push_str(&format!("printf '\\033]0;%s\\007' {}\n", sq(title)));
+    sh.push_str(&format!("printf '\\033]0;%s\\007' {}\n", sq(&title)));
+    sh.push_str(COLOURS);
+    sh.push('\n');
     sh.push_str(&format!("cd {} || exit 1\n", sq(folder)));
     sh.push_str(&format!(
         "exec {} --dangerously-skip-permissions{} \"$(cat {})\"\n",
@@ -170,7 +185,10 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
-    open_terminal(&script.to_string_lossy())?;
+    let script_s = script.to_string_lossy().into_owned();
+    if !open_session_window(folder, &script_s, &dir.join(format!("{base}.json")), info) {
+        open_terminal(&script_s)?;
+    }
     // The window takes a moment; its script writes the pid first thing.
     for _ in 0..60 {
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -178,7 +196,65 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
             return Ok(pid);
         }
     }
-    Err(format!("No terminal window opened on {HERE} for the session"))
+    Err(format!("No window opened on {HERE} for the session"))
+}
+
+/// The Mewo Session window, when this computer can show it (Linux with
+/// GTK 3 and VTE for Python). Started in a systemd scope of its own, so a
+/// restart of the daemon's service leaves it open. False: use a terminal.
+fn open_session_window(folder: &str, script: &str, info_file: &std::path::Path, mut info: serde_json::Value) -> bool {
+    if cfg!(target_os = "macos") {
+        return false;
+    }
+    let Some(python) = find_tool("python3") else { return false };
+    let check = "import gi; gi.require_version('Gtk', '3.0'); gi.require_version('Vte', '2.91'); from gi.repository import Gtk, Vte";
+    if !Command::new(&python).args(["-c", check]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
+        return false;
+    }
+    let window = paths::state_dir().join("mewo-session");
+    if fs::read_to_string(&window).ok().as_deref() != Some(SESSION_WINDOW) && fs::write(&window, SESSION_WINDOW).is_err() {
+        return false;
+    }
+    let data = std::env::var("XDG_DATA_HOME").ok().filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"));
+    if let Some(o) = info.as_object_mut() {
+        o.insert("folder".into(), folder.into());
+        o.insert("script".into(), script.into());
+        o.insert("socket".into(), paths::socket_path().to_string_lossy().into_owned().into());
+        o.insert("icon".into(), data.join("mewo-on-fire/console/mewo-console.png").to_string_lossy().into_owned().into());
+        // Grouped with Mewo Console in the dock.
+        o.insert("app_id".into(), "com.torchcorp.mewo-on-fire.console".into());
+    }
+    if fs::write(info_file, info.to_string()).is_err() {
+        return false;
+    }
+    let args = [window.to_string_lossy().into_owned(), info_file.to_string_lossy().into_owned()];
+    let mut cmd = match find_tool("systemd-run") {
+        Some(run) => {
+            let mut c = Command::new(run);
+            c.args(["--user", "--scope", "--quiet", "--collect", "--"]).arg(&python).args(&args);
+            c
+        }
+        None => {
+            let mut c = Command::new(&python);
+            c.args(&args);
+            c
+        }
+    };
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
+    match cmd.spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// A tool on the session PATH (the daemon's own is short).
+fn find_tool(name: &str) -> Option<PathBuf> {
+    session_path().split(':').chain(["/usr/bin", "/bin"]).map(|d| PathBuf::from(d).join(name)).find(|p| p.is_file())
 }
 
 /// Runs `script` in a new terminal window: Terminal on macOS; on Linux
@@ -201,9 +277,8 @@ fn open_terminal(script: &str) -> Result<(), String> {
             ("xterm", vec!["-e".into(), s]),
         ]
     };
-    let dirs = session_path();
     for (name, args) in tries {
-        let Some(bin) = dirs.split(':').chain(["/usr/bin", "/bin"]).map(|d| PathBuf::from(d).join(name)).find(|p| p.is_file()) else { continue };
+        let Some(bin) = find_tool(name) else { continue };
         let mut cmd = Command::new(bin);
         cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
         if let Ok(mut child) = cmd.spawn() {
