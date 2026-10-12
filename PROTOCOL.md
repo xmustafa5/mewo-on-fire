@@ -854,3 +854,12 @@ Blocked after three attempts with a warning; starts ready sessions,
 session is merged it turns itself off and sends "Build done". `features`
 carries `flow.build: {on, parallel, review}`; journal kinds `build`
 (rolls back), `review`, `review_stuck`, `blocked`, `build_done`.
+
+The build autopilot runs its sessions headless with the Claude Code
+command (`claude -p … --dangerously-skip-permissions`, the Mewo guard
+hook still refusing pushes to main; Tier 2 on Sonnet, Tier 3 on Haiku,
+Tier 1 on the account's default), their output under `<state>/runs/`.
+Claude Desktop's deep link only types a prompt in and waits for Enter,
+so it serves the manual Start only. `build_set on` refuses, and the loop
+stops with a warning, when the command is missing or not signed in
+(the login keychain item "Claude Code-credentials").

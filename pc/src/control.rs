@@ -618,7 +618,15 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
         },
         // v2.6: the build autopilot.
         "build_set" => match state.feature(&ws, &key) {
-            Some(f) => flow::set_build(&ws, &f, req.get("on").and_then(Value::as_bool).unwrap_or(true), req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool)),
+            Some(f) => {
+                let on = req.get("on").and_then(Value::as_bool).unwrap_or(true);
+                if on {
+                    if let Err(e) = crate::runner::ready() {
+                        return json!({"ok": false, "error": e});
+                    }
+                }
+                flow::set_build(&ws, &f, on, req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool))
+            }
             None => json!({"ok": false, "error": "unknown feature"}),
         },
         // v2.4: a step's session again. `dry` only shows the action.

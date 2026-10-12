@@ -31,6 +31,8 @@ pub struct Run {
     pub started: u64,
     /// What the step produced when it started, to see it change.
     pub note: String,
+    /// v2.6: the headless process, when the build autopilot started it.
+    pub pid: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]

@@ -22,6 +22,7 @@ use crate::plane;
 use crate::policy;
 use crate::desktop;
 use crate::flow;
+use crate::runner;
 use crate::{control, mdns, net, paths, prs, relay, server, uploads};
 
 pub const PAIR_TTL: Duration = Duration::from_secs(300);
@@ -316,7 +317,7 @@ impl AppState {
                 if reply.get("ok").and_then(Value::as_bool).unwrap_or(false) {
                     let started = now_ms();
                     flow::update(ws, &f.key, |st| {
-                        st.runs.push(flow::Run { step: 9, started, note: a.session.to_string() });
+                        st.runs.push(flow::Run { step: 9, started, note: a.session.to_string(), pid: 0 });
                         st.note(format!("Started session {} on {name}", a.session));
                     });
                     flow::journal(ws, &f.key, "start", &format!("Started session {} on {name}", a.session), Vec::new(), "", true, json!({"started": started, "session": a.session, "step": 9, "pc": pc_id}));
@@ -357,7 +358,7 @@ impl AppState {
                         let note = if a.kind == "start" { a.session.to_string() } else { f.prd.clone() };
                         let started = now_ms();
                         flow::update(ws, &f.key, |st| {
-                            st.runs.push(flow::Run { step: a.step, started, note });
+                            st.runs.push(flow::Run { step: a.step, started, note, pid: 0 });
                             st.note(format!("Started: {}", a.title));
                         });
                         flow::journal(ws, &f.key, &a.kind, &format!("Started: {}", a.title), Vec::new(), "", true, json!({"started": started, "session": a.session, "step": a.step}));
@@ -1158,6 +1159,15 @@ async fn flow_loop(state: Arc<AppState>) {
 /// person, and ready sessions start, so many at a time.
 async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &flow::FlowState, sessions: &[Session]) {
     let Some(plan) = &f.plan else { return };
+    // Nothing can run headless: stop, say why, once.
+    if let Err(e) = runner::ready() {
+        flow::update(ws, &f.key, |x| {
+            x.build_auto = false;
+            x.note(format!("Build autopilot stopped: {e}"));
+        });
+        let _ = state.emit(Event { kind: "warning".to_string(), project: f.app.clone(), cwd: ws.to_string_lossy().into_owned(), message: format!("{} / {}: the build autopilot stopped. {e}", f.app, f.slug), detail: format!("{}|build", f.key), ..Event::default() }, &Meta::default());
+        return;
+    }
     let now = now_ms();
     let min = 60 * 1000u64;
     let parallel = if st.build_parallel == 0 { 2 } else { st.build_parallel } as usize;
@@ -1206,13 +1216,13 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
                 continue;
             }
             let prompt = review_prompt(f, s);
-            match desktop::open_new_session(&s.folder, &prompt) {
-                Ok(()) => {
+            match runner::spawn(&s.folder, &prompt, None, &format!("{}-S{}-review", f.slug, s.n)) {
+                Ok(pid) => {
                     flow::update(ws, &f.key, |x| {
                         x.reviews.insert(s.n, now);
-                        x.note(format!("Review of session {} started", s.n));
+                        x.note(format!("Review of session {} started (headless, pid {pid})", s.n));
                     });
-                    flow::journal(ws, &f.key, "review", &format!("Review of session {} started", s.n), Vec::new(), "", false, json!({"session": s.n, "pr": s.pr_url}));
+                    flow::journal(ws, &f.key, "review", &format!("Review of session {} started", s.n), Vec::new(), "", false, json!({"session": s.n, "pr": s.pr_url, "pid": pid}));
                 }
                 Err(e) => {
                     flow::update(ws, &f.key, |x| x.note(format!("Could not start the review of session {}: {e}", s.n)));
@@ -1225,8 +1235,18 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     // Sessions that ran and have no pull request: remind, run again, then a person.
     for s in plan.sessions.iter().filter(|s| s.effective == "progress" && s.pr_url.is_empty() && s.pr.is_empty()) {
         let lives: Vec<&Session> = sessions.iter().filter(|x| x.feature == f.key && x.plan_session == s.n).collect();
-        let last_run = st.runs.iter().rev().find(|r| r.step == 9 && r.note == s.n.to_string()).map(|r| r.started).unwrap_or(0);
-        if now.saturating_sub(last_run) < 15 * min {
+        let last = st.runs.iter().rev().find(|r| r.step == 9 && r.note == s.n.to_string());
+        let last_run = last.map(|r| r.started).unwrap_or(0);
+        let pid = last.map(|r| r.pid).unwrap_or(0);
+        let headless_ended = pid != 0 && !runner::alive(pid);
+        if headless_ended {
+            // The process is gone and GitHub shows no pull request: two minutes for it to appear, then it counts as stopped.
+            if now.saturating_sub(last_run) < 2 * min {
+                continue;
+            }
+        } else if pid != 0 {
+            continue; // still running
+        } else if now.saturating_sub(last_run) < 15 * min {
             continue;
         }
         if lives.iter().any(|x| matches!(x.state.as_str(), "working" | "waiting")) {
@@ -1235,7 +1255,7 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
         let latest = lives.iter().map(|x| x.last_ts).max().unwrap_or(last_run);
         let nudged = st.nudged.get(&s.n).copied().unwrap_or(0);
         let finished: Option<&Session> = lives.iter().filter(|x| x.state == "finished").max_by_key(|x| x.last_ts).copied();
-        if let (Some(fin), 0) = (finished, nudged) {
+        if let (Some(fin), 0, false) = (finished, nudged, headless_ended) {
             if now.saturating_sub(latest) > 15 * min {
                 let text = format!("Session {} of the plan has no pull request yet. Finish the done-when checks of session {} in {}/SESSION_PLAN.md, open the pull request using context/templates/PULL_REQUEST.md with the self-check ticked, and say DONE. If something blocks you, say BLOCKED and why.", s.n, s.n, f.dir);
                 let _ = state.send_message(&fin.id, &text, &format!("build-{now}"), Vec::new()).await;
@@ -1246,7 +1266,7 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
             }
             continue;
         }
-        let gone = lives.is_empty() || lives.iter().all(|x| x.state == "ended");
+        let gone = headless_ended || lives.is_empty() || lives.iter().all(|x| x.state == "ended");
         let reminded_in_vain = nudged > 0 && now.saturating_sub(nudged) > 30 * min;
         if !(gone || reminded_in_vain) {
             continue;
@@ -1254,11 +1274,9 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
         if s.attempts < 3 {
             let attempt = s.attempts + 1;
             let prompt = format!("{}\n\n(Attempt {attempt} of this session: the earlier one stopped without a pull request. Continue from the branch as it is, do not redo what is done{}.)", s.prompt, if attempt >= 3 { "; policy 9.1: run this attempt one tier up" } else { "" });
-            let a = flow::Action { kind: "start".to_string(), step: 9, title: format!("Start session {} again", s.n), detail: s.goal.clone(), session: s.n, prompt, folder: s.folder.clone(), auto: true, ..flow::Action::default() };
-            let (st2, ws2, f2) = (state.clone(), ws.to_path_buf(), f.clone());
-            let r = tokio::task::spawn_blocking(move || st2.flow_execute(&ws2, &f2, Some(a), "build autopilot")).await.unwrap_or(Value::Null);
-            if r.get("ok").and_then(Value::as_bool) != Some(true) {
-                flow::update(ws, &f.key, |x| x.note(format!("Could not run session {} again: {}", s.n, r.get("error").and_then(Value::as_str).unwrap_or(""))));
+            let tier = if attempt >= 3 { s.tier.saturating_sub(1).max(1) } else { s.tier };
+            if let Err(e) = start_headless(&state, ws, f, s, &prompt, tier, &format!("Start session {} again", s.n)).await {
+                flow::update(ws, &f.key, |x| x.note(format!("Could not run session {} again: {e}", s.n)));
             } else {
                 flow::update(ws, &f.key, |x| {
                     x.nudged.remove(&s.n);
@@ -1273,19 +1291,34 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
         return;
     }
     // Ready sessions start, so many at a time, one a tick.
-    let fresh = |n: u32| st.runs.iter().any(|r| r.step == 9 && r.note == n.to_string() && now.saturating_sub(r.started) < 15 * min);
-    let busy = plan.sessions.iter().filter(|s| s.running || (s.effective == "progress" && fresh(s.n))).count();
+    let last_of = |n: u32| st.runs.iter().rev().find(|r| r.step == 9 && r.note == n.to_string());
+    let fresh = |n: u32| last_of(n).map(|r| now.saturating_sub(r.started) < 15 * min).unwrap_or(false);
+    let live = |n: u32| last_of(n).map(|r| r.pid != 0 && runner::alive(r.pid)).unwrap_or(false);
+    let busy = plan.sessions.iter().filter(|s| s.running || live(s.n) || (s.effective == "progress" && fresh(s.n))).count();
     if busy >= parallel {
         return;
     }
-    if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n)) {
-        let a = flow::Action { kind: "start".to_string(), step: 9, title: format!("Start session {}", s.n), detail: s.goal.clone(), session: s.n, prompt: s.prompt.clone(), folder: s.folder.clone(), auto: true, ..flow::Action::default() };
-        let (st2, ws2, f2) = (state.clone(), ws.to_path_buf(), f.clone());
-        let r = tokio::task::spawn_blocking(move || st2.flow_execute(&ws2, &f2, Some(a), "build autopilot")).await.unwrap_or(Value::Null);
-        if r.get("ok").and_then(Value::as_bool) != Some(true) {
-            flow::update(ws, &f.key, |x| x.note(format!("Could not start session {}: {}", s.n, r.get("error").and_then(Value::as_str).unwrap_or(""))));
+    if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n) && !live(s.n)) {
+        if let Err(e) = start_headless(&state, ws, f, s, &s.prompt, s.tier, &format!("Start session {}", s.n)).await {
+            flow::update(ws, &f.key, |x| x.note(format!("Could not start session {}: {e}", s.n)));
         }
     }
+}
+
+/// A plan session run headless by the build autopilot: the plan says In
+/// progress, the run is remembered with its pid, History gets the start.
+async fn start_headless(state: &Arc<AppState>, ws: &Path, f: &policy::Feature, s: &policy::PlanSession, prompt: &str, tier: u8, title: &str) -> Result<u32, String> {
+    let pid = runner::spawn(&s.folder, prompt, runner::model_for(tier), &format!("{}-S{}", f.slug, s.n))?;
+    let (ws2, key, n) = (ws.to_path_buf(), f.key.clone(), s.n);
+    let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, "In progress", "")).await;
+    let started = now_ms();
+    flow::update(ws, &f.key, |x| {
+        x.runs.push(flow::Run { step: 9, started, note: s.n.to_string(), pid });
+        x.note(format!("{title} (headless, pid {pid})"));
+    });
+    flow::journal(ws, &f.key, "start", &format!("{title}: {}", s.goal), Vec::new(), "", true, json!({"started": started, "session": s.n, "step": 9, "pid": pid, "headless": true}));
+    let _ = state;
+    Ok(pid)
 }
 
 /// The reviewer's brief for a session's pull request (policy Checklists G and H).
