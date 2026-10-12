@@ -296,7 +296,7 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
     let design_note = if ds_glare {
         String::new()
     } else {
-        format!(" The feature's design system is {ds_name}{} (see {dir}/DESIGN_SYSTEM.md): map values to its tokens and components, not Glare's, and say so in the README.", if ds_dir.is_empty() { String::new() } else { format!(" at {ds_dir}") })
+        format!(" The feature's design system is {ds_name}{} (see {dir}/DESIGN_SYSTEM.md), so the skill's token and component checks are against it, not Glare: its theme files are the variables and its component folders the component set; map every value to them and say so at the top of the README.", if ds_dir.is_empty() { String::new() } else { format!(" at {ds_dir}") })
     };
     let design_plan = if ds_glare {
         String::new()

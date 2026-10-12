@@ -42,7 +42,7 @@ pub const SELF_CHECK: [&str; 8] = [
     "The session's \"done when\" checks pass.",
     "Tests exist for the new behaviour and they test behaviour, not just that the code runs.",
     "The change stays inside the session's goal.",
-    "Glare components and variables are used. No hardcoded design values.",
+    "The feature's design system's components and variables are used (Glare, or the one in DESIGN_SYSTEM.md). No hardcoded design values.",
     "The rule files listed in the session plan were followed.",
     "No secrets, keys or personal data in the code or the commit.",
     "Lint, type check and the full test suite pass locally.",
@@ -52,7 +52,7 @@ pub const SELF_CHECK: [&str; 8] = [
 pub const REVIEW_CHECK: [&str; 11] = [
     "Does what the session goal says; the PRD items it touches are met.",
     "Follows the architecture and patterns already in the repository.",
-    "Reuses Glare, platform services and existing modules instead of copying them.",
+    "Reuses the design system, platform services and existing modules instead of copying them.",
     "Errors are handled properly and not hidden.",
     "Permissions and data access are checked on the server where they need to be.",
     "The tests would fail if the feature broke. No tests edited only so they pass.",
