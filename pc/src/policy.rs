@@ -1872,6 +1872,7 @@ pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> 
     let mut in_session = false;
     let mut changed = false;
     let mut prev = String::new();
+    let mut status_col = 6usize;
     for l in lines.iter_mut() {
         if l.starts_with("## ") {
             in_order = l[3..].trim().eq_ignore_ascii_case("order");
@@ -1880,9 +1881,14 @@ pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> 
         }
         if in_order {
             let mut c = cells(l);
-            if c.len() >= 7 && c[0].parse::<u32>().ok() == Some(n) {
-                prev = c[6].clone();
-                c[6] = status.to_string();
+            // The Status column by the table's header (a plan may add a Repository column).
+            if c.len() >= 4 && c[0].parse::<u32>().is_err() && c.iter().any(|h| h.trim() == "#") {
+                status_col = c.iter().position(|h| h.trim().eq_ignore_ascii_case("status")).unwrap_or(6);
+                continue;
+            }
+            if c.len() > status_col && c[0].parse::<u32>().ok() == Some(n) {
+                prev = c[status_col].clone();
+                c[status_col] = status.to_string();
                 *l = format!("| {} |", c.join(" | "));
                 changed = true;
             }

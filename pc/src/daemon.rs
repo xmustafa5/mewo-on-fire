@@ -1301,7 +1301,8 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     }
     // Ready sessions start, so many at a time, one a tick.
     let last_of = |n: u32| st.runs.iter().rev().find(|r| r.step == 9 && r.note == n.to_string());
-    let fresh = |n: u32| last_of(n).map(|r| now.saturating_sub(r.started) < 15 * min).unwrap_or(false);
+    // A headless start gets 15 minutes to show up; a Desktop start (no pid) waits for a person, so only 3.
+    let fresh = |n: u32| last_of(n).map(|r| now.saturating_sub(r.started) < if r.pid != 0 { 15 * min } else { 3 * min }).unwrap_or(false);
     let live = |n: u32| last_of(n).map(|r| r.pid != 0 && runner::alive(r.pid)).unwrap_or(false);
     let active = |s: &policy::PlanSession| s.running || live(s.n) || (s.effective == "progress" && fresh(s.n));
     let busy = plan.sessions.iter().filter(|s| active(s)).count();

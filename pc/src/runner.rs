@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::path::PathBuf;
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
@@ -79,6 +80,8 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
         cmd.arg("--model").arg(m);
     }
     cmd.env("PATH", path).env("MEWO_HEADLESS", "1").stdin(Stdio::null()).stdout(out).stderr(err);
+    // Its own process group: a daemon restart must not take the session down.
+    cmd.process_group(0);
     let mut child = cmd.spawn().map_err(|e| format!("could not start claude: {e}"))?;
     let pid = child.id();
     // Reap it when it ends, and remember how it ended.
