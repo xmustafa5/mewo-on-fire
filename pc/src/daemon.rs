@@ -1114,6 +1114,7 @@ async fn flow_loop(state: Arc<AppState>) {
             continue;
         }
         let sessions = state.session_list();
+        let mut building = false;
         for ws in policy::workspaces() {
             let ws2 = ws.clone();
             let feats = match tokio::time::timeout(Duration::from_secs(12), tokio::task::spawn_blocking(move || policy::features(&ws2))).await {
@@ -1141,6 +1142,7 @@ async fn flow_loop(state: Arc<AppState>) {
                 }
                 policy::enrich(&mut f, &sessions, &prs);
                 if st.build_auto && f.plan.is_some() {
+                    building = true;
                     build_tick(state.clone(), &ws, &f, &st, &sessions).await;
                 }
                 if !st.autopilot {
@@ -1179,6 +1181,7 @@ async fn flow_loop(state: Arc<AppState>) {
                 }
             }
         }
+        runner::keep_awake(building);
     }
 }
 
@@ -1437,7 +1440,7 @@ async fn start_headless(state: &Arc<AppState>, ws: &Path, f: &policy::Feature, s
         let branch = format!("{}-s{}", f.branch, s.n);
         let (ws2, repo, n, b2, base) = (ws.to_path_buf(), s.repo.clone(), s.n, branch.clone(), f.branch.clone());
         let wt = tokio::task::spawn_blocking(move || policy::worktree_for(&ws2, &repo, &format!("S{n}"), &b2, &base)).await.map_err(|e| e.to_string())??;
-        prompt = format!("This session runs in its own git worktree of {} at {} , on branch {branch} made from {}; other sessions work in other worktrees of the same repository at the same time. The workspace root (torch-main, with context/, app-notebooks/ and code/) is {}; paths in the brief that start with code/{}/ mean this worktree. Commit on {branch} and open the pull request into {}.\n\n{prompt}", s.repo, wt.display(), f.branch, ws.display(), s.repo.trim_start_matches("code/"), f.branch);
+        prompt = format!("This session runs in its own git worktree of {} at {} , on branch {branch} made from {}; other sessions work in other worktrees of the same repository at the same time. The workspace root (torch-main, with context/, app-notebooks/ and code/) is {}; paths in the brief that start with code/{}/ mean this worktree. Commit on {branch} and open the pull request into {}. It runs unattended: nobody is there to answer a question tonight. Where the brief says to ask, or to run grill-me, take the most reasonable reading, write the choice and its reason into app-notebooks/{}/features/{}/OPEN_QUESTIONS.md with you as owner, and continue; stop without a pull request only for a blocker you truly cannot work around, and say exactly what it is.\n\n{prompt}", s.repo, wt.display(), f.branch, ws.display(), s.repo.trim_start_matches("code/"), f.branch, f.app, f.slug);
         folder = wt.to_string_lossy().into_owned();
     }
     let pid = runner::spawn(&folder, &prompt, runner::model_for(tier), &format!("{}-S{}", f.slug, s.n))?;

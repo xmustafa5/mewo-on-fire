@@ -916,3 +916,9 @@ the word PASS, the daemon marks the pull request ready and merges it
 the record. A failed merge is journaled (`merge_failed`) and warned
 once. The reviewer's brief asks for a closing PASS or BLOCKED line.
 `flow.build.merge_on_pass` carries the setting.
+
+While any build autopilot is on, the daemon keeps the Mac from idle
+sleep (`caffeinate -i` tied to its pid); a closed lid still sleeps a
+MacBook. A headless session's brief says it runs unattended: where the
+plan says to ask or to run grill-me, it takes the most reasonable
+reading, records the choice in OPEN_QUESTIONS.md, and continues.

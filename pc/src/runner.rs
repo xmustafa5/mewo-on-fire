@@ -32,6 +32,25 @@ pub fn claude_bin() -> Option<PathBuf> {
     .find(|p| p.is_file())
 }
 
+/// v2.9: the Mac stays awake while a build runs. `caffeinate -i` tied to
+/// the daemon's own pid prevents idle sleep; it is stopped when no build
+/// is on. (A closed lid still sleeps a MacBook unless it is plugged in
+/// with an external display: keep the lid open.)
+static AWAKE: Mutex<Option<std::process::Child>> = Mutex::new(None);
+
+pub fn keep_awake(on: bool) {
+    let mut g = AWAKE.lock().unwrap_or_else(|p| p.into_inner());
+    let alive = g.as_mut().map(|c| c.try_wait().ok().flatten().is_none()).unwrap_or(false);
+    if on && !alive {
+        *g = Command::new("caffeinate").args(["-i", "-w", &std::process::id().to_string()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().ok();
+    } else if !on && alive {
+        if let Some(mut c) = g.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
 /// Signed in? The command keeps its sign-in in the login keychain under
 /// "Claude Code-credentials" on macOS, in `~/.claude/.credentials.json` on
 /// Linux (only whether the file is there is looked at); without it every
