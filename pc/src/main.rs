@@ -4,6 +4,7 @@
 mod artifacts;
 mod ask;
 mod cli;
+mod clock;
 mod config;
 mod control;
 mod daemon;

@@ -191,7 +191,7 @@ impl AppState {
                     "autopilot": st.autopilot,
                     "estimates": st.estimates,
                     "estimates_done": st.estimates_done,
-                    "build": {"on": st.build_auto, "parallel": if st.build_parallel == 0 { 2 } else { st.build_parallel }, "review": !st.build_no_review},
+                    "build": {"on": st.build_auto, "parallel": if st.build_parallel == 0 { 2 } else { st.build_parallel }, "review": !st.build_no_review, "resume_at": st.build_resume_at, "within_hours": crate::clock::within_now()},
                     "log": st.log,
                     "released_at": st.released_at,
                     "closed_at": st.closed_at,
@@ -496,6 +496,7 @@ impl AppState {
             "self_check": policy::SELF_CHECK,
             "review_check": policy::REVIEW_CHECK,
             "warning": if policy::git_blocked() { policy::FOLDER_ACCESS_HINT } else { "" },
+            "work": crate::clock::describe_now(),
             "roles": roles,
             "apps": apps,
             "role_names": flow::ROLES,
@@ -965,6 +966,7 @@ pub fn run() -> Result<()> {
 async fn run_async() -> Result<()> {
     let config = config::load_or_create()?;
     crate::github::set_user(&config.github_user);
+    config::remember_work_hours(&config);
     let identity = config::load_or_create_identity()?;
     let devices = config::load_devices();
     let store = Store::load(paths::events_file());
@@ -1111,7 +1113,16 @@ async fn flow_loop(state: Arc<AppState>) {
                 _ => continue,
             };
             for mut f in feats {
-                let st = flow::get(&ws, &f.key);
+                let mut st = flow::get(&ws, &f.key);
+                // v2.7: a pause that is over turns the build back on.
+                if !st.build_auto && st.build_resume_at != 0 && now_ms() >= st.build_resume_at {
+                    st = flow::update(&ws, &f.key, |x| {
+                        x.build_auto = true;
+                        x.build_resume_at = 0;
+                        x.note("Build resumed as scheduled");
+                    });
+                    flow::journal(&ws, &f.key, "build", "Build resumed as scheduled", Vec::new(), "", true, json!({"prev": false, "on": true}));
+                }
                 if !st.autopilot && !st.build_auto {
                     continue;
                 }
@@ -1181,6 +1192,21 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     let now = now_ms();
     let min = 60 * 1000u64;
     let parallel = if st.build_parallel == 0 { 2 } else { st.build_parallel } as usize;
+    // Work hours: outside them, statuses still follow GitHub, but nothing starts.
+    let (hours, days) = config::work_hours();
+    let working_hours = crate::clock::within(&hours, &days);
+    {
+        static NOTED: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+        let mut noted = NOTED.lock().unwrap_or_else(|p| p.into_inner());
+        let was = noted.iter().find(|(k, _)| *k == f.key).map(|(_, w)| *w);
+        if was != Some(working_hours) {
+            noted.retain(|(k, _)| *k != f.key);
+            noted.push((f.key.clone(), working_hours));
+            if was.is_some() {
+                flow::update(ws, &f.key, |x| x.note(if working_hours { "Work hours: starting sessions again" } else { "Work hours over: what runs finishes, nothing new starts" }));
+            }
+        }
+    }
     // Statuses in the plan follow what GitHub says.
     for s in &plan.sessions {
         let status = s.status.to_ascii_lowercase();
@@ -1207,6 +1233,9 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
             Event { kind: "finished".to_string(), project: f.app.clone(), cwd: ws.to_string_lossy().into_owned(), message: format!("Build done for {} / {}: all {} sessions merged. Next: staging.", f.app, f.slug, plan.sessions.len()), detail: format!("{}|build", f.key), ..Event::default() },
             &Meta::default(),
         );
+        return;
+    }
+    if !working_hours {
         return;
     }
     // Pull requests open: a reviewer session for each, that merges.

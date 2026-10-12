@@ -1044,20 +1044,42 @@ function buildBlock(f, fl) {
   const cnt = (k) => ss.filter((s) => s.effective === k).length;
   const merged = cnt('merged'), running = ss.filter((s) => s.running).length, review = cnt('review'), ready = cnt('ready'), blocked = cnt('blocked');
   const done = ss.length && merged === ss.length;
-  const par = b.parallel || 2, rev = b.review !== false;
-  return `<div class="build ${b.on ? 'on' : ''}"><div class="bh"><span class="k">BUILD AUTOPILOT${b.on ? ' · RUNNING' : done ? ' · DONE' : ''}</span><span class="p">${merged}/${ss.length} MERGED · ${running} RUNNING · ${review} IN REVIEW · ${ready} READY${blocked ? ' · ' + blocked + ' BLOCKED' : ''}</span></div>
+  const par = b.parallel || 2, rev = b.review !== false, paused = !b.on && (b.resume_at || 0) > 0, outside = b.on && b.within_hours === false, work = (typeof meta !== 'undefined' && meta.work) || {};
+  const tomorrow = paused && new Date(b.resume_at).toDateString() !== new Date().toDateString();
+  return `<div class="build ${b.on ? 'on' : ''}"><div class="bh"><span class="k">BUILD AUTOPILOT${b.on ? (outside ? ' · AFTER HOURS' : ' · RUNNING') : paused ? ' · PAUSED' : done ? ' · DONE' : ''}</span><span class="p">${merged}/${ss.length} MERGED · ${running} RUNNING · ${review} IN REVIEW · ${ready} READY${blocked ? ' · ' + blocked + ' BLOCKED' : ''}</span></div>
     <div class="bar"><i style="width:${ss.length ? Math.round(merged / ss.length * 100) : 0}%"></i></div>
     <div class="br">${done ? '<span>EVERY SESSION MERGED · NEXT: STAGING</span>' : b.on
-      ? `<button class="btn" id="bd-stop" type="button">STOP</button><span>${par} AT A TIME · ${rev ? 'CLAUDE REVIEWS AND MERGES THE PULL REQUESTS' : 'YOU MERGE THE PULL REQUESTS'} · COME BACK LATER</span>`
-      : `<button class="btn go" id="bd-go" type="button">BUILD EVERYTHING</button><label>AT A TIME <select id="bd-par">${[1, 2, 3, 4].map((n) => `<option ${n === par ? 'selected' : ''}>${n}</option>`).join('')}</select></label><label><input type="checkbox" id="bd-rev" ${rev ? 'checked' : ''}> CLAUDE REVIEWS AND MERGES</label>`}</div></div>`;
+      ? `<button class="btn" id="bd-pause" type="button" title="What runs finishes; nothing new starts until the next work hours">PAUSE FOR TODAY</button><button class="btn" id="bd-stopnow" type="button" title="Ends the running sessions too; they run again from their branches when you resume" style="border-color:var(--heat);color:var(--heat)">STOP NOW</button><button class="btn" id="bd-stop" type="button" title="Off, no resume planned">OFF</button><span>${par} AT A TIME · ${rev ? 'CLAUDE REVIEWS AND MERGES' : 'YOU MERGE'}${outside ? ` · OUTSIDE WORK HOURS: FINISHING WHAT RUNS, OPENS ${hm(work.next_start || 0)}` : ''}</span>`
+      : paused
+        ? `<button class="btn go" id="bd-go" type="button">RESUME NOW</button><span>PAUSED · RESUMES BY ITSELF AT ${hm(b.resume_at)}${tomorrow ? ' TOMORROW' : ''}</span>`
+        : `<button class="btn go" id="bd-go" type="button">BUILD EVERYTHING</button><label>AT A TIME <select id="bd-par">${[1, 2, 3, 4].map((n) => `<option ${n === par ? 'selected' : ''}>${n}</option>`).join('')}</select></label><label><input type="checkbox" id="bd-rev" ${rev ? 'checked' : ''}> CLAUDE REVIEWS AND MERGES</label>`}</div>
+    <div class="br" style="margin-top:7px"><span>WORK HOURS</span><input id="bd-hours" value="${esc(work.hours || '')}" placeholder="09:00-18:00 · empty: always" style="width:170px;background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:10px var(--mono);padding:3px 6px"><span>DAYS</span><input id="bd-days" value="${esc(daysText(work.days || []))}" placeholder="1-5 · empty: every day" style="width:120px;background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:10px var(--mono);padding:3px 6px"><button class="btn" id="bd-hours-save" type="button">SAVE</button><span>${work.hours ? (work.within ? 'INSIDE THEM NOW' : `OUTSIDE NOW · OPEN AGAIN ${hm(work.next_start || 0)}`) : 'ALWAYS ON: THE BUILD RUNS AT NIGHT TOO'}</span></div></div>`;
 }
+const daysText = (d) => { if (!d.length) return ''; const s = [...d].sort((a, b) => a - b); const run = s.every((v, i) => i === 0 || v === s[i - 1] + 1); return run && s.length > 2 ? `${s[0]}-${s[s.length - 1]}` : s.join(','); };
+function parseDays(text) { const out = new Set(); for (const part of text.split(/[ ,]+/).filter(Boolean)) { const m = part.match(/^(\d)-(\d)$/); if (m) { for (let i = +m[1]; i <= +m[2]; i++) out.add(i); } else if (/^\d$/.test(part)) out.add(+part); } return [...out].filter((d) => d >= 1 && d <= 7); }
 function wireFlow(box, f) {
+  const fl0 = f.flow || {}, b0 = fl0.build || {};
   const go2 = box.querySelector('#bd-go'); if (go2) go2.onclick = async () => {
-    const par = +box.querySelector('#bd-par').value, rev = box.querySelector('#bd-rev').checked;
-    if (!confirm(`Build everything? Every session of the plan starts by itself in Claude Desktop, ${par} at a time, in dependency order${rev ? ', and Claude reviews and merges each pull request' : ''}. A session that needs you reaches your phone. You can stop it any time.`)) return;
+    const parSel = box.querySelector('#bd-par'), revSel = box.querySelector('#bd-rev');
+    const par = parSel ? +parSel.value : (b0.parallel || 2), rev = revSel ? revSel.checked : b0.review !== false;
+    if (!parSel && !confirm('Resume the build now?')) return;
+    if (parSel && !confirm(`Build everything? Every session of the plan starts by itself, ${par} at a time, in dependency order${rev ? ', and Claude reviews and merges each pull request' : ''}. A session that needs you reaches your phone. You can pause or stop it any time.`)) return;
     go2.disabled = true; go2.textContent = 'STARTING…';
     const r = await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: true, parallel: par, review: rev, ...pcArg(f) });
     if (!r.ok) alert(r.error || 'Could not start it'); setTimeout(refreshFeatures, 800);
+  };
+  const pause = box.querySelector('#bd-pause'); if (pause) pause.onclick = async () => {
+    pause.disabled = true; const r = await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: false, resume_next_work: true, ...pcArg(f) });
+    if (!r.ok) alert(r.error || 'Could not pause it'); setTimeout(refreshFeatures, 800);
+  };
+  const stopNow = box.querySelector('#bd-stopnow'); if (stopNow) stopNow.onclick = async () => {
+    if (!confirm('Stop now? The running sessions are ended; when you resume, they run again from their branches as they are.')) return;
+    stopNow.disabled = true; const r = await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: false, stop_running: true, resume_next_work: true, ...pcArg(f) });
+    if (!r.ok) alert(r.error || 'Could not stop it'); setTimeout(refreshFeatures, 800);
+  };
+  const hs = box.querySelector('#bd-hours-save'); if (hs) hs.onclick = async () => {
+    hs.disabled = true; const r = await daemon({ cmd: 'work_hours', hours: box.querySelector('#bd-hours').value.trim(), days: parseDays(box.querySelector('#bd-days').value) });
+    hs.disabled = false; if (!r.ok) alert(r.error || 'Could not save them'); setTimeout(refreshFeatures, 500);
   };
   const stop = box.querySelector('#bd-stop'); if (stop) stop.onclick = async () => {
     stop.disabled = true; await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: false, ...pcArg(f) }); setTimeout(refreshFeatures, 800);
@@ -1205,7 +1227,7 @@ function renderFeature() {
 }
 async function refreshFeatures() {
   const r = await daemon({ cmd: 'features' });
-  if (r && r.ok) { features = r.features || []; meta = { roles: r.roles || {}, apps: r.apps || {}, role_names: r.role_names || [], workspaces: r.workspaces || [], plane: r.plane || {}, members: meta.members || [] }; if (view === 'pipe') renderPipeline(); if ((r.plane || {}).configured && !(meta.members || []).length) daemon({ cmd: 'plane_status' }).then((s) => { meta.members = s.members || []; if (view === 'pipe') renderPipeline(); }); }
+  if (r && r.ok) { features = r.features || []; meta = { roles: r.roles || {}, apps: r.apps || {}, role_names: r.role_names || [], workspaces: r.workspaces || [], plane: r.plane || {}, work: r.work || {}, members: meta.members || [] }; if (view === 'pipe') renderPipeline(); if ((r.plane || {}).configured && !(meta.members || []).length) daemon({ cmd: 'plane_status' }).then((s) => { meta.members = s.members || []; if (view === 'pipe') renderPipeline(); }); }
 }
 // What a session made, shown in place: the daemon's copy of the files, through the Mac app's
 // mewo-artifact:// scheme, or `mewo dashboard`'s /artifact/<id>/. A design shows board by board.

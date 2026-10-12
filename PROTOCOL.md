@@ -880,3 +880,17 @@ alive, exit, elapsed, the log's tail), `review` (the reviewer session),
 the sessions finished so far or a default, `eta_s` while it runs, and a
 rough `build_remaining_s`). `session_stop {feature, workspace, n}`
 ends its headless run and review with SIGTERM.
+
+# v2.7 — pausing the build, and work hours
+
+`build_set {on: false, resume_next_work: true}` pauses: what runs
+finishes, nothing new starts, and the loop turns the build back on by
+itself at the next work hours (`flow.build.resume_at`); with
+`stop_running: true` the running sessions and reviews are ended too
+(SIGTERM) and run again from their branches on resume; `resume_at` (ms)
+sets the time directly; `on: true` resumes now. `work_hours {hours:
+"09:00-18:00", days: [1..7]}` (local time, 1 = Monday; empty = always,
+every day) is kept in config.json; outside them the build autopilot
+starts nothing and reviews nothing, and the flow notes the change.
+`features` carries `work: {hours, days, within, next_start}` and each
+feature's `flow.build.within_hours`.

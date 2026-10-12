@@ -1140,7 +1140,11 @@ class FlowJournal {
 
 /// The flow runner's state for a feature (v1.8).
 class FlowInfo {
-  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action, this.history = const <FlowJournal>[], this.buildOn = false, this.buildParallel = 2, this.buildReview = true});
+  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action, this.history = const <FlowJournal>[], this.buildOn = false, this.buildParallel = 2, this.buildReview = true, this.buildResumeAt = 0, this.withinHours = true});
+
+  /// v2.7: paused until (ms, 0 = not paused); inside the work hours now.
+  final int buildResumeAt;
+  final bool withinHours;
 
   /// v2.6: the build autopilot.
   final bool buildOn;
@@ -1162,6 +1166,8 @@ class FlowInfo {
         buildOn: j['build'] is Map && (j['build'] as Map)['on'] == true,
         buildParallel: j['build'] is Map ? _asInt((j['build'] as Map)['parallel']) : 2,
         buildReview: !(j['build'] is Map && (j['build'] as Map)['review'] == false),
+        buildResumeAt: j['build'] is Map ? _asInt((j['build'] as Map)['resume_at']) : 0,
+        withinHours: !(j['build'] is Map && (j['build'] as Map)['within_hours'] == false),
         estimates: [
           if (j['estimates'] is List)
             for (final e in j['estimates'] as List)
@@ -1449,8 +1455,16 @@ class FeaturesData {
     this.roleNames = const <String>[],
     this.warning = '',
     this.plane = PlaneInfo.none,
+    this.workHours = '',
+    this.workWithin = true,
+    this.workNextStart = 0,
   });
   final PlaneInfo plane;
+
+  /// v2.7: the work hours of the build autopilot.
+  final String workHours;
+  final bool workWithin;
+  final int workNextStart;
   final List<TorchFeature> features;
   final List<String> selfCheck;
   final List<String> reviewCheck;
@@ -1491,6 +1505,9 @@ class FeaturesData {
         roleNames: _asStringList(j['role_names']),
         warning: _asString(j['warning']),
         plane: j['plane'] is Map ? PlaneInfo.fromJson(Map<String, dynamic>.from(j['plane'] as Map)) : PlaneInfo.none,
+        workHours: j['work'] is Map ? _asString((j['work'] as Map)['hours']) : '',
+        workWithin: !(j['work'] is Map && (j['work'] as Map)['within'] == false),
+        workNextStart: j['work'] is Map ? _asInt((j['work'] as Map)['next_start']) : 0,
       );
 }
 

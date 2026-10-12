@@ -71,6 +71,38 @@ class _FeatureScreenState extends State<FeatureScreen> {
   Future<void> _doBuild(TorchFeature f) async {
     if (_flowBusy) return;
     final on = !f.flow.buildOn;
+    if (!on) {
+      // Building: pause for today, or stop what runs too.
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: const Text('Pause the build?'),
+          children: [
+            SimpleDialogOption(onPressed: () => Navigator.pop(ctx, 'pause'), child: const Text('Pause for today. What runs finishes; nothing new starts; it resumes at the next work hours.')),
+            SimpleDialogOption(onPressed: () => Navigator.pop(ctx, 'stop'), child: const Text('Stop now. The running sessions end too; they run again from their branches when it resumes.')),
+            SimpleDialogOption(onPressed: () => Navigator.pop(ctx, 'off'), child: const Text('Off. No resume planned.')),
+            SimpleDialogOption(onPressed: () => Navigator.pop(ctx, null), child: const Text('Cancel')),
+          ],
+        ),
+      );
+      if (choice == null || !mounted) return;
+      HapticFeedback.mediumImpact();
+      setState(() => _flowBusy = true);
+      final error = await _state.buildSet(widget.pcId, f, on: false, parallel: f.flow.buildParallel, review: f.flow.buildReview, resumeNextWork: choice != 'off', stopRunning: choice == 'stop');
+      if (!mounted) return;
+      setState(() => _flowBusy = false);
+      _toast(error.isEmpty ? (choice == 'off' ? 'Build autopilot off' : choice == 'stop' ? 'Stopped. It resumes at the next work hours.' : 'Paused. What runs finishes; it resumes at the next work hours.') : error);
+      return;
+    }
+    if (f.flow.buildResumeAt > 0) {
+      HapticFeedback.mediumImpact();
+      setState(() => _flowBusy = true);
+      final error = await _state.buildSet(widget.pcId, f, on: true, parallel: f.flow.buildParallel, review: f.flow.buildReview);
+      if (!mounted) return;
+      setState(() => _flowBusy = false);
+      _toast(error.isEmpty ? 'Building again.' : error);
+      return;
+    }
     if (on) {
       final yes = await showDialog<bool>(
         context: context,
@@ -959,13 +991,17 @@ class _FlowCard extends StatelessWidget {
                   ),
                 if (estimatesPhase && a.kind != 'estimates') EmberButton(label: 'Add my estimate', icon: Icons.timelapse_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onEstimate),
                 if (a.kind == 'ask' && onSign != null) EmberButton(label: 'Sign it myself', icon: Icons.draw_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: busy ? null : onSign),
-                if (onBuild != null) EmberButton(label: fl.buildOn ? 'Building · stop' : 'Build everything', icon: fl.buildOn ? Icons.stop_circle_outlined : Icons.rocket_launch_rounded, small: true, style: fl.buildOn ? EmberButtonStyle.ghost : EmberButtonStyle.primary, onPressed: busy ? null : onBuild),
+                if (onBuild != null) EmberButton(label: fl.buildOn ? (fl.withinHours ? 'Building · pause' : 'After hours · pause') : fl.buildResumeAt > 0 ? 'Paused · resume now' : 'Build everything', icon: fl.buildOn ? Icons.pause_circle_outline_rounded : Icons.rocket_launch_rounded, small: true, style: fl.buildOn ? EmberButtonStyle.ghost : EmberButtonStyle.primary, onPressed: busy ? null : onBuild),
                 if (redoLabels.containsKey(a.step) && a.kind != 'run') EmberButton(label: redoLabels[a.step]!, icon: Icons.replay_rounded, small: true, style: EmberButtonStyle.ghost, onPressed: busy ? null : onRedo),
                 if (estimatesPhase && fl.estimates.length >= 3) EmberButton(label: 'Estimates are in the PRD', small: true, style: EmberButtonStyle.ghost, onPressed: onEstimatesDone),
                 if (a.gate == 'uat' || a.step >= 11 && a.step <= 12 && !feature.released) EmberButton(label: 'Add a UAT user', icon: Icons.groups_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onUat),
               ],
             ),
           ),
+          if (fl.buildResumeAt > 0 && !fl.buildOn)
+            Padding(padding: const EdgeInsets.only(top: 8), child: Text('Paused · resumes by itself at ${_clock(fl.buildResumeAt)}', style: t.labelSmall?.copyWith(color: Ember.amber))),
+          if (fl.buildOn && !fl.withinHours)
+            Padding(padding: const EdgeInsets.only(top: 8), child: Text('Outside the work hours: what runs finishes, nothing new starts.', style: t.labelSmall?.copyWith(color: Ember.text3))),
           if (fl.log.isNotEmpty) ...[
             const SizedBox(height: 10),
             for (final e in fl.log.reversed.take(3))

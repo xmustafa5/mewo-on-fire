@@ -382,6 +382,22 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
                 Err(e) => json!({"ok": false, "error": e.to_string()}),
             }
         }
+        // v2.7: the work hours of the build autopilot.
+        "work_hours" => {
+            let hours = s("hours");
+            if !hours.is_empty() && crate::clock::parse_hours(&hours).is_none() {
+                return json!({"ok": false, "error": "Hours look like 09:00-18:00"});
+            }
+            let days: Vec<u8> = req.get("days").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|d| d as u8).collect()).unwrap_or_default();
+            match crate::config::set_work_hours(&hours, &days) {
+                Ok(()) => {
+                    let mut v = crate::clock::describe(&hours, &days);
+                    v["ok"] = json!(true);
+                    v
+                }
+                Err(e) => json!({"ok": false, "error": e.to_string()}),
+            }
+        }
         "github_status" => {
             let mut v = crate::github::status();
             v["ok"] = json!(true);
@@ -673,7 +689,31 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                         return json!({"ok": false, "error": e});
                     }
                 }
-                flow::set_build(&ws, &f, on, req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool))
+                // Pause: off, with a time to come back (the next work hours, or
+                // a given time), and "stop now" ends what runs.
+                let (hours, days) = crate::config::work_hours();
+                let resume_at = if on {
+                    0
+                } else if req.get("resume_next_work").and_then(Value::as_bool).unwrap_or(false) {
+                    let t = crate::clock::next_start(&hours, &days);
+                    if t <= now_ms() + 60_000 { now_ms() + 12 * 60 * 60 * 1000 } else { t }
+                } else {
+                    req.get("resume_at").and_then(Value::as_u64).unwrap_or(0)
+                };
+                let mut v = flow::set_build(&ws, &f, on, req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool), resume_at);
+                if !on && req.get("stop_running").and_then(Value::as_bool).unwrap_or(false) {
+                    let st = flow::get(&ws, &f.key);
+                    let pids = flow::alive_pids(&st);
+                    for p in &pids {
+                        let _ = std::process::Command::new("kill").arg(p.to_string()).status();
+                    }
+                    if !pids.is_empty() {
+                        flow::update(&ws, &f.key, |x| x.note(format!("Stopped {} running session{}", pids.len(), if pids.len() == 1 { "" } else { "s" })));
+                        flow::journal(&ws, &f.key, "stop", &format!("Stopped {} running session{} by hand", pids.len(), if pids.len() == 1 { "" } else { "s" }), Vec::new(), "", false, json!({"pids": pids}));
+                    }
+                    v["stopped"] = json!(pids.len());
+                }
+                v
             }
             None => json!({"ok": false, "error": "unknown feature"}),
         },

@@ -97,6 +97,8 @@ pub struct FlowState {
     pub reviews: HashMap<u32, u64>,
     /// Session number → when it was reminded to open its pull request.
     pub nudged: HashMap<u32, u64>,
+    /// v2.7: paused until this time (ms); the loop turns the build back on then.
+    pub build_resume_at: u64,
 }
 
 impl FlowState {
@@ -348,10 +350,11 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
 
 /// v2.6: the build autopilot on or off, with how many sessions run at a
 /// time and whether Claude reviews and merges the pull requests.
-pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review: Option<bool>) -> Value {
+pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review: Option<bool>, resume_at: u64) -> Value {
     let prev = get(ws, &f.key).build_auto;
     let st = update(ws, &f.key, |st| {
         st.build_auto = on;
+        st.build_resume_at = if on { 0 } else { resume_at };
         if let Some(p) = parallel {
             st.build_parallel = p.clamp(1, 6);
         }
@@ -364,15 +367,33 @@ pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review:
         if on {
             st.autopilot = true;
         }
-        st.note(if on { "Build autopilot on" } else { "Build autopilot off" });
+        st.note(if on { "Build autopilot on".to_string() } else if resume_at > 0 { "Build paused: what runs finishes, nothing new starts until it resumes".to_string() } else { "Build autopilot off".to_string() });
     });
     let title = if on {
         format!("Build autopilot on: {} at a time, {}", st.build_parallel, if st.build_no_review { "you merge" } else { "Claude reviews and merges" })
+    } else if resume_at > 0 {
+        "Build paused".to_string()
     } else {
         "Build autopilot off".to_string()
     };
     journal(ws, &f.key, "build", &title, Vec::new(), "", true, json!({"prev": prev, "on": on}));
-    json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review})
+    json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review, "resume_at": st.build_resume_at})
+}
+
+/// v2.7: the headless runs and reviews of a feature that are alive.
+pub fn alive_pids(st: &FlowState) -> Vec<u32> {
+    let mut out: Vec<u32> = st.runs.iter().filter(|r| r.pid != 0 && crate::runner::alive(r.pid)).map(|r| r.pid).collect();
+    for j in &st.history {
+        if j.kind == "review" {
+            if let Some(p) = j.data.get("pid").and_then(Value::as_u64) {
+                let p = p as u32;
+                if p != 0 && crate::runner::alive(p) && !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// v2.4: a step's session again (1 PRD draft, 2 estimates into the

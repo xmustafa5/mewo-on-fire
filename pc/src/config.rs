@@ -40,6 +40,14 @@ pub struct Config {
     /// sessions act as, whatever account gh has active; empty = the active one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub github_user: String,
+    /// v2.7: work hours for the build autopilot, `"09:00-18:00"` local
+    /// time (empty = always) and the days it works, 1 = Monday … 7 =
+    /// Sunday (empty = every day). Outside them nothing starts; what
+    /// runs finishes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub work_hours: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work_days: Vec<u8>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -149,6 +157,26 @@ pub fn set_suggestions(on: bool) -> Result<()> {
     save_config(&cfg)
 }
 
+pub fn set_work_hours(hours: &str, days: &[u8]) -> Result<()> {
+    let mut cfg = load_or_create()?;
+    cfg.work_hours = hours.trim().to_string();
+    cfg.work_days = days.iter().copied().filter(|d| (1..=7).contains(d)).collect();
+    save_config(&cfg)?;
+    *WORK.lock().unwrap_or_else(|p| p.into_inner()) = (cfg.work_hours.clone(), cfg.work_days.clone());
+    Ok(())
+}
+
+/// The work hours as loaded, for the loops (they have no Config in hand).
+static WORK: std::sync::Mutex<(String, Vec<u8>)> = std::sync::Mutex::new((String::new(), Vec::new()));
+
+pub fn remember_work_hours(cfg: &Config) {
+    *WORK.lock().unwrap_or_else(|p| p.into_inner()) = (cfg.work_hours.clone(), cfg.work_days.clone());
+}
+
+pub fn work_hours() -> (String, Vec<u8>) {
+    WORK.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
 pub fn set_github_user(user: &str) -> Result<()> {
     let mut cfg = load_or_create()?;
     cfg.github_user = user.trim().to_string();
@@ -197,6 +225,8 @@ pub fn load_or_create() -> Result<Config> {
                 relay_key: String::new(),
                 suggestions: false,
                 github_user: String::new(),
+                work_hours: String::new(),
+                work_days: Vec::new(),
             };
             save_config(&cfg)?;
             Ok(cfg)
