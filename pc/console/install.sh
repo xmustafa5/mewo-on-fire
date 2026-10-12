@@ -50,7 +50,6 @@ cp .build/release/mewo-console "$APP/Contents/MacOS/mewo-console"
 cp Info.plist "$APP/Contents/Info.plist"
 # The page itself is the same one `mewo dashboard` serves.
 cp ../dashboard/index.html "$APP/Contents/Resources/index.html"
-cp ../dashboard/robot-heads.js "$APP/Contents/Resources/robot-heads.js"
 cp ../menubar/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Ad-hoc signature: enough to run on this Mac.
 codesign --force --sign - "$APP"

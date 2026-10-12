@@ -349,10 +349,7 @@ main {
 #preview .rail .note.done { opacity: .6; }
 #preview .rail .note .x { margin-left: auto; cursor: pointer; background: none; border: 0; color: var(--dim); font-size: 13px; line-height: 1; }
 #preview .rail .note .x:hover { color: var(--fire); }
-#preview .rail .reply { padding: 8px 12px; font-size: 12px; line-height: 1.45; color: var(--dim); border-top: 1px solid var(--cyan-dim); max-height: 160px; overflow: auto; display: flex; gap: 10px; align-items: flex-start; }
-#preview .rail .reply > div { flex: 1; min-width: 0; }
-.rhead { display: block; flex: none; }
-#detail .hd { display: flex; align-items: center; gap: 10px; }
+#preview .rail .reply { padding: 8px 12px; font-size: 12px; line-height: 1.45; color: var(--dim); border-top: 1px solid var(--cyan-dim); max-height: 160px; overflow: auto; }
 #preview .rail .reply b { color: var(--text); font: 9px var(--mono); letter-spacing: .14em; display: block; margin-bottom: 3px; }
 #preview .rail .foot { padding: 10px 12px; border-top: 1px solid var(--cyan-dim); }
 #preview .rail .foot .msg { font: 10px var(--mono); letter-spacing: .1em; color: var(--amber); min-height: 14px; margin-top: 6px; }
@@ -568,7 +565,7 @@ footer .seg { display: flex; gap: 22px; }
         <div class="rail" id="pv-rail">
           <div class="rh"><span>REVIEW NOTES</span><span style="flex:1"></span><span title="N turns pinning on and off; then click on the board">PIN · N</span></div>
           <div class="list"></div>
-          <div class="reply"><span class="rhead" id="pv-dhead"></span><div id="pv-dtext"></div></div>
+          <div class="reply"><div id="pv-dtext"></div></div>
           <div class="foot"><button class="btn go" id="pv-send" type="button" disabled>NOTHING TO SEND</button><div class="msg" id="pv-sendmsg"></div></div>
         </div>
       </div>
@@ -600,7 +597,6 @@ footer .seg { display: flex; gap: 22px; }
   <div class="seg"><span id="f-relay"></span><span>POLL <b>2s</b></span><span id="f-ver"></span></div>
 </footer>
 
-<script src="robot-heads.js"></script>
 <script>
 (() => {
 'use strict';
@@ -612,27 +608,6 @@ const C = {
 };
 const stateColor = (s) => s === 'working' ? C.fire : s === 'waiting' ? C.amber : s === 'ended' ? C.ash : C.ok;
 const stateLabel = (s) => s === 'working' ? 'WORKING' : s === 'waiting' ? 'NEEDS YOU' : s === 'ended' ? 'CLOSED' : 'FINISHED';
-// Robot heads (robot-heads by Fayaz Ahmed, MIT): one per session and per PC, its face saying what it does.
-const RH = typeof RobotHeads !== 'undefined' ? RobotHeads : null;
-const heads = new Map();
-const headState = (s) => s.state === 'working' ? 'working' : s.state === 'waiting' ? 'listening' : s.state === 'ended' ? 'sleeping' : (s.last_ts && Date.now() - s.last_ts < 180000) ? 'happy' : 'idle';
-const isDesign = (s) => (s.artifacts || []).some((a) => a.kind === 'design');
-const shellFor = (s) => isDesign(s) ? '#8a4a12' : s.state === 'ended' ? '#2a2f36' : '#1b3350';
-function headSeed(id) { let h = 2166136261; for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619); return ((h >>> 0) % 1000) / 1000; }
-function netHead(key, opts) {
-  if (!RH) return null;
-  let h = heads.get(key);
-  if (!h) { h = RH.create({ headless: true, floorShadow: false, antenna: false, seed: headSeed(key), ...opts }); heads.set(key, h); } else h.set(opts);
-  return h;
-}
-const mounted = new WeakMap();
-function mountHead(el, opts) {
-  if (!RH || !el) return null;
-  let h = mounted.get(el);
-  if (h && h.el && h.el.parentNode === el) { h.set(opts); return h; }
-  if (h) h.destroy();
-  h = RH.create({ seed: headSeed(el.id || 'x'), ...opts }); el.innerHTML = ''; el.appendChild(h.el); mounted.set(el, h); return h;
-}
 const $ = (id) => document.getElementById(id);
 const two = (n) => String(n).padStart(2, '0');
 const hm = (ms) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}`; };
@@ -1236,7 +1211,6 @@ function renderNotes() {
   $('pv-dtext').innerHTML = s
     ? `<b>THE DESIGNER · ${esc((s.title || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}</b>${esc(s.last_text || 'Nothing said yet.')}`
     : '<b>THE DESIGNER</b>No session of this design on this PC: the notes open a new one.';
-  mountHead($('pv-dhead'), { shape: 'circle', state: s ? (s.state === 'working' ? 'working' : s.state === 'waiting' ? 'listening' : s.state === 'ended' ? 'sleeping' : 'speaking') : 'sleeping', size: 54, color: '#7a4a14', screenColor: '#ffd79a', antenna: true, floorShadow: false });
 }
 async function sendNotes() {
   if (!pvCurrent) return; const msg = $('pv-sendmsg'); const b = $('pv-send'); b.disabled = true; msg.textContent = 'SENDING…';
@@ -1354,13 +1328,12 @@ const detail = $('detail');
 const kindLabel = (k) => k === 'design' ? 'DESIGN' : k === 'document' ? 'DOC' : k === 'page' ? 'PAGE' : 'ARTIFACT';
 function showDetail(s) {
   const arts = [...(s.artifacts || [])].reverse();
-  detail.innerHTML = `<div class="hd"><span class="rhead" id="dt-head"></span><div class="t">${esc(s.title || s.project || s.id)}</div><button class="x" aria-label="Close">×</button></div>
+  detail.innerHTML = `<div class="hd"><div class="t">${esc(s.title || s.project || s.id)}</div><button class="x" aria-label="Close">×</button></div>
     <div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}${s.tier ? ` · TIER ${s.tier}` : ''}${s.branch ? ` · ${esc(s.branch)}` : ''}${s.feature ? ` · ${esc(s.feature.toUpperCase())}${s.plan_session ? ' S' + s.plan_session : ''}` : ''}</div>
     ${s.last_text ? `<div class="last">${esc(s.last_text)}</div>` : ''}
     ${s.pc_name ? `<div class="none">ON ${esc(s.pc_name.toUpperCase())}${s.desktop ? ' · OPEN IT THERE' : ''}</div>` : s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
     ${arts.length ? `<div class="sec">MADE BY CLAUDE</div>` + arts.map((a, i) => `<button class="act" style="--c:${a.kind === 'design' ? 'var(--amber)' : 'var(--cyan)'}" data-url="${esc(a.url)}" data-art="${i}"><span class="k">${kindLabel(a.kind)}</span><span class="n">${esc(a.title || 'Untitled ' + a.kind)}</span>${a.local ? '<span class="k" style="width:auto">VIEW</span>' : ''}</button>`).join('') : ''}`;
   detail.style.display = 'block';
-  mountHead($('dt-head'), { shape: isDesign(s) ? 'circle' : 'rectangle', state: headState(s), size: 58, color: shellFor(s), screenColor: stateColor(s.state), antenna: true, floorShadow: false });
   detail.querySelector('.x').onclick = () => { detail.style.display = 'none'; };
   for (const b of detail.querySelectorAll('button[data-url]')) {
     const a = b.dataset.art !== undefined ? arts[+b.dataset.art] : null;
@@ -1588,31 +1561,23 @@ function drawNet(now) {
   const hot = model.sessions.some((s) => s.state === 'working');
   const pulse = 1 + Math.sin(tglob * 2.2) * 0.06;
   nx.save(); nx.translate(core.x, core.y);
-  const glow = nx.createRadialGradient(0, 0, 0, 0, 0, 100);
-  glow.addColorStop(0, hot ? 'rgba(255,107,53,0.30)' : 'rgba(79,209,255,0.30)'); glow.addColorStop(1, 'rgba(79,209,255,0)');
-  nx.fillStyle = glow; nx.beginPath(); nx.arc(0, 0, 100 * pulse, 0, Math.PI * 2); nx.fill();
-  const rings = [[78, 1, 0.9, C.cyan, [10, 6]], [69, -1.6, 1.4, hot ? C.fire : C.cyan, [2, 5]], [60, 0.7, 1, C.cyan, []]];
+  const glow = nx.createRadialGradient(0, 0, 0, 0, 0, 70);
+  glow.addColorStop(0, hot ? 'rgba(255,107,53,0.35)' : 'rgba(79,209,255,0.35)'); glow.addColorStop(1, 'rgba(79,209,255,0)');
+  nx.fillStyle = glow; nx.beginPath(); nx.arc(0, 0, 70 * pulse, 0, Math.PI * 2); nx.fill();
+  const rings = [[44, 1, 0.9, C.cyan, [10, 6]], [36, -1.6, 1.4, hot ? C.fire : C.cyan, [2, 5]], [27, 0.7, 1, C.cyan, []]];
   for (const [r, sp, lw, col, dash] of rings) {
     nx.beginPath(); nx.setLineDash(dash); nx.lineDashOffset = -tglob * 20 * sp;
     nx.arc(0, 0, r, tglob * sp, tglob * sp + Math.PI * 1.75); nx.strokeStyle = col; nx.lineWidth = lw; nx.globalAlpha = 0.9; nx.stroke();
   }
   nx.setLineDash([]); nx.globalAlpha = 1;
   // ticks
-  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2 + tglob * 0.15; nx.beginPath(); nx.moveTo(Math.cos(a) * 84, Math.sin(a) * 84); nx.lineTo(Math.cos(a) * (i % 6 ? 87 : 91), Math.sin(a) * (i % 6 ? 87 : 91)); nx.strokeStyle = 'rgba(79,209,255,0.5)'; nx.lineWidth = 1; nx.stroke(); }
-  // The one robot head: this PC, its face saying what Claude is doing here.
+  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2 + tglob * 0.15; nx.beginPath(); nx.moveTo(Math.cos(a) * 50, Math.sin(a) * 50); nx.lineTo(Math.cos(a) * (i % 6 ? 53 : 57), Math.sin(a) * (i % 6 ? 53 : 57)); nx.strokeStyle = 'rgba(79,209,255,0.5)'; nx.lineWidth = 1; nx.stroke(); }
   const waiting = model.sessions.some((s) => s.state === 'waiting');
-  const fresh = model.sessions.some((s) => s.state !== 'ended' && s.state !== 'working' && s.last_ts && Date.now() - s.last_ts < 180000);
-  const ch = netHead('core', { shape: 'rectangle', state: hot ? 'working' : waiting ? 'listening' : fresh ? 'happy' : 'idle', size: 88, antenna: true, color: '#1b3350', screenColor: hot ? C.fire : waiting ? C.amber : C.cyan, fps: 24 });
-  if (ch && ch.canvas.width) {
-    ch.pointerAt(netRect.left + core.x, netRect.top + core.y); const b = ch.box;
-    nx.drawImage(ch.canvas, -b.cx, -b.cy + 6, b.w, b.h);
-  } else {
-    nx.beginPath(); nx.arc(0, 0, 14 * pulse, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : C.cyan; nx.shadowColor = hot ? C.fire : C.cyan; nx.shadowBlur = 30; nx.fill(); nx.shadowBlur = 0;
-    nx.beginPath(); nx.arc(0, 0, 6, 0, Math.PI * 2); nx.fillStyle = '#fff'; nx.fill();
-  }
+  nx.beginPath(); nx.arc(0, 0, 14 * pulse, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : C.cyan; nx.shadowColor = hot ? C.fire : C.cyan; nx.shadowBlur = 30; nx.fill(); nx.shadowBlur = 0;
+  nx.beginPath(); nx.arc(0, 0, 6, 0, Math.PI * 2); nx.fillStyle = '#fff'; nx.fill();
   nx.restore();
-  roundRectLabel(core.x, core.y + 100, (model.daemon.name || 'PC').toUpperCase(), '#fff', 11, 800);
-  roundRectLabel(core.x, core.y + 115, hot ? 'CLAUDE AT WORK' : waiting ? 'NEEDS YOU' : 'STANDING BY', hot ? C.fire : waiting ? C.amber : C.dim, 9, 600);
+  roundRectLabel(core.x, core.y + 64, (model.daemon.name || 'PC').toUpperCase(), '#fff', 11, 800);
+  roundRectLabel(core.x, core.y + 79, hot ? 'CLAUDE AT WORK' : waiting ? 'NEEDS YOU' : 'STANDING BY', hot ? C.fire : waiting ? C.amber : C.dim, 9, 600);
 
   // peers: a bigger hexagon with a reactor of its own
   for (const n of nodes.values()) {

@@ -17,8 +17,6 @@ use crate::config::now_ms;
 use crate::{artifacts, control, desktop, paths};
 
 const HTML: &str = include_str!("../dashboard/index.html");
-/// robot-heads (MIT), bundled with a vanilla adapter: the faces of the sessions and PCs.
-const ROBOT_JS: &str = include_str!("../dashboard/robot-heads.js");
 pub const DEFAULT_PORT: u16 = 47824;
 const CACHE: Duration = Duration::from_millis(1000);
 const TIMEOUT: Duration = Duration::from_secs(3);
@@ -88,7 +86,6 @@ fn handle(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
     let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
     let (status, ctype, body): (&str, &str, Vec<u8>) = match (method, path) {
         ("GET", "/") | ("GET", "/index.html") => ("200 OK", "text/html; charset=utf-8", HTML.as_bytes().to_vec()),
-        ("GET", "/robot-heads.js") => ("200 OK", "application/javascript; charset=utf-8", ROBOT_JS.as_bytes().to_vec()),
         ("GET", "/api/state") => ("200 OK", "application/json; charset=utf-8", state_json(cache).into_bytes()),
         // A copy the daemon kept of what a session published (v1.6).
         ("GET", p) if p.starts_with("/artifact/") => {
