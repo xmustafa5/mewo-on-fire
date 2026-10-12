@@ -1000,6 +1000,8 @@ class _FlowCard extends StatelessWidget {
           ),
           if (fl.buildResumeAt > 0 && !fl.buildOn)
             Padding(padding: const EdgeInsets.only(top: 8), child: Text('Paused · resumes by itself at ${_clock(fl.buildResumeAt)}', style: t.labelSmall?.copyWith(color: Ember.amber))),
+          if (fl.buildOn && fl.buildMergeOnPass)
+            Padding(padding: const EdgeInsets.only(top: 8), child: Text('Merge on pass: a pull request whose review ends with PASS is merged by the PC.', style: t.labelSmall?.copyWith(color: Ember.text3))),
           if (fl.buildOn && !fl.withinHours)
             Padding(padding: const EdgeInsets.only(top: 8), child: Text('Outside the work hours: what runs finishes, nothing new starts.', style: t.labelSmall?.copyWith(color: Ember.text3))),
           if (fl.log.isNotEmpty) ...[

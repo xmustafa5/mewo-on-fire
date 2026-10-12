@@ -168,6 +168,13 @@ pub fn gh_path() -> Option<PathBuf> {
     }
 }
 
+/// v2.9: marks a pull request ready and merges it (squash) into its base.
+pub fn merge_pr(cwd: &str, url: &str) -> Result<String, String> {
+    let gh = gh_path().ok_or_else(|| "gh is not installed".to_string())?;
+    let _ = run(cwd, &gh, &["pr", "ready", url]);
+    run(cwd, &gh, &["pr", "merge", url, "--squash"])
+}
+
 /// v2.8: the head branch of a pull request, by its url.
 pub fn pr_head(cwd: &str, url: &str) -> Option<String> {
     let gh = gh_path()?;

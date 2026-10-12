@@ -1048,13 +1048,14 @@ function buildBlock(f, fl) {
   const done = ss.length && merged === ss.length;
   const par = b.parallel || 2, rev = b.review !== false, paused = !b.on && (b.resume_at || 0) > 0, outside = b.on && b.within_hours === false, work = (typeof meta !== 'undefined' && meta.work) || {};
   const tomorrow = paused && new Date(b.resume_at).toDateString() !== new Date().toDateString();
+  const mergeBox = `<label title="When the reviewer's report ends with PASS, the daemon merges the pull request itself: no approval on GitHub, the review comment is the record"><input type="checkbox" id="bd-merge" ${b.merge_on_pass ? 'checked' : ''}> MERGE ON PASS</label>`;
   return `<div class="build ${b.on ? 'on' : ''}"><div class="bh"><span class="k">BUILD AUTOPILOT${b.on ? (outside ? ' · AFTER HOURS' : ' · RUNNING') : paused ? ' · PAUSED' : done ? ' · DONE' : ''}</span><span class="p">${merged}/${ss.length} MERGED · ${running} RUNNING · ${review} IN REVIEW · ${ready} READY${blocked ? ' · ' + blocked + ' BLOCKED' : ''}</span></div>
     <div class="bar"><i style="width:${ss.length ? Math.round(merged / ss.length * 100) : 0}%"></i></div>
     <div class="br">${done ? '<span>EVERY SESSION MERGED · NEXT: STAGING</span>' : b.on
-      ? `<button class="btn" id="bd-pause" type="button" title="What runs finishes; nothing new starts until the next work hours">PAUSE FOR TODAY</button><button class="btn" id="bd-stopnow" type="button" title="Ends the running sessions too; they run again from their branches when you resume" style="border-color:var(--heat);color:var(--heat)">STOP NOW</button><button class="btn" id="bd-stop" type="button" title="Off, no resume planned">OFF</button><span>${par} AT A TIME · ${rev ? 'CLAUDE REVIEWS AND MERGES' : 'YOU MERGE'}${outside ? ` · OUTSIDE WORK HOURS: FINISHING WHAT RUNS, OPENS ${hm(work.next_start || 0)}` : ''}</span>`
+      ? `<button class="btn" id="bd-pause" type="button" title="What runs finishes; nothing new starts until the next work hours">PAUSE FOR TODAY</button><button class="btn" id="bd-stopnow" type="button" title="Ends the running sessions too; they run again from their branches when you resume" style="border-color:var(--heat);color:var(--heat)">STOP NOW</button><button class="btn" id="bd-stop" type="button" title="Off, no resume planned">OFF</button><span>${par} AT A TIME · ${rev ? 'CLAUDE REVIEWS AND MERGES' : 'YOU MERGE'}${outside ? ` · OUTSIDE WORK HOURS: FINISHING WHAT RUNS, OPENS ${hm(work.next_start || 0)}` : ''}</span>${mergeBox}`
       : paused
         ? `<button class="btn go" id="bd-go" type="button">RESUME NOW</button><span>PAUSED · RESUMES BY ITSELF AT ${hm(b.resume_at)}${tomorrow ? ' TOMORROW' : ''}</span>`
-        : `<button class="btn go" id="bd-go" type="button">BUILD EVERYTHING</button><label>AT A TIME <select id="bd-par">${[1, 2, 3, 4].map((n) => `<option ${n === par ? 'selected' : ''}>${n}</option>`).join('')}</select></label><label><input type="checkbox" id="bd-rev" ${rev ? 'checked' : ''}> CLAUDE REVIEWS AND MERGES</label>`}</div>
+        : `<button class="btn go" id="bd-go" type="button">BUILD EVERYTHING</button><label>AT A TIME <select id="bd-par">${[1, 2, 3, 4].map((n) => `<option ${n === par ? 'selected' : ''}>${n}</option>`).join('')}</select></label><label><input type="checkbox" id="bd-rev" ${rev ? 'checked' : ''}> CLAUDE REVIEWS AND MERGES</label>${mergeBox}`}</div>
     <div class="br" style="margin-top:7px"><span>WORK HOURS</span><input id="bd-hours" value="${esc(work.hours || '')}" placeholder="09:00-18:00 · empty: always" style="width:170px;background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:10px var(--mono);padding:3px 6px"><span>DAYS</span><input id="bd-days" value="${esc(daysText(work.days || []))}" placeholder="1-5 · empty: every day" style="width:120px;background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:10px var(--mono);padding:3px 6px"><button class="btn" id="bd-hours-save" type="button">SAVE</button><span>${work.hours ? (work.within ? 'INSIDE THEM NOW' : `OUTSIDE NOW · OPEN AGAIN ${hm(work.next_start || 0)}`) : 'ALWAYS ON: THE BUILD RUNS AT NIGHT TOO'}</span></div></div>`;
 }
 const daysText = (d) => { if (!d.length) return ''; const s = [...d].sort((a, b) => a - b); const run = s.every((v, i) => i === 0 || v === s[i - 1] + 1); return run && s.length > 2 ? `${s[0]}-${s[s.length - 1]}` : s.join(','); };
@@ -1069,6 +1070,11 @@ function wireFlow(box, f) {
     go2.disabled = true; go2.textContent = 'STARTING…';
     const r = await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: true, parallel: par, review: rev, ...pcArg(f) });
     if (!r.ok) alert(r.error || 'Could not start it'); setTimeout(refreshFeatures, 800);
+  };
+  const mg = box.querySelector('#bd-merge'); if (mg) mg.onchange = async () => {
+    if (mg.checked && !confirm('Merge on pass? When a review ends with PASS, the daemon merges the pull request itself. GitHub records no approval; the reviewer\'s comment is the record.')) { mg.checked = false; return; }
+    const r = await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: !!b0.on, merge_on_pass: mg.checked, ...pcArg(f) });
+    if (!r.ok) alert(r.error || 'Could not change it'); setTimeout(refreshFeatures, 500);
   };
   const pause = box.querySelector('#bd-pause'); if (pause) pause.onclick = async () => {
     pause.disabled = true; const r = await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: false, resume_next_work: true, ...pcArg(f) });

@@ -101,6 +101,10 @@ pub struct FlowState {
     pub nudged: HashMap<u32, u64>,
     /// v2.7: paused until this time (ms); the loop turns the build back on then.
     pub build_resume_at: u64,
+    /// v2.9: the daemon merges a pull request itself when its review ended
+    /// with PASS (your choice: no second GitHub account, no approval on
+    /// GitHub, the review comment is the record).
+    pub build_merge_on_pass: bool,
 }
 
 impl FlowState {
@@ -352,9 +356,20 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
 
 /// v2.6: the build autopilot on or off, with how many sessions run at a
 /// time and whether Claude reviews and merges the pull requests.
-pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review: Option<bool>, resume_at: u64) -> Value {
+pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review: Option<bool>, resume_at: u64, merge_on_pass: Option<bool>) -> Value {
     let prev = get(ws, &f.key).build_auto;
+    // Only the merge switch: no journal, no change to the rest.
+    if let (Some(m), true) = (merge_on_pass, on == prev && parallel.is_none() && review.is_none() && resume_at == 0) {
+        let st = update(ws, &f.key, |st| {
+            st.build_merge_on_pass = m;
+            st.note(if m { "Merge on pass on: a pull request whose review ends with PASS is merged by the daemon" } else { "Merge on pass off" });
+        });
+        return json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review, "resume_at": st.build_resume_at, "merge_on_pass": st.build_merge_on_pass});
+    }
     let st = update(ws, &f.key, |st| {
+        if let Some(m) = merge_on_pass {
+            st.build_merge_on_pass = m;
+        }
         st.build_auto = on;
         st.build_resume_at = if on { 0 } else { resume_at };
         if let Some(p) = parallel {
@@ -379,7 +394,7 @@ pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review:
         "Build autopilot off".to_string()
     };
     journal(ws, &f.key, "build", &title, Vec::new(), "", true, json!({"prev": prev, "on": on}));
-    json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review, "resume_at": st.build_resume_at})
+    json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review, "resume_at": st.build_resume_at, "merge_on_pass": st.build_merge_on_pass})
 }
 
 /// v2.7: the headless runs and reviews of a feature that are alive.

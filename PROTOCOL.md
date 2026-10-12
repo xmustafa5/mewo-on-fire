@@ -906,3 +906,13 @@ autopilot's "at a time". The worktrees are removed when the session is
 merged; `code/.worktrees/` is in torch-main's local exclude. The
 prompt tells the session where it is and where the workspace root is.
 `session_detail.run.folder` says which folder a run used.
+
+# v2.9 — merge on pass
+
+`build_set {merge_on_pass: true}` (per feature, off by default, a
+setting of the owner): when a pull request's review session ended with
+the word PASS, the daemon marks the pull request ready and merges it
+(squash) itself; GitHub records no approval, the reviewer's comment is
+the record. A failed merge is journaled (`merge_failed`) and warned
+once. The reviewer's brief asks for a closing PASS or BLOCKED line.
+`flow.build.merge_on_pass` carries the setting.

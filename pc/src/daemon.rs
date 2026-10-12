@@ -191,7 +191,7 @@ impl AppState {
                     "autopilot": st.autopilot,
                     "estimates": st.estimates,
                     "estimates_done": st.estimates_done,
-                    "build": {"on": st.build_auto, "parallel": if st.build_parallel == 0 { 2 } else { st.build_parallel }, "review": !st.build_no_review, "resume_at": st.build_resume_at, "within_hours": crate::clock::within_now()},
+                    "build": {"on": st.build_auto, "parallel": if st.build_parallel == 0 { 2 } else { st.build_parallel }, "review": !st.build_no_review, "resume_at": st.build_resume_at, "within_hours": crate::clock::within_now(), "merge_on_pass": st.build_merge_on_pass},
                     "log": st.log,
                     "released_at": st.released_at,
                     "closed_at": st.closed_at,
@@ -1255,6 +1255,39 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     if !working_hours {
         return;
     }
+    // Merge on pass (v2.9): a pull request whose review ended with PASS is
+    // merged by the daemon itself, on your setting.
+    if st.build_merge_on_pass {
+        for s in plan.sessions.iter().filter(|s| s.effective == "review" && !s.pr_url.is_empty()) {
+            let Some(started) = st.reviews.get(&s.n).copied() else { continue };
+            let review_pid = st.history.iter().rev().find(|j| j.kind == "review" && j.data.get("session").and_then(Value::as_u64) == Some(s.n as u64)).and_then(|j| j.data.get("pid").and_then(Value::as_u64)).unwrap_or(0) as u32;
+            if review_pid != 0 && runner::alive(review_pid) {
+                continue; // still reviewing
+            }
+            if st.history.iter().any(|j| (j.kind == "merge" || j.kind == "merge_failed") && j.data.get("pr").and_then(Value::as_str) == Some(s.pr_url.as_str()) && j.ts >= started) {
+                continue; // dealt with after this review
+            }
+            let (log, _) = control::run_log_tail(&format!("{}-S{}-", f.slug, s.n), true, 4000);
+            let verdict = log.lines().rev().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("[next]:")).next().unwrap_or("").to_ascii_uppercase();
+            if verdict != "PASS" {
+                continue;
+            }
+            let (folder, url) = (s.folder.clone(), s.pr_url.clone());
+            let merged = tokio::task::spawn_blocking(move || prs::merge_pr(&folder, &url)).await.unwrap_or_else(|e| Err(e.to_string()));
+            match merged {
+                Ok(_) => {
+                    flow::update(ws, &f.key, |x| x.note(format!("Session {} merged on pass: {}", s.n, s.pr_url)));
+                    flow::journal(ws, &f.key, "merge", &format!("Session {} merged on the review's PASS", s.n), Vec::new(), "", false, json!({"session": s.n, "pr": s.pr_url}));
+                }
+                Err(e) => {
+                    flow::update(ws, &f.key, |x| x.note(format!("Session {}: the review passed but the merge failed: {e}", s.n)));
+                    flow::journal(ws, &f.key, "merge_failed", &format!("Session {}: merge failed after PASS", s.n), Vec::new(), "", false, json!({"session": s.n, "pr": s.pr_url, "error": e}));
+                    let _ = state.emit(Event { kind: "warning".to_string(), project: f.app.clone(), cwd: ws.to_string_lossy().into_owned(), message: format!("{} / {}: session {} passed review but could not be merged: {e}", f.app, f.slug, s.n), detail: format!("{}|session|{}", f.key, s.n), ..Event::default() }, &Meta::default());
+                }
+            }
+            return;
+        }
+    }
     // Pull requests open: a reviewer session for each, that merges.
     if !st.build_no_review {
         for s in plan.sessions.iter().filter(|s| s.effective == "review" && !s.pr_url.is_empty()) {
@@ -1424,7 +1457,7 @@ async fn start_headless(state: &Arc<AppState>, ws: &Path, f: &policy::Feature, s
 fn review_prompt(f: &policy::Feature, s: &policy::PlanSession) -> String {
     let ds = f.design["name"].as_str().unwrap_or("Glare");
     format!(
-        "Review the pull request {} of the {} app, feature \"{}\", session {}: \"{}\". You are the reviewer of the TORCH Agentic Development Policy: use context/templates/PULL_REQUEST.md, Checklists G and H. Read the whole diff. Run the repository's lint, type check and full test suite. Check every done-when item of session {} in {}/SESSION_PLAN.md, and that the screens match the handoff HTML in {}/handoff/. The feature's design system is {} (see {}/DESIGN_SYSTEM.md). When everything holds: tick G and H in the pull request's description, approve it, and merge it with `gh pr merge {} --squash` into {}; never into main. When something does not hold: fix it on the pull request's branch, push, run the checks again, then merge. When it cannot be fixed in this session: leave a review comment that lists what blocks it, mark the pull request as a draft, and end with the word BLOCKED.",
+        "Review the pull request {} of the {} app, feature \"{}\", session {}: \"{}\". You are the reviewer of the TORCH Agentic Development Policy: use context/templates/PULL_REQUEST.md, Checklists G and H. Read the whole diff. Run the repository's lint, type check and full test suite. Check every done-when item of session {} in {}/SESSION_PLAN.md, and that the screens match the handoff HTML in {}/handoff/. The feature's design system is {} (see {}/DESIGN_SYSTEM.md). When everything holds: tick G and H in the pull request's description, approve it, and merge it with `gh pr merge {} --squash` into {}; never into main. When something does not hold: fix it on the pull request's branch, push, run the checks again, then merge. When it cannot be fixed in this session: leave a review comment that lists what blocks it, mark the pull request as a draft, and end with the word BLOCKED. End your report with one word on its own line: PASS when the code holds (whether or not you merged it), BLOCKED when a code problem remains.",
         s.pr_url, f.app, f.slug, s.n, s.goal, s.n, f.dir, f.dir, ds, f.dir, s.pr_url, f.branch
     )
 }

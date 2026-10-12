@@ -700,7 +700,7 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                 } else {
                     req.get("resume_at").and_then(Value::as_u64).unwrap_or(0)
                 };
-                let mut v = flow::set_build(&ws, &f, on, req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool), resume_at);
+                let mut v = flow::set_build(&ws, &f, on, req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool), resume_at, req.get("merge_on_pass").and_then(Value::as_bool));
                 if !on && req.get("stop_running").and_then(Value::as_bool).unwrap_or(false) {
                     let st = flow::get(&ws, &f.key);
                     let pids = flow::alive_pids(&st);
@@ -884,7 +884,7 @@ fn feature_branch_of(dir: &str, feature: &str) -> String {
 
 /// The last `max` characters of the newest run log matching `prefix`
 /// (and `-review-` only when `review`).
-fn run_log_tail(prefix: &str, review: bool, max: usize) -> (String, String) {
+pub(crate) fn run_log_tail(prefix: &str, review: bool, max: usize) -> (String, String) {
     let dir = crate::paths::state_dir().join("runs");
     let Ok(rd) = std::fs::read_dir(&dir) else { return (String::new(), String::new()) };
     let mut names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(prefix) && n.ends_with(".log") && n.contains("-review-") == review).collect();

@@ -1140,11 +1140,14 @@ class FlowJournal {
 
 /// The flow runner's state for a feature (v1.8).
 class FlowInfo {
-  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action, this.history = const <FlowJournal>[], this.buildOn = false, this.buildParallel = 2, this.buildReview = true, this.buildResumeAt = 0, this.withinHours = true});
+  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action, this.history = const <FlowJournal>[], this.buildOn = false, this.buildParallel = 2, this.buildReview = true, this.buildResumeAt = 0, this.withinHours = true, this.buildMergeOnPass = false});
 
   /// v2.7: paused until (ms, 0 = not paused); inside the work hours now.
   final int buildResumeAt;
   final bool withinHours;
+
+  /// v2.9: the daemon merges a pull request whose review ended with PASS.
+  final bool buildMergeOnPass;
 
   /// v2.6: the build autopilot.
   final bool buildOn;
@@ -1168,6 +1171,7 @@ class FlowInfo {
         buildReview: !(j['build'] is Map && (j['build'] as Map)['review'] == false),
         buildResumeAt: j['build'] is Map ? _asInt((j['build'] as Map)['resume_at']) : 0,
         withinHours: !(j['build'] is Map && (j['build'] as Map)['within_hours'] == false),
+        buildMergeOnPass: j['build'] is Map && (j['build'] as Map)['merge_on_pass'] == true,
         estimates: [
           if (j['estimates'] is List)
             for (final e in j['estimates'] as List)
