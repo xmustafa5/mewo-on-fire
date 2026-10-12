@@ -591,8 +591,6 @@ function netHead(key, opts) {
   if (!h) { h = RH.create({ headless: true, floorShadow: false, antenna: false, seed: headSeed(key), ...opts }); heads.set(key, h); } else h.set(opts);
   return h;
 }
-function sessionHead(s, size) { return netHead('session:' + s.id, { shape: isDesign(s) ? 'circle' : 'rectangle', state: headState(s), size, color: shellFor(s), screenColor: stateColor(s.state), trimColor: s.state === 'ended' ? '#555c66' : '#93a6c8', speed: s.state === 'ended' ? 0.6 : 1 }); }
-function pcHead(p, hot) { return netHead('pc:' + p.pc_id, { shape: 'hexagon', state: p.connected ? (hot ? 'working' : 'idle') : 'sleeping', size: 54, color: p.connected ? '#1f2b3c' : '#2a2f36', screenColor: p.connected ? C.cyan : C.heat }); }
 const mounted = new WeakMap();
 function mountHead(el, opts) {
   if (!RH || !el) return null;
@@ -601,10 +599,6 @@ function mountHead(el, opts) {
   if (h) h.destroy();
   h = RH.create({ seed: headSeed(el.id || 'x'), ...opts }); el.innerHTML = ''; el.appendChild(h.el); mounted.set(el, h); return h;
 }
-setInterval(() => {
-  const live = new Set([...((typeof model !== 'undefined' && model.sessions) || []).map((s) => 'session:' + s.id), ...((typeof model !== 'undefined' && model.peers) || []).map((p) => 'pc:' + p.pc_id)]);
-  for (const [k, h] of heads) if (!live.has(k)) { h.destroy(); heads.delete(k); }
-}, 15000);
 const $ = (id) => document.getElementById(id);
 const two = (n) => String(n).padStart(2, '0');
 const hm = (ms) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}`; };
@@ -1446,22 +1440,31 @@ function drawNet(now) {
   const hot = model.sessions.some((s) => s.state === 'working');
   const pulse = 1 + Math.sin(tglob * 2.2) * 0.06;
   nx.save(); nx.translate(core.x, core.y);
-  const glow = nx.createRadialGradient(0, 0, 0, 0, 0, 70);
-  glow.addColorStop(0, hot ? 'rgba(255,107,53,0.35)' : 'rgba(79,209,255,0.35)'); glow.addColorStop(1, 'rgba(79,209,255,0)');
-  nx.fillStyle = glow; nx.beginPath(); nx.arc(0, 0, 70 * pulse, 0, Math.PI * 2); nx.fill();
-  const rings = [[44, 1, 0.9, C.cyan, [10, 6]], [36, -1.6, 1.4, hot ? C.fire : C.cyan, [2, 5]], [27, 0.7, 1, C.cyan, []]];
+  const glow = nx.createRadialGradient(0, 0, 0, 0, 0, 100);
+  glow.addColorStop(0, hot ? 'rgba(255,107,53,0.30)' : 'rgba(79,209,255,0.30)'); glow.addColorStop(1, 'rgba(79,209,255,0)');
+  nx.fillStyle = glow; nx.beginPath(); nx.arc(0, 0, 100 * pulse, 0, Math.PI * 2); nx.fill();
+  const rings = [[78, 1, 0.9, C.cyan, [10, 6]], [69, -1.6, 1.4, hot ? C.fire : C.cyan, [2, 5]], [60, 0.7, 1, C.cyan, []]];
   for (const [r, sp, lw, col, dash] of rings) {
     nx.beginPath(); nx.setLineDash(dash); nx.lineDashOffset = -tglob * 20 * sp;
     nx.arc(0, 0, r, tglob * sp, tglob * sp + Math.PI * 1.75); nx.strokeStyle = col; nx.lineWidth = lw; nx.globalAlpha = 0.9; nx.stroke();
   }
   nx.setLineDash([]); nx.globalAlpha = 1;
   // ticks
-  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2 + tglob * 0.15; nx.beginPath(); nx.moveTo(Math.cos(a) * 50, Math.sin(a) * 50); nx.lineTo(Math.cos(a) * (i % 6 ? 53 : 57), Math.sin(a) * (i % 6 ? 53 : 57)); nx.strokeStyle = 'rgba(79,209,255,0.5)'; nx.lineWidth = 1; nx.stroke(); }
-  nx.beginPath(); nx.arc(0, 0, 14 * pulse, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : C.cyan; nx.shadowColor = hot ? C.fire : C.cyan; nx.shadowBlur = 30; nx.fill(); nx.shadowBlur = 0;
-  nx.beginPath(); nx.arc(0, 0, 6, 0, Math.PI * 2); nx.fillStyle = '#fff'; nx.fill();
+  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2 + tglob * 0.15; nx.beginPath(); nx.moveTo(Math.cos(a) * 84, Math.sin(a) * 84); nx.lineTo(Math.cos(a) * (i % 6 ? 87 : 91), Math.sin(a) * (i % 6 ? 87 : 91)); nx.strokeStyle = 'rgba(79,209,255,0.5)'; nx.lineWidth = 1; nx.stroke(); }
+  // The one robot head: this PC, its face saying what Claude is doing here.
+  const waiting = model.sessions.some((s) => s.state === 'waiting');
+  const fresh = model.sessions.some((s) => s.state !== 'ended' && s.state !== 'working' && s.last_ts && Date.now() - s.last_ts < 180000);
+  const ch = netHead('core', { shape: 'rectangle', state: hot ? 'working' : waiting ? 'listening' : fresh ? 'happy' : 'idle', size: 88, antenna: true, color: '#1b3350', screenColor: hot ? C.fire : waiting ? C.amber : C.cyan });
+  if (ch && ch.canvas.width) {
+    const nr = net.getBoundingClientRect(); ch.pointerAt(nr.left + core.x, nr.top + core.y); const b = ch.box;
+    nx.drawImage(ch.canvas, -b.cx, -b.cy + 6, b.w, b.h);
+  } else {
+    nx.beginPath(); nx.arc(0, 0, 14 * pulse, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : C.cyan; nx.shadowColor = hot ? C.fire : C.cyan; nx.shadowBlur = 30; nx.fill(); nx.shadowBlur = 0;
+    nx.beginPath(); nx.arc(0, 0, 6, 0, Math.PI * 2); nx.fillStyle = '#fff'; nx.fill();
+  }
   nx.restore();
-  roundRectLabel(core.x, core.y + 64, (model.daemon.name || 'PC').toUpperCase(), '#fff', 11, 800);
-  roundRectLabel(core.x, core.y + 79, hot ? 'CLAUDE AT WORK' : 'STANDING BY', hot ? C.fire : C.dim, 9, 600);
+  roundRectLabel(core.x, core.y + 100, (model.daemon.name || 'PC').toUpperCase(), '#fff', 11, 800);
+  roundRectLabel(core.x, core.y + 115, hot ? 'CLAUDE AT WORK' : waiting ? 'NEEDS YOU' : 'STANDING BY', hot ? C.fire : waiting ? C.amber : C.dim, 9, 600);
 
   // peers: a bigger hexagon with a reactor of its own
   for (const n of nodes.values()) {
@@ -1470,25 +1473,17 @@ function drawNet(now) {
     nx.save(); nx.translate(n.x, n.y);
     const g = nx.createRadialGradient(0, 0, 0, 0, 0, 44); g.addColorStop(0, hot ? 'rgba(255,107,53,0.28)' : on ? 'rgba(79,209,255,0.22)' : 'rgba(255,61,31,0.12)'); g.addColorStop(1, 'rgba(0,0,0,0)');
     nx.fillStyle = g; nx.beginPath(); nx.arc(0, 0, 44, 0, Math.PI * 2); nx.fill();
-    const ph = pcHead(n.p, hot);
-    if (ph && ph.canvas.width) {
-      const nr = net.getBoundingClientRect(); ph.pointerAt(nr.left + n.x, nr.top + n.y); const b = ph.box;
-      if (on) { nx.shadowColor = col; nx.shadowBlur = hot ? 22 : 12; }
-      nx.drawImage(ph.canvas, -b.cx, -b.cy, b.w, b.h); nx.shadowBlur = 0;
-      if (on) { nx.beginPath(); nx.setLineDash([2, 5]); nx.lineDashOffset = -tglob * 18; nx.arc(0, 0, 38, tglob * 0.8, tglob * 0.8 + Math.PI * 1.5); nx.strokeStyle = hot ? C.fire : C.cyan; nx.lineWidth = 1; nx.globalAlpha = 0.8; nx.stroke(); nx.setLineDash([]); nx.globalAlpha = 1; }
-    } else {
-      nx.beginPath();
-      for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + (i / 6) * Math.PI * 2; const r = 24; i ? nx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : nx.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
-      nx.closePath(); nx.fillStyle = on ? 'rgba(79,209,255,0.08)' : 'rgba(255,61,31,0.06)'; nx.fill();
-      nx.strokeStyle = col; nx.lineWidth = 1.6; if (!on) nx.setLineDash([3, 3]); if (on) { nx.shadowColor = col; nx.shadowBlur = hot ? 22 : 12; }
-      nx.stroke(); nx.setLineDash([]); nx.shadowBlur = 0;
-      if (on) { nx.beginPath(); nx.setLineDash([2, 5]); nx.lineDashOffset = -tglob * 18; nx.arc(0, 0, 31, tglob * 0.8, tglob * 0.8 + Math.PI * 1.5); nx.strokeStyle = hot ? C.fire : C.cyan; nx.lineWidth = 1; nx.globalAlpha = 0.8; nx.stroke(); nx.setLineDash([]); nx.globalAlpha = 1; }
-      nx.beginPath(); nx.arc(0, 0, 7, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : col; nx.shadowColor = hot ? C.fire : col; nx.shadowBlur = 16; nx.fill(); nx.shadowBlur = 0;
-      nx.beginPath(); nx.arc(0, 0, 3, 0, Math.PI * 2); nx.fillStyle = '#fff'; nx.fill();
-    }
+    nx.beginPath();
+    for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + (i / 6) * Math.PI * 2; const r = 24; i ? nx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : nx.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+    nx.closePath(); nx.fillStyle = on ? 'rgba(79,209,255,0.08)' : 'rgba(255,61,31,0.06)'; nx.fill();
+    nx.strokeStyle = col; nx.lineWidth = 1.6; if (!on) nx.setLineDash([3, 3]); if (on) { nx.shadowColor = col; nx.shadowBlur = hot ? 22 : 12; }
+    nx.stroke(); nx.setLineDash([]); nx.shadowBlur = 0;
+    if (on) { nx.beginPath(); nx.setLineDash([2, 5]); nx.lineDashOffset = -tglob * 18; nx.arc(0, 0, 31, tglob * 0.8, tglob * 0.8 + Math.PI * 1.5); nx.strokeStyle = hot ? C.fire : C.cyan; nx.lineWidth = 1; nx.globalAlpha = 0.8; nx.stroke(); nx.setLineDash([]); nx.globalAlpha = 1; }
+    nx.beginPath(); nx.arc(0, 0, 7, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : col; nx.shadowColor = hot ? C.fire : col; nx.shadowBlur = 16; nx.fill(); nx.shadowBlur = 0;
+    nx.beginPath(); nx.arc(0, 0, 3, 0, Math.PI * 2); nx.fillStyle = '#fff'; nx.fill();
     nx.restore();
-    roundRectLabel(n.x, n.y + 40, trunc(n.label, 20).toUpperCase(), on ? '#fff' : C.dim, 10.5, 800);
-    roundRectLabel(n.x, n.y + 54, on ? (n.p.account ? n.p.account.toUpperCase() + ' · ' : '') + `${(n.p.sessions || []).length} SESSION${(n.p.sessions || []).length === 1 ? '' : 'S'}` : 'OFFLINE', on ? C.dim : C.heat, 8.5, 600);
+    roundRectLabel(n.x, n.y + 32, trunc(n.label, 20).toUpperCase(), on ? '#fff' : C.dim, 10.5, 800);
+    roundRectLabel(n.x, n.y + 46, on ? (n.p.account ? n.p.account.toUpperCase() + ' · ' : '') + `${(n.p.sessions || []).length} SESSION${(n.p.sessions || []).length === 1 ? '' : 'S'}` : 'OFFLINE', on ? C.dim : C.heat, 8.5, 600);
   }
   // hubs
   for (const n of nodes.values()) {
@@ -1508,7 +1503,7 @@ function drawNet(now) {
     if (n.kind !== 'session') continue;
     const s = n.s, col = stateColor(s.state), ended = s.state === 'ended', isH = hover === n;
     const age = reduced ? 1 : Math.min(1, (now - (n.born || 0)) / 600);
-    const r = (ended ? 15 : 21) * (0.6 + 0.4 * age) * (isH ? 1.15 : 1);
+    const r = (ended ? 9 : 13) * (0.6 + 0.4 * age) * (isH ? 1.15 : 1);
     nx.save(); nx.translate(n.x, n.y); nx.globalAlpha = ended ? 0.55 : age;
     if (s.state === 'working') {
       nx.beginPath(); nx.arc(0, 0, r + 7, tglob * 2.4, tglob * 2.4 + Math.PI * 1.2); nx.strokeStyle = col; nx.lineWidth = 1.5; nx.shadowColor = col; nx.shadowBlur = 10; nx.stroke(); nx.shadowBlur = 0;
@@ -1517,20 +1512,12 @@ function drawNet(now) {
       const k = 1 + ((Math.sin(tglob * 4) + 1) / 2) * 0.35;
       nx.beginPath(); nx.arc(0, 0, (r + 7) * k, 0, Math.PI * 2); nx.strokeStyle = col; nx.globalAlpha = 0.5 - (k - 1); nx.lineWidth = 1.5; nx.stroke(); nx.globalAlpha = ended ? 0.55 : age;
     }
-    const hd = sessionHead(s, ended ? 28 : 40);
-    if (hd && hd.canvas.width) {
-      const nr = net.getBoundingClientRect(); hd.pointerAt(nr.left + n.x, nr.top + n.y);
-      const k = (0.6 + 0.4 * age) * (isH ? 1.12 : 1), b = hd.box;
-      if (!ended) { nx.shadowColor = col; nx.shadowBlur = isH ? 24 : 10; }
-      nx.drawImage(hd.canvas, -b.cx * k, -b.cy * k, b.w * k, b.h * k); nx.shadowBlur = 0;
-    } else {
-      nx.beginPath(); nx.arc(0, 0, r, 0, Math.PI * 2);
-      nx.fillStyle = col; nx.globalAlpha *= 0.18; nx.fill(); nx.globalAlpha = ended ? 0.55 : age;
-      nx.strokeStyle = col; nx.lineWidth = 1.6; if (ended) nx.setLineDash([3, 3]);
-      if (!ended) { nx.shadowColor = col; nx.shadowBlur = isH ? 26 : 14; }
-      nx.stroke(); nx.setLineDash([]); nx.shadowBlur = 0;
-      nx.beginPath(); nx.arc(0, 0, r * 0.32, 0, Math.PI * 2); nx.fillStyle = col; nx.fill();
-    }
+    nx.beginPath(); nx.arc(0, 0, r, 0, Math.PI * 2);
+    nx.fillStyle = col; nx.globalAlpha *= 0.18; nx.fill(); nx.globalAlpha = ended ? 0.55 : age;
+    nx.strokeStyle = col; nx.lineWidth = 1.6; if (ended) nx.setLineDash([3, 3]);
+    if (!ended) { nx.shadowColor = col; nx.shadowBlur = isH ? 26 : 14; }
+    nx.stroke(); nx.setLineDash([]); nx.shadowBlur = 0;
+    nx.beginPath(); nx.arc(0, 0, r * 0.32, 0, Math.PI * 2); nx.fillStyle = col; nx.fill();
     if ((s.queued || 0) > 0) { nx.beginPath(); nx.arc(r * 0.8, -r * 0.8, 5, 0, Math.PI * 2); nx.fillStyle = C.mewo; nx.shadowColor = C.mewo; nx.shadowBlur = 10; nx.fill(); nx.shadowBlur = 0; }
     if ((s.artifacts || []).length) { nx.save(); nx.translate(r * 0.85, r * 0.85); nx.rotate(Math.PI / 4); nx.fillStyle = C.amber; nx.shadowColor = C.amber; nx.shadowBlur = 10; nx.fillRect(-4, -4, 8, 8); nx.restore(); nx.shadowBlur = 0; }
     nx.restore();
