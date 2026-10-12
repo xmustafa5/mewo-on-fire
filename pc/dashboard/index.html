@@ -1471,7 +1471,7 @@ function drawNet(now) {
     const g = nx.createRadialGradient(0, 0, 0, 0, 0, 44); g.addColorStop(0, hot ? 'rgba(255,107,53,0.28)' : on ? 'rgba(79,209,255,0.22)' : 'rgba(255,61,31,0.12)'); g.addColorStop(1, 'rgba(0,0,0,0)');
     nx.fillStyle = g; nx.beginPath(); nx.arc(0, 0, 44, 0, Math.PI * 2); nx.fill();
     const ph = pcHead(n.p, hot);
-    if (ph) {
+    if (ph && ph.canvas.width) {
       const nr = net.getBoundingClientRect(); ph.pointerAt(nr.left + n.x, nr.top + n.y); const b = ph.box;
       if (on) { nx.shadowColor = col; nx.shadowBlur = hot ? 22 : 12; }
       nx.drawImage(ph.canvas, -b.cx, -b.cy, b.w, b.h); nx.shadowBlur = 0;
@@ -1518,7 +1518,7 @@ function drawNet(now) {
       nx.beginPath(); nx.arc(0, 0, (r + 7) * k, 0, Math.PI * 2); nx.strokeStyle = col; nx.globalAlpha = 0.5 - (k - 1); nx.lineWidth = 1.5; nx.stroke(); nx.globalAlpha = ended ? 0.55 : age;
     }
     const hd = sessionHead(s, ended ? 28 : 40);
-    if (hd) {
+    if (hd && hd.canvas.width) {
       const nr = net.getBoundingClientRect(); hd.pointerAt(nr.left + n.x, nr.top + n.y);
       const k = (0.6 + 0.4 * age) * (isH ? 1.12 : 1), b = hd.box;
       if (!ended) { nx.shadowColor = col; nx.shadowBlur = isH ? 24 : 10; }
