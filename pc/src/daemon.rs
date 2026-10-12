@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -348,6 +348,15 @@ impl AppState {
                         let _ = policy::git(ws, &["add", "--", &f.dir]);
                         let _ = policy::git(ws, &["commit", "-q", "-m", &format!("Start {} feature: {}", f.app, f.slug), "--", &f.dir]);
                         flow::update(ws, &f.key, |st| st.note(format!("Created the branch {} in torch-main", f.branch)));
+                    }
+                }
+                if a.kind == "start" && a.folder != ws_s {
+                    match policy::prepare_repo(Path::new(&a.folder), &f.branch) {
+                        Ok(done) if done != "already on the branch" => {
+                            flow::update(ws, &f.key, |st| st.note(format!("{}: {done}", a.folder.rsplit('/').next().unwrap_or(""))));
+                        }
+                        Ok(_) => {}
+                        Err(e) => return json!({"ok": false, "error": e}),
                     }
                 }
                 match desktop::open_new_session(&a.folder, &a.prompt) {
@@ -1294,11 +1303,14 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     let last_of = |n: u32| st.runs.iter().rev().find(|r| r.step == 9 && r.note == n.to_string());
     let fresh = |n: u32| last_of(n).map(|r| now.saturating_sub(r.started) < 15 * min).unwrap_or(false);
     let live = |n: u32| last_of(n).map(|r| r.pid != 0 && runner::alive(r.pid)).unwrap_or(false);
-    let busy = plan.sessions.iter().filter(|s| s.running || live(s.n) || (s.effective == "progress" && fresh(s.n))).count();
+    let active = |s: &policy::PlanSession| s.running || live(s.n) || (s.effective == "progress" && fresh(s.n));
+    let busy = plan.sessions.iter().filter(|s| active(s)).count();
     if busy >= parallel {
         return;
     }
-    if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n) && !live(s.n)) {
+    // One session per repository at a time: they share its working tree.
+    let busy_folders: Vec<String> = plan.sessions.iter().filter(|s| active(s)).map(|s| s.folder.clone()).collect();
+    if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n) && !live(s.n) && !busy_folders.contains(&s.folder)) {
         if let Err(e) = start_headless(&state, ws, f, s, &s.prompt, s.tier, &format!("Start session {}", s.n)).await {
             flow::update(ws, &f.key, |x| x.note(format!("Could not start session {}: {e}", s.n)));
         }
@@ -1308,6 +1320,14 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
 /// A plan session run headless by the build autopilot: the plan says In
 /// progress, the run is remembered with its pid, History gets the start.
 async fn start_headless(state: &Arc<AppState>, ws: &Path, f: &policy::Feature, s: &policy::PlanSession, prompt: &str, tier: u8, title: &str) -> Result<u32, String> {
+    // The repository on the feature branch first (policy 7.2).
+    if s.folder != ws.to_string_lossy() {
+        let (folder, branch) = (PathBuf::from(&s.folder), f.branch.clone());
+        let done = tokio::task::spawn_blocking(move || policy::prepare_repo(&folder, &branch)).await.map_err(|e| e.to_string())??;
+        if done != "already on the branch" {
+            flow::update(ws, &f.key, |x| x.note(format!("{}: {done}", s.repo)));
+        }
+    }
     let pid = runner::spawn(&s.folder, prompt, runner::model_for(tier), &format!("{}-S{}", f.slug, s.n))?;
     let (ws2, key, n) = (ws.to_path_buf(), f.key.clone(), s.n);
     let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, "In progress", "")).await;

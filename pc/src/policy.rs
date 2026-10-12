@@ -960,6 +960,47 @@ pub fn prd_choices(ws: &Path, app: &str, pick: &str) -> Vec<Value> {
     out
 }
 
+/// v2.6: a code repository ready for a session of the feature: on the
+/// feature branch, made from main and pushed when it did not exist
+/// (policy 7.2, as new-feature.sh does). Refuses a dirty working tree
+/// that is not on the branch. Returns what it did.
+pub fn prepare_repo(repo: &Path, branch: &str) -> Result<String, String> {
+    if !is_repo(repo) {
+        return Err(format!("{} is not a git repository", repo.display()));
+    }
+    let on = git(repo, &["branch", "--show-current"]).unwrap_or_default();
+    if on == branch {
+        return Ok("already on the branch".to_string());
+    }
+    let clean = git(repo, &["status", "--porcelain", "--untracked-files=no"]).map(|s| s.trim().is_empty()).unwrap_or(false);
+    if !clean {
+        return Err(format!("{} has uncommitted changes on '{}'; commit or stash them so the session can switch to {branch}", repo.display(), if on.is_empty() { "a detached HEAD" } else { &on }));
+    }
+    let _ = git_long(repo, &["fetch", "--quiet", "origin"]);
+    let local = git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_some();
+    let remote = git(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_some();
+    if local {
+        git(repo, &["switch", "--quiet", branch]).ok_or_else(|| format!("could not switch {} to {branch}", repo.display()))?;
+        if remote {
+            let _ = git_long(repo, &["pull", "--quiet", "--ff-only"]);
+        }
+        return Ok("switched to the branch".to_string());
+    }
+    if remote {
+        git(repo, &["switch", "--quiet", "--track", "-c", branch, &format!("origin/{branch}")]).ok_or_else(|| format!("could not check out origin/{branch} in {}", repo.display()))?;
+        return Ok("checked out the branch from origin".to_string());
+    }
+    let base = ["origin/main", "main", "origin/master", "master"].into_iter().find(|b| git(repo, &["rev-parse", "--verify", "--quiet", b]).is_some()).ok_or_else(|| format!("{} has no main branch to branch from", repo.display()))?;
+    git(repo, &["switch", "--quiet", "-c", branch, base]).ok_or_else(|| format!("could not create {branch} in {}", repo.display()))?;
+    if git(repo, &["remote", "get-url", "origin"]).is_some() {
+        if git_long(repo, &["push", "--quiet", "-u", "origin", branch]).is_none() {
+            return Ok(format!("created the branch from {base}; the push failed, so the pull request will need it pushed"));
+        }
+        return Ok(format!("created the branch from {base} and pushed it"));
+    }
+    Ok(format!("created the branch from {base}"))
+}
+
 /// v2.3: the design system a feature follows, read from
 /// `DESIGN_SYSTEM.md` in its folder (a `| Field | Value |` table with
 /// System, Repository, Checkout and Reference). Glare, the policy's
