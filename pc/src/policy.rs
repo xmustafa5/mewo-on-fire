@@ -642,19 +642,48 @@ fn fence_after(lines: &[&str], i: usize) -> String {
     }
 }
 
+/// Session numbers in a "Depends on" cell: `1, 2`, `11 to 17` (a range,
+/// also `11-17` and `11–17`), `none`. A note after `;` and references to
+/// open questions (`OQ 28`) are not sessions.
 fn parse_depends(s: &str) -> Vec<u32> {
-    let mut out = Vec::new();
-    let mut num = String::new();
-    for c in s.chars().chain(std::iter::once(' ')) {
-        if c.is_ascii_digit() {
-            num.push(c);
-        } else if !num.is_empty() {
-            if let Ok(n) = num.parse() {
-                out.push(n);
+    let s = s.split(';').next().unwrap_or("");
+    let lower = s.to_ascii_lowercase();
+    let mut out: Vec<u32> = Vec::new();
+    let mut i = 0;
+    let b = lower.as_bytes();
+    while i < b.len() {
+        if b[i].is_ascii_digit() {
+            let start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
             }
-            num.clear();
+            // `OQ 28`, `question 28`, `#28` in prose: an open question, not a session.
+            let before = lower[..start].trim_end();
+            if before.ends_with("oq") || before.ends_with("question") || before.ends_with("questions") {
+                continue;
+            }
+            let Ok(n) = lower[start..i].parse::<u32>() else { continue };
+            // A range: `11 to 17`, `11-17`, `11–17`.
+            let rest = lower[i..].trim_start();
+            let range = ["to ", "-", "–", "—"].iter().find_map(|sep| rest.strip_prefix(sep)).map(|r| r.trim_start());
+            if let Some(r) = range {
+                let digits: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(m) = digits.parse::<u32>() {
+                    if m >= n && m - n <= 40 {
+                        out.extend(n..=m);
+                        // Skip past the range's end.
+                        let consumed = lower[i..].len() - rest.len() + (rest.len() - r.len()) + digits.len();
+                        i += consumed;
+                        continue;
+                    }
+                }
+            }
+            out.push(n);
+        } else {
+            i += 1;
         }
     }
+    out.dedup();
     out
 }
 
