@@ -190,6 +190,7 @@ impl AppState {
                     "autopilot": st.autopilot,
                     "estimates": st.estimates,
                     "estimates_done": st.estimates_done,
+                    "build": {"on": st.build_auto, "parallel": if st.build_parallel == 0 { 2 } else { st.build_parallel }, "review": !st.build_no_review},
                     "log": st.log,
                     "released_at": st.released_at,
                     "closed_at": st.closed_at,
@@ -1100,7 +1101,7 @@ async fn flow_loop(state: Arc<AppState>) {
             };
             for mut f in feats {
                 let st = flow::get(&ws, &f.key);
-                if !st.autopilot {
+                if !st.autopilot && !st.build_auto {
                     continue;
                 }
                 let mut prs: Vec<Value> = Vec::new();
@@ -1109,7 +1110,17 @@ async fn flow_loop(state: Arc<AppState>) {
                     prs.extend(state.prs.list_base(&dir, &f.branch).await);
                 }
                 policy::enrich(&mut f, &sessions, &prs);
+                if st.build_auto && f.plan.is_some() {
+                    build_tick(state.clone(), &ws, &f, &st, &sessions).await;
+                }
+                if !st.autopilot {
+                    continue;
+                }
                 let a = flow::next_action(&ws, &f, &st, &sessions);
+                if a.kind == "start" && st.build_auto {
+                    // The build autopilot starts the sessions, in parallel.
+                    continue;
+                }
                 if !a.auto {
                     continue;
                 }
@@ -1139,6 +1150,151 @@ async fn flow_loop(state: Arc<AppState>) {
             }
         }
     }
+}
+
+/// v2.6: one pass of the build autopilot for a feature: plan statuses
+/// follow GitHub, open pull requests get a reviewer session, a session
+/// without a pull request is reminded, run again, then handed to a
+/// person, and ready sessions start, so many at a time.
+async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &flow::FlowState, sessions: &[Session]) {
+    let Some(plan) = &f.plan else { return };
+    let now = now_ms();
+    let min = 60 * 1000u64;
+    let parallel = if st.build_parallel == 0 { 2 } else { st.build_parallel } as usize;
+    // Statuses in the plan follow what GitHub says.
+    for s in &plan.sessions {
+        let status = s.status.to_ascii_lowercase();
+        let want = if s.effective == "merged" && status != "merged" {
+            Some("Merged")
+        } else if s.effective == "review" && status != "in review" {
+            Some("In review")
+        } else {
+            None
+        };
+        if let Some(w) = want {
+            let (ws2, key, n, pr) = (ws.to_path_buf(), f.key.clone(), s.n, s.pr_url.clone());
+            let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, w, &pr)).await;
+        }
+    }
+    // Every session merged: the build is done.
+    if !plan.sessions.is_empty() && plan.sessions.iter().all(|s| s.effective == "merged") {
+        flow::update(ws, &f.key, |x| {
+            x.build_auto = false;
+            x.note("Build done: every session merged");
+        });
+        flow::journal(ws, &f.key, "build_done", &format!("Build done: {} sessions merged", plan.sessions.len()), Vec::new(), "", false, Value::Null);
+        let _ = state.emit(
+            Event { kind: "finished".to_string(), project: f.app.clone(), cwd: ws.to_string_lossy().into_owned(), message: format!("Build done for {} / {}: all {} sessions merged. Next: staging.", f.app, f.slug, plan.sessions.len()), detail: format!("{}|build", f.key), ..Event::default() },
+            &Meta::default(),
+        );
+        return;
+    }
+    // Pull requests open: a reviewer session for each, that merges.
+    if !st.build_no_review {
+        for s in plan.sessions.iter().filter(|s| s.effective == "review" && !s.pr_url.is_empty()) {
+            let started = st.reviews.get(&s.n).copied().unwrap_or(0);
+            if started > 0 && now.saturating_sub(started) < 3 * 60 * min {
+                continue;
+            }
+            let tries = st.history.iter().filter(|j| j.kind == "review" && j.data.get("session").and_then(Value::as_u64) == Some(s.n as u64)).count();
+            if tries >= 2 {
+                // Two reviews did not merge it: a person decides. Said once.
+                if !st.history.iter().any(|j| j.kind == "review_stuck" && j.data.get("session").and_then(Value::as_u64) == Some(s.n as u64)) {
+                    flow::journal(ws, &f.key, "review_stuck", &format!("Session {}: the pull request did not merge after two reviews", s.n), Vec::new(), "", false, json!({"session": s.n, "pr": s.pr_url}));
+                    let _ = state.emit(Event { kind: "warning".to_string(), project: f.app.clone(), cwd: ws.to_string_lossy().into_owned(), message: format!("{} / {}: session {} did not merge after two reviews. A person decides: {}", f.app, f.slug, s.n, s.pr_url), detail: format!("{}|session|{}", f.key, s.n), ..Event::default() }, &Meta::default());
+                }
+                continue;
+            }
+            let prompt = review_prompt(f, s);
+            match desktop::open_new_session(&s.folder, &prompt) {
+                Ok(()) => {
+                    flow::update(ws, &f.key, |x| {
+                        x.reviews.insert(s.n, now);
+                        x.note(format!("Review of session {} started", s.n));
+                    });
+                    flow::journal(ws, &f.key, "review", &format!("Review of session {} started", s.n), Vec::new(), "", false, json!({"session": s.n, "pr": s.pr_url}));
+                }
+                Err(e) => {
+                    flow::update(ws, &f.key, |x| x.note(format!("Could not start the review of session {}: {e}", s.n)));
+                }
+            }
+            // One session a tick: Claude Desktop takes a moment to open one.
+            return;
+        }
+    }
+    // Sessions that ran and have no pull request: remind, run again, then a person.
+    for s in plan.sessions.iter().filter(|s| s.effective == "progress" && s.pr_url.is_empty() && s.pr.is_empty()) {
+        let lives: Vec<&Session> = sessions.iter().filter(|x| x.feature == f.key && x.plan_session == s.n).collect();
+        let last_run = st.runs.iter().rev().find(|r| r.step == 9 && r.note == s.n.to_string()).map(|r| r.started).unwrap_or(0);
+        if now.saturating_sub(last_run) < 15 * min {
+            continue;
+        }
+        if lives.iter().any(|x| matches!(x.state.as_str(), "working" | "waiting")) {
+            continue; // busy, or asking you: the phone has the question
+        }
+        let latest = lives.iter().map(|x| x.last_ts).max().unwrap_or(last_run);
+        let nudged = st.nudged.get(&s.n).copied().unwrap_or(0);
+        let finished: Option<&Session> = lives.iter().filter(|x| x.state == "finished").max_by_key(|x| x.last_ts).copied();
+        if let (Some(fin), 0) = (finished, nudged) {
+            if now.saturating_sub(latest) > 15 * min {
+                let text = format!("Session {} of the plan has no pull request yet. Finish the done-when checks of session {} in {}/SESSION_PLAN.md, open the pull request using context/templates/PULL_REQUEST.md with the self-check ticked, and say DONE. If something blocks you, say BLOCKED and why.", s.n, s.n, f.dir);
+                let _ = state.send_message(&fin.id, &text, &format!("build-{now}"), Vec::new()).await;
+                flow::update(ws, &f.key, |x| {
+                    x.nudged.insert(s.n, now);
+                    x.note(format!("Reminded session {} to open its pull request", s.n));
+                });
+            }
+            continue;
+        }
+        let gone = lives.is_empty() || lives.iter().all(|x| x.state == "ended");
+        let reminded_in_vain = nudged > 0 && now.saturating_sub(nudged) > 30 * min;
+        if !(gone || reminded_in_vain) {
+            continue;
+        }
+        if s.attempts < 3 {
+            let attempt = s.attempts + 1;
+            let prompt = format!("{}\n\n(Attempt {attempt} of this session: the earlier one stopped without a pull request. Continue from the branch as it is, do not redo what is done{}.)", s.prompt, if attempt >= 3 { "; policy 9.1: run this attempt one tier up" } else { "" });
+            let a = flow::Action { kind: "start".to_string(), step: 9, title: format!("Start session {} again", s.n), detail: s.goal.clone(), session: s.n, prompt, folder: s.folder.clone(), auto: true, ..flow::Action::default() };
+            let (st2, ws2, f2) = (state.clone(), ws.to_path_buf(), f.clone());
+            let r = tokio::task::spawn_blocking(move || st2.flow_execute(&ws2, &f2, Some(a), "build autopilot")).await.unwrap_or(Value::Null);
+            if r.get("ok").and_then(Value::as_bool) != Some(true) {
+                flow::update(ws, &f.key, |x| x.note(format!("Could not run session {} again: {}", s.n, r.get("error").and_then(Value::as_str).unwrap_or(""))));
+            } else {
+                flow::update(ws, &f.key, |x| {
+                    x.nudged.remove(&s.n);
+                });
+            }
+        } else {
+            let (ws2, key, n) = (ws.to_path_buf(), f.key.clone(), s.n);
+            let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, "Blocked", "")).await;
+            flow::journal(ws, &f.key, "blocked", &format!("Session {} blocked: three attempts without a pull request", s.n), Vec::new(), "", false, json!({"session": s.n}));
+            let _ = state.emit(Event { kind: "warning".to_string(), project: f.app.clone(), cwd: ws.to_string_lossy().into_owned(), message: format!("{} / {}: session {} is blocked after three attempts without a pull request. A person decides.", f.app, f.slug, s.n), detail: format!("{}|session|{}", f.key, s.n), ..Event::default() }, &Meta::default());
+        }
+        return;
+    }
+    // Ready sessions start, so many at a time, one a tick.
+    let fresh = |n: u32| st.runs.iter().any(|r| r.step == 9 && r.note == n.to_string() && now.saturating_sub(r.started) < 15 * min);
+    let busy = plan.sessions.iter().filter(|s| s.running || (s.effective == "progress" && fresh(s.n))).count();
+    if busy >= parallel {
+        return;
+    }
+    if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n)) {
+        let a = flow::Action { kind: "start".to_string(), step: 9, title: format!("Start session {}", s.n), detail: s.goal.clone(), session: s.n, prompt: s.prompt.clone(), folder: s.folder.clone(), auto: true, ..flow::Action::default() };
+        let (st2, ws2, f2) = (state.clone(), ws.to_path_buf(), f.clone());
+        let r = tokio::task::spawn_blocking(move || st2.flow_execute(&ws2, &f2, Some(a), "build autopilot")).await.unwrap_or(Value::Null);
+        if r.get("ok").and_then(Value::as_bool) != Some(true) {
+            flow::update(ws, &f.key, |x| x.note(format!("Could not start session {}: {}", s.n, r.get("error").and_then(Value::as_str).unwrap_or(""))));
+        }
+    }
+}
+
+/// The reviewer's brief for a session's pull request (policy Checklists G and H).
+fn review_prompt(f: &policy::Feature, s: &policy::PlanSession) -> String {
+    let ds = f.design["name"].as_str().unwrap_or("Glare");
+    format!(
+        "Review the pull request {} of the {} app, feature \"{}\", session {}: \"{}\". You are the reviewer of the TORCH Agentic Development Policy: use context/templates/PULL_REQUEST.md, Checklists G and H. Read the whole diff. Run the repository's lint, type check and full test suite. Check every done-when item of session {} in {}/SESSION_PLAN.md, and that the screens match the handoff HTML in {}/handoff/. The feature's design system is {} (see {}/DESIGN_SYSTEM.md). When everything holds: tick G and H in the pull request's description, approve it, and merge it with `gh pr merge {} --squash` into {}; never into main. When something does not hold: fix it on the pull request's branch, push, run the checks again, then merge. When it cannot be fixed in this session: leave a review comment that lists what blocks it, mark the pull request as a draft, and end with the word BLOCKED.",
+        s.pr_url, f.app, f.slug, s.n, s.goal, s.n, f.dir, f.dir, ds, f.dir, s.pr_url, f.branch
+    )
 }
 
 /// v1.7: matches sessions to the features of their workspace, off the

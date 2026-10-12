@@ -392,7 +392,7 @@ async fn handle_frame(
             send_json(sink, &v).await
         }
         "sign" | "plan_status" | "start_session" | "request_sign" | "get_scan" | "set_check"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo"
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set"
         | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_status" => handle_policy(state, device, sink, &msg).await,
         _ => Ok(()),
     }

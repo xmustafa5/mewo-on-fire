@@ -116,6 +116,14 @@ header {
 .legend { font: 9px var(--mono); letter-spacing: .12em; color: var(--dim); margin: 6px 0 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; } .legend span::before { content: ''; width: 8px; height: 8px; border: 1px solid var(--c); background: color-mix(in srgb, var(--c) 30%, transparent); }
 .srow.flash { outline: 1px solid var(--amber); }
+.build { margin-top: 10px; border: 1px solid var(--cyan-dim); padding: 9px 10px; background: rgba(79,209,255,.03); }
+.build.on { border-color: var(--amber); background: rgba(255,179,71,.05); }
+.build .bh { display: flex; gap: 10px; align-items: center; font: 9px var(--mono); letter-spacing: .14em; color: var(--dim); }
+.build .bh .k { color: var(--amber); font-weight: 700; } .build .bh .p { margin-left: auto; }
+.build .bar { height: 4px; background: rgba(79,209,255,.1); margin: 7px 0; } .build .bar i { display: block; height: 100%; background: var(--ok); transition: width .4s; }
+.build .br { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font: 9px var(--mono); letter-spacing: .12em; color: var(--dim); }
+.build .br label { display: inline-flex; align-items: center; gap: 5px; } .build .br select { background: rgba(79,209,255,0.05); border: 1px solid var(--cyan-dim); color: var(--text); font: 10px var(--mono); padding: 2px 4px; }
+.build .br input[type=checkbox] { width: auto; margin: 0; }
 #bigmap { position: fixed; inset: 40px 40px 30px; display: none; z-index: 70; background: rgba(6,12,20,.98); border: 1px solid var(--cyan-line); box-shadow: 0 16px 50px rgba(0,0,0,.7); flex-direction: column; }
 #bigmap.on { display: flex; }
 #bigmap .hd { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--cyan-dim); font: 10px var(--mono); letter-spacing: .16em; color: var(--dim); }
@@ -971,11 +979,35 @@ function flowHtml(f) {
     <div class="t">${esc(a.title || '')}</div><div class="d">${esc(a.detail || '')}${a.roles && a.roles.length && a.kind !== 'estimates' ? ` · ${esc(a.roles.join(', '))}` : ''}</div>
     ${est ? `<div class="d">ESTIMATES · ${est}${fl.estimates_done ? ' · IN THE PRD' : ''}</div>` : ''}
     <div class="a">${btn ? `<button class="btn go" id="fl-go" type="button">${btn}</button>` : ''}${a.kind === 'estimates' || (a.step === 2 && !fl.estimates_done) ? '<button class="btn" id="fl-est" type="button">ADD AN ESTIMATE</button>' : ''}${a.step === 2 && !fl.estimates_done && (fl.estimates || []).length >= 3 ? '<button class="btn" id="fl-estdone" type="button">ESTIMATES ARE IN THE PRD</button>' : ''}${a.step >= 11 || a.gate === 'uat' ? '<button class="btn" id="fl-uat" type="button">ADD A UAT USER</button>' : ''}${a.kind === 'ask' && a.gate ? '<button class="btn" id="fl-sign" type="button" title="Open this gate\'s signature form here">SIGN IT MYSELF</button>' : ''}${REDO[a.step] && a.kind !== 'run' ? `<button class="btn" id="fl-redo" type="button" title="A new session with the step's prompt as it stands now">${REDO[a.step]}</button>` : ''}</div>
+    ${f.plan && (f.plan.sessions || []).length && a.step >= 8 && !f.released ? buildBlock(f, fl) : ''}
     <div class="form" id="fl-estform" style="display:none"><div><label>ROLE</label><select id="es-role"><option>Design lead</option><option>FE lead</option><option>BE lead</option></select></div><div><label>PERSON-DAYS</label><input id="es-days" type="number" min="0" step="0.5"></div><div class="full"><label>ASSUMPTIONS</label><input id="es-ass" placeholder="What the estimate assumes"></div><div class="full"><button class="btn go" id="es-go" type="button">RECORD MY ESTIMATE</button></div><div class="msg" id="es-msg"></div></div>
     <div class="form" id="fl-uatform" style="display:none"><div><label>USER</label><input id="ua-user"></div><div><label>THEIR ROLE</label><input id="ua-role"></div><div class="full"><label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="ua-ok" style="width:auto"> COMPLETED THE CORE FLOWS UNAIDED</label></div><div class="full"><label>NOTES</label><input id="ua-notes"></div><div class="full"><button class="btn go" id="ua-go" type="button">RECORD</button></div><div class="msg" id="ua-msg"></div></div>
     ${log ? `<div class="log">${log}</div>` : ''}</div>`;
 }
+// The build autopilot: one button, every session of the plan runs by itself.
+function buildBlock(f, fl) {
+  const b = fl.build || {}; const ss = (f.plan || {}).sessions || [];
+  const cnt = (k) => ss.filter((s) => s.effective === k).length;
+  const merged = cnt('merged'), running = ss.filter((s) => s.running).length, review = cnt('review'), ready = cnt('ready'), blocked = cnt('blocked');
+  const done = ss.length && merged === ss.length;
+  const par = b.parallel || 2, rev = b.review !== false;
+  return `<div class="build ${b.on ? 'on' : ''}"><div class="bh"><span class="k">BUILD AUTOPILOT${b.on ? ' · RUNNING' : done ? ' · DONE' : ''}</span><span class="p">${merged}/${ss.length} MERGED · ${running} RUNNING · ${review} IN REVIEW · ${ready} READY${blocked ? ' · ' + blocked + ' BLOCKED' : ''}</span></div>
+    <div class="bar"><i style="width:${ss.length ? Math.round(merged / ss.length * 100) : 0}%"></i></div>
+    <div class="br">${done ? '<span>EVERY SESSION MERGED · NEXT: STAGING</span>' : b.on
+      ? `<button class="btn" id="bd-stop" type="button">STOP</button><span>${par} AT A TIME · ${rev ? 'CLAUDE REVIEWS AND MERGES THE PULL REQUESTS' : 'YOU MERGE THE PULL REQUESTS'} · COME BACK LATER</span>`
+      : `<button class="btn go" id="bd-go" type="button">BUILD EVERYTHING</button><label>AT A TIME <select id="bd-par">${[1, 2, 3, 4].map((n) => `<option ${n === par ? 'selected' : ''}>${n}</option>`).join('')}</select></label><label><input type="checkbox" id="bd-rev" ${rev ? 'checked' : ''}> CLAUDE REVIEWS AND MERGES</label>`}</div></div>`;
+}
 function wireFlow(box, f) {
+  const go2 = box.querySelector('#bd-go'); if (go2) go2.onclick = async () => {
+    const par = +box.querySelector('#bd-par').value, rev = box.querySelector('#bd-rev').checked;
+    if (!confirm(`Build everything? Every session of the plan starts by itself in Claude Desktop, ${par} at a time, in dependency order${rev ? ', and Claude reviews and merges each pull request' : ''}. A session that needs you reaches your phone. You can stop it any time.`)) return;
+    go2.disabled = true; go2.textContent = 'STARTING…';
+    const r = await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: true, parallel: par, review: rev, ...pcArg(f) });
+    if (!r.ok) alert(r.error || 'Could not start it'); setTimeout(refreshFeatures, 800);
+  };
+  const stop = box.querySelector('#bd-stop'); if (stop) stop.onclick = async () => {
+    stop.disabled = true; await daemon({ cmd: 'build_set', feature: f.key, workspace: f.workspace, on: false, ...pcArg(f) }); setTimeout(refreshFeatures, 800);
+  };
   const auto = box.querySelector('#fl-auto'); if (auto) auto.onchange = async () => { await daemon({ cmd: 'flow_set', feature: f.key, workspace: f.workspace, autopilot: auto.checked }); refreshFeatures(); };
   const go = box.querySelector('#fl-go'); if (go) go.onclick = async () => {
     const a = (f.flow || {}).action || {};

@@ -1140,7 +1140,12 @@ class FlowJournal {
 
 /// The flow runner's state for a feature (v1.8).
 class FlowInfo {
-  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action, this.history = const <FlowJournal>[]});
+  const FlowInfo({required this.autopilot, required this.estimates, required this.estimatesDone, required this.log, required this.releasedAt, required this.closedAt, required this.action, this.history = const <FlowJournal>[], this.buildOn = false, this.buildParallel = 2, this.buildReview = true});
+
+  /// v2.6: the build autopilot.
+  final bool buildOn;
+  final int buildParallel;
+  final bool buildReview;
   final List<FlowJournal> history;
   final bool autopilot;
   final List<FlowEstimate> estimates;
@@ -1154,6 +1159,9 @@ class FlowInfo {
 
   factory FlowInfo.fromJson(Map<String, dynamic> j) => FlowInfo(
         autopilot: j['autopilot'] == true,
+        buildOn: j['build'] is Map && (j['build'] as Map)['on'] == true,
+        buildParallel: j['build'] is Map ? _asInt((j['build'] as Map)['parallel']) : 2,
+        buildReview: !(j['build'] is Map && (j['build'] as Map)['review'] == false),
         estimates: [
           if (j['estimates'] is List)
             for (final e in j['estimates'] as List)

@@ -835,3 +835,22 @@ session with them when that session is gone (`how: new_session`), and
 marks them `sent`; `dry: true` only returns the `message`. The console
 draws the pins over the boards (NOTES, or N) with a rail of the notes
 and the designer's latest word.
+
+# v2.6 — the build autopilot
+
+One button: every session of the plan runs by itself. `build_set
+{feature, workspace, on, parallel?, review?}` (also a phone frame) turns
+it on or off; on, it turns the flow's autopilot on too. Every 30 s the
+daemon then, for the feature: writes Merged and In review into the plan
+as GitHub says; starts a reviewer session for each open pull request
+(Checklists G and H, lint, types, tests, the done-when items; it merges
+with `gh pr merge --squash` into the feature branch, or fixes, or says
+BLOCKED), at most two reviews per pull request, then a warning to the
+phones; reminds a session that finished without a pull request through
+the session's own chat, runs it again when it is gone or the reminder
+went unanswered for 30 minutes (attempt 3 one tier up), and marks it
+Blocked after three attempts with a warning; starts ready sessions,
+`parallel` at a time across the network, one every tick. When every
+session is merged it turns itself off and sends "Build done". `features`
+carries `flow.build: {on, parallel, review}`; journal kinds `build`
+(rolls back), `review`, `review_stuck`, `blocked`, `build_done`.

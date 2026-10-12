@@ -363,7 +363,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             tokio::task::block_in_place(|| plane_request(state, req))
         }
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -614,6 +614,11 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
         // v1.8: the flow runner.
         "flow_next" => match state.feature(&ws, &key) {
             Some(f) => state.flow_execute(&ws, &f, None, &s("name")),
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
+        // v2.6: the build autopilot.
+        "build_set" => match state.feature(&ws, &key) {
+            Some(f) => flow::set_build(&ws, &f, req.get("on").and_then(Value::as_bool).unwrap_or(true), req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool)),
             None => json!({"ok": false, "error": "unknown feature"}),
         },
         // v2.4: a step's session again. `dry` only shows the action.

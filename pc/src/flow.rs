@@ -82,6 +82,19 @@ pub struct FlowState {
     /// v2.4: the design was restarted at this time (ms); boards made
     /// before it no longer count.
     pub design_since: u64,
+    /// v2.6: the build autopilot. Every ready session starts by itself,
+    /// `build_parallel` at a time across the network; a pull request gets
+    /// a reviewer session that merges it when `build_review`; a session
+    /// that stops without a pull request is reminded, run again, then
+    /// handed to a person.
+    pub build_auto: bool,
+    pub build_parallel: u8,
+    /// Reviews are Claude's unless this is set.
+    pub build_no_review: bool,
+    /// Session number → when its review session started.
+    pub reviews: HashMap<u32, u64>,
+    /// Session number → when it was reminded to open its pull request.
+    pub nudged: HashMap<u32, u64>,
 }
 
 impl FlowState {
@@ -329,6 +342,35 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
         ),
         _ => String::new(),
     }
+}
+
+/// v2.6: the build autopilot on or off, with how many sessions run at a
+/// time and whether Claude reviews and merges the pull requests.
+pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review: Option<bool>) -> Value {
+    let prev = get(ws, &f.key).build_auto;
+    let st = update(ws, &f.key, |st| {
+        st.build_auto = on;
+        if let Some(p) = parallel {
+            st.build_parallel = p.clamp(1, 6);
+        }
+        if let Some(r) = review {
+            st.build_no_review = !r;
+        }
+        if st.build_parallel == 0 {
+            st.build_parallel = 2;
+        }
+        if on {
+            st.autopilot = true;
+        }
+        st.note(if on { "Build autopilot on" } else { "Build autopilot off" });
+    });
+    let title = if on {
+        format!("Build autopilot on: {} at a time, {}", st.build_parallel, if st.build_no_review { "you merge" } else { "Claude reviews and merges" })
+    } else {
+        "Build autopilot off".to_string()
+    };
+    journal(ws, &f.key, "build", &title, Vec::new(), "", true, json!({"prev": prev, "on": on}));
+    json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review})
 }
 
 /// v2.4: a step's session again (1 PRD draft, 2 estimates into the
@@ -901,6 +943,7 @@ pub fn rollback(ws: &Path, f: &Feature, id: u64) -> Result<Value, String> {
             "estimates_done" => st.estimates_done = false,
             "prd_pick" => st.prd = data.get("prev").and_then(Value::as_str).unwrap_or("").to_string(),
             "redo" => st.design_since = data.get("prev").and_then(Value::as_u64).unwrap_or(0),
+            "build" => st.build_auto = data.get("prev").and_then(Value::as_bool).unwrap_or(false),
             "release" => st.released_at = 0,
             "run" | "start" => {
                 let started = data.get("started").and_then(Value::as_u64).unwrap_or(0);

@@ -60,6 +60,39 @@ class _FeatureScreenState extends State<FeatureScreen> {
     _toast(error.isEmpty ? 'Done: ${a.title}' : error);
   }
 
+  /// The build autopilot button, when the plan exists and is not all merged.
+  VoidCallback? _buildFromFlow(TorchFeature f) {
+    final plan = f.plan;
+    if (plan == null || plan.sessions.isEmpty || f.step < 8 || f.released) return null;
+    if (plan.sessions.every((s) => s.effective == 'merged')) return null;
+    return () => _doBuild(f);
+  }
+
+  Future<void> _doBuild(TorchFeature f) async {
+    if (_flowBusy) return;
+    final on = !f.flow.buildOn;
+    if (on) {
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Build everything?'),
+          content: Text('Every session of the plan starts by itself on the PC, ${f.flow.buildParallel} at a time, in dependency order. Claude reviews and merges each pull request. A session that needs you reaches this phone. You can stop it any time.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Build everything')),
+          ],
+        ),
+      );
+      if (yes != true || !mounted) return;
+    }
+    HapticFeedback.mediumImpact();
+    setState(() => _flowBusy = true);
+    final error = await _state.buildSet(widget.pcId, f, on: on, parallel: f.flow.buildParallel, review: f.flow.buildReview);
+    if (!mounted) return;
+    setState(() => _flowBusy = false);
+    _toast(error.isEmpty ? (on ? 'Building. Come back later.' : 'Build autopilot off') : error);
+  }
+
   /// Which wave each session is in: 1 for no dependency, else one past its
   /// deepest dependency. Sessions of one wave can run together.
   Map<int, int> _waves(List<PlanSession> ss) {
@@ -301,6 +334,7 @@ class _FeatureScreenState extends State<FeatureScreen> {
       onNext: () => _doNext(f),
       onRedo: () => _doRedo(f),
       onSign: _signFromFlow(f),
+      onBuild: _buildFromFlow(f),
       onAutopilot: (v) async {
         final e = await _state.flowSet(widget.pcId, f, v);
         if (e.isNotEmpty && mounted) _toast(e);
@@ -816,6 +850,7 @@ class _FlowCard extends StatelessWidget {
     required this.onNext,
     required this.onRedo,
     required this.onSign,
+    required this.onBuild,
     required this.onAutopilot,
     required this.onEstimate,
     required this.onEstimatesDone,
@@ -829,6 +864,9 @@ class _FlowCard extends StatelessWidget {
 
   /// Sign the gate the step asks for yourself (null when there is none to sign).
   final VoidCallback? onSign;
+
+  /// The build autopilot: on when the plan can be built, off when it runs.
+  final VoidCallback? onBuild;
   final ValueChanged<bool> onAutopilot;
   final VoidCallback onEstimate;
   final VoidCallback onEstimatesDone;
@@ -918,6 +956,7 @@ class _FlowCard extends StatelessWidget {
                   ),
                 if (estimatesPhase && a.kind != 'estimates') EmberButton(label: 'Add my estimate', icon: Icons.timelapse_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onEstimate),
                 if (a.kind == 'ask' && onSign != null) EmberButton(label: 'Sign it myself', icon: Icons.draw_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: busy ? null : onSign),
+                if (onBuild != null) EmberButton(label: fl.buildOn ? 'Building · stop' : 'Build everything', icon: fl.buildOn ? Icons.stop_circle_outlined : Icons.rocket_launch_rounded, small: true, style: fl.buildOn ? EmberButtonStyle.ghost : EmberButtonStyle.primary, onPressed: busy ? null : onBuild),
                 if (redoLabels.containsKey(a.step) && a.kind != 'run') EmberButton(label: redoLabels[a.step]!, icon: Icons.replay_rounded, small: true, style: EmberButtonStyle.ghost, onPressed: busy ? null : onRedo),
                 if (estimatesPhase && fl.estimates.length >= 3) EmberButton(label: 'Estimates are in the PRD', small: true, style: EmberButtonStyle.ghost, onPressed: onEstimatesDone),
                 if (a.gate == 'uat' || a.step >= 11 && a.step <= 12 && !feature.released) EmberButton(label: 'Add a UAT user', icon: Icons.groups_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onUat),
