@@ -1153,7 +1153,7 @@ function renderFeature() {
   const focused = document.activeElement;
   if (focused && box.contains(focused) && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) { box.dataset.pending = '1'; return; }
   const scroller = [box, box.parentElement, document.scrollingElement].find((el) => el && el.scrollHeight > el.clientHeight + 4) || box;
-  const keep = { top: scroller.scrollTop, forms: [...box.querySelectorAll('.form')].filter((x) => x.id && x.style.display !== 'none' && x.style.display !== '').map((x) => x.id) };
+  const keep = { top: scroller.scrollTop, forms: [...box.querySelectorAll('.form')].filter((x) => x.id && x.style.display !== 'none' && x.style.display !== '').map((x) => x.id), lefts: [...box.querySelectorAll('[id]')].filter((el) => el.scrollLeft > 0).map((el) => [el.id, el.scrollLeft]) };
   const plan = f.plan;
   const h = [];
   const plItem = (k) => (f.plane && f.plane.items && f.plane.items[k]) || null;
@@ -1189,6 +1189,7 @@ function renderFeature() {
   box.dataset.sig = sig; box.dataset.pending = '';
   for (const id of keep.forms) { const el = box.querySelector('#' + id); if (el) el.style.display = 'grid'; }
   scroller.scrollTop = keep.top;
+  for (const [id, left] of keep.lefts) { const el = box.querySelector('#' + CSS.escape(id)); if (el) el.scrollLeft = left; }
   for (const b of box.querySelectorAll('button.rb')) b.onclick = async () => {
     if (!confirm('Roll back this entry? Its commit is reverted on the feature branch.')) return;
     b.disabled = true; b.textContent = 'ROLLING BACK…';
