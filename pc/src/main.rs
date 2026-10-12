@@ -10,6 +10,7 @@ mod daemon;
 mod dashboard;
 mod desktop;
 mod flow;
+mod github;
 mod hook;
 mod install;
 mod listen;

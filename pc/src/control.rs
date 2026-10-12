@@ -368,6 +368,24 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             tokio::task::block_in_place(|| policy_request(state, req))
         }
         // v1.6: a new session in Claude Desktop (the console's "New session").
+        // v2.6: the GitHub account the daemon acts as.
+        "github_user" => {
+            let user = s("user");
+            match crate::config::set_github_user(&user) {
+                Ok(()) => {
+                    crate::github::set_user(&user);
+                    let mut v = crate::github::status();
+                    v["ok"] = json!(true);
+                    v
+                }
+                Err(e) => json!({"ok": false, "error": e.to_string()}),
+            }
+        }
+        "github_status" => {
+            let mut v = crate::github::status();
+            v["ok"] = json!(true);
+            v
+        }
         // v2.5: review notes pinned on a design's boards.
         "notes" => json!({"ok": true, "notes": notes::list(&s("artifact")).iter().map(notes::to_json).collect::<Vec<_>>()}),
         "note_add" => match notes::add(

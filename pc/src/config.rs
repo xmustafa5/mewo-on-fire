@@ -36,6 +36,10 @@ pub struct Config {
     /// see suggest.rs).
     #[serde(default, skip_serializing_if = "is_false")]
     pub suggestions: bool,
+    /// v2.6: the GitHub account (a `gh auth login` user) the daemon and its
+    /// sessions act as, whatever account gh has active; empty = the active one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub github_user: String,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -145,6 +149,12 @@ pub fn set_suggestions(on: bool) -> Result<()> {
     save_config(&cfg)
 }
 
+pub fn set_github_user(user: &str) -> Result<()> {
+    let mut cfg = load_or_create()?;
+    cfg.github_user = user.trim().to_string();
+    save_config(&cfg)
+}
+
 fn save_config(cfg: &Config) -> Result<()> {
     let text = serde_json::to_string_pretty(cfg)?;
     let path = paths::config_file();
@@ -186,6 +196,7 @@ pub fn load_or_create() -> Result<Config> {
                 relay: String::new(),
                 relay_key: String::new(),
                 suggestions: false,
+                github_user: String::new(),
             };
             save_config(&cfg)?;
             Ok(cfg)

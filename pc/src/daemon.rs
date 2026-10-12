@@ -964,6 +964,7 @@ pub fn run() -> Result<()> {
 
 async fn run_async() -> Result<()> {
     let config = config::load_or_create()?;
+    crate::github::set_user(&config.github_user);
     let identity = config::load_or_create_identity()?;
     let devices = config::load_devices();
     let store = Store::load(paths::events_file());

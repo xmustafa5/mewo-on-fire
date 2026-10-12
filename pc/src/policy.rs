@@ -180,6 +180,7 @@ pub fn git(dir: &Path, args: &[&str]) -> Option<String> {
         .stderr(Stdio::null())
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(crate::github::envs())
         .spawn()
         .ok()?;
     let started = Instant::now();
@@ -1016,6 +1017,7 @@ fn git_now(dir: &Path, args: &[&str], secs: u64) -> Option<String> {
         .stderr(Stdio::null())
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(crate::github::envs())
         .spawn()
         .ok()?;
     let started = Instant::now();
@@ -1624,6 +1626,7 @@ pub fn git_long(dir: &Path, args: &[&str]) -> Option<String> {
         .stderr(Stdio::null())
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(crate::github::envs())
         .spawn()
         .ok()?;
     let started = Instant::now();

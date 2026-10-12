@@ -89,6 +89,8 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
         cmd.arg("--model").arg(m);
     }
     cmd.env("PATH", path).env("MEWO_HEADLESS", "1").stdin(Stdio::null()).stdout(out).stderr(err);
+    // The pinned GitHub account, whatever gh has active.
+    cmd.envs(crate::github::envs());
     // Its own process group: a daemon restart must not take the session down.
     cmd.process_group(0);
     let mut child = cmd.spawn().map_err(|e| format!("could not start claude: {e}"))?;

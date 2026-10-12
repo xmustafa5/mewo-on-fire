@@ -140,7 +140,7 @@ fn empty(error: &str) -> Value {
 
 /// launchd and systemd give the daemon a short PATH; `gh` usually lives
 /// where Homebrew or the user put it.
-fn gh_path() -> Option<PathBuf> {
+pub fn gh_path() -> Option<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     let candidates = [
         "/opt/homebrew/bin/gh".to_string(),
@@ -177,6 +177,7 @@ fn run(cwd: &str, program: &Path, args: &[&str]) -> Result<String, String> {
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_NO_UPDATE_NOTIFIER", "1")
         .env("NO_COLOR", "1")
+        .envs(crate::github::envs())
         .output()
         .map_err(|e| format!("{}: {e}", program.display()))?;
     if out.status.success() {

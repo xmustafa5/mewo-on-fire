@@ -863,3 +863,10 @@ Claude Desktop's deep link only types a prompt in and waits for Enter,
 so it serves the manual Start only. `build_set on` refuses, and the loop
 stops with a warning, when the command is missing or not signed in
 (the login keychain item "Claude Code-credentials").
+
+`github_user {user}` pins the GitHub account (a `gh auth login` user)
+the daemon, its git and gh commands and its headless sessions act as:
+its token from gh's store goes into their environment as `GH_TOKEN`,
+so another session switching gh's active account on the computer
+changes nothing for the build. `github_status` → `{user, signed_in}`.
+Kept in config.json as `github_user`; empty means the active account.
