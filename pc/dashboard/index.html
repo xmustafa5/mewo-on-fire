@@ -97,6 +97,29 @@ header {
 #pickprd .found .row .v { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; color: var(--amber); white-space: nowrap; } #pickprd .found .row .v.ok { color: #6ee7a8; }
 #pickprd .row2 { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
 #pickprd .msg { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; margin-top: 8px; color: var(--amber); min-height: 14px; }
+.bmap { overflow: auto; border: 1px solid var(--cyan-dim); background: rgba(0,0,0,.25); margin-top: 8px; padding: 4px; }
+.bmap svg { display: block; font-family: var(--mono); }
+.bmap .wv { font-size: 9px; letter-spacing: .16em; fill: var(--dim); }
+.bmap path.e { fill: none; stroke: rgba(79,209,255,.35); stroke-width: 1.2; }
+.bmap path.e.on { stroke: var(--amber); stroke-width: 2; }
+.bmap path.e.dim { stroke: rgba(79,209,255,.1); }
+.bmap g.nd { cursor: pointer; }
+.bmap g.nd rect { fill: rgba(6,12,20,.9); stroke: var(--c); stroke-width: 1.2; }
+.bmap g.nd.ready rect { filter: drop-shadow(0 0 6px var(--c)); }
+.bmap g.nd.progress rect { filter: drop-shadow(0 0 8px var(--c)); }
+.bmap g.nd.sel rect { stroke-width: 2.4; fill: rgba(255,179,71,.12); }
+.bmap g.nd.up rect, .bmap g.nd.down rect { stroke-width: 2; }
+.bmap g.nd.dim { opacity: .3; }
+.bmap g.nd .n { font-size: 11px; font-weight: 800; fill: var(--c); }
+.bmap g.nd .g { font-size: 10.5px; fill: #fff; font-family: var(--sans); }
+.bmap g.nd .i { font-size: 8.5px; letter-spacing: .1em; fill: var(--dim); }
+.legend { font: 9px var(--mono); letter-spacing: .12em; color: var(--dim); margin: 6px 0 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; } .legend span::before { content: ''; width: 8px; height: 8px; border: 1px solid var(--c); background: color-mix(in srgb, var(--c) 30%, transparent); }
+.srow.flash { outline: 1px solid var(--amber); }
+#bigmap { position: fixed; inset: 40px 40px 30px; display: none; z-index: 70; background: rgba(6,12,20,.98); border: 1px solid var(--cyan-line); box-shadow: 0 16px 50px rgba(0,0,0,.7); flex-direction: column; }
+#bigmap.on { display: flex; }
+#bigmap .hd { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--cyan-dim); font: 10px var(--mono); letter-spacing: .16em; color: var(--dim); }
+#bigmap .body { flex: 1; overflow: auto; padding: 14px; }
 #dsys { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); width: 560px; display: none; z-index: 9; background: rgba(6, 12, 20, 0.97); border: 1px solid var(--cyan-line); padding: 14px 16px; box-shadow: 0 16px 50px rgba(0,0,0,.7), 0 0 30px rgba(79,209,255,.12); }
 #dsys.on { display: block; }
 #dsys .t { font-weight: 700; color: #fff; font-size: 14px; }
@@ -518,6 +541,7 @@ footer .seg { display: flex; gap: 22px; }
       <div class="row2"><button class="btn go" id="ds-save" type="button">SAVE</button><button class="btn" id="ds-glare" type="button">BACK TO GLARE</button><button class="btn" id="ds-close" type="button">CLOSE</button></div>
       <div class="msg" id="ds-msg"></div>
     </div>
+    <div id="bigmap"><div class="hd"><span id="bigmap-title">BUILD MAP</span><span style="flex:1"></span><button class="btn" id="bigmap-close" type="button">CLOSE · ESC</button></div><div class="body"></div></div>
     <div id="newsess">
       <div class="t">New session</div>
       <div class="m">CLAUDE DESKTOP STARTS IT WITH YOUR FIRST MESSAGE</div>
@@ -871,6 +895,73 @@ function renderPipeline() {
 }
 // The flow card: where the feature stands, what Mewo does next, autopilot.
 const REDO = { 1: 'DRAFT THE PRD AGAIN', 2: 'ESTIMATES INTO THE PRD AGAIN', 4: 'REDO THE DESIGN', 7: 'REDO THE INTAKE', 8: 'REDO THE SESSION PLAN' };
+// The build map: the plan's sessions in waves (what can run together), their dependencies, what can start now.
+function waves(sessions) {
+  const by = new Map(sessions.map((s) => [s.n, s])); const w = new Map();
+  const depth = (n, seen) => {
+    if (w.has(n)) return w.get(n);
+    if (seen.has(n)) return 1;
+    seen.add(n);
+    const deps = ((by.get(n) || {}).depends_on || []).filter((d) => d !== n && by.has(d));
+    const v = deps.length ? 1 + Math.max(...deps.map((d) => depth(d, seen))) : 1;
+    w.set(n, v); return v;
+  };
+  for (const s of sessions) depth(s.n, new Set());
+  return w;
+}
+const mapColor = (s) => s.effective === 'merged' ? C.ok : s.effective === 'review' ? C.cyan : s.effective === 'progress' ? C.fire : s.effective === 'blocked' ? C.heat : s.effective === 'ready' ? C.amber : C.dim;
+function buildMapHtml(f, plan) {
+  const ss = plan.sessions || []; if (!ss.length) return '';
+  const w = waves(ss); const W = Math.max(...w.values());
+  const cols = Array.from({ length: W }, (_, i) => ss.filter((s) => w.get(s.n) === i + 1).sort((a, b) => (a.repo || '').localeCompare(b.repo || '') || a.n - b.n));
+  const NW = 170, NH = 46, GX = 64, GY = 12, PAD = 14, HEAD = 22;
+  const rows = Math.max(...cols.map((c) => c.length));
+  const width = PAD * 2 + W * NW + (W - 1) * GX, height = PAD * 2 + HEAD + rows * NH + (rows - 1) * GY;
+  const pos = new Map();
+  cols.forEach((c, ci) => c.forEach((s, ri) => pos.set(s.n, { x: PAD + ci * (NW + GX), y: PAD + HEAD + ri * (NH + GY) })));
+  const heads = cols.map((c, ci) => `<text x="${PAD + ci * (NW + GX) + NW / 2}" y="${PAD + 8}" text-anchor="middle" class="wv">WAVE ${ci + 1}${c.length > 1 ? ' · ' + c.length + ' TOGETHER' : ''}</text>`);
+  const edges = [], nodes = [];
+  for (const s of ss) {
+    const p = pos.get(s.n); const deps = (s.depends_on || []).filter((d) => d !== s.n && pos.has(d));
+    for (const d of deps) { const q = pos.get(d); const x1 = q.x + NW, y1 = q.y + NH / 2, x2 = p.x, y2 = p.y + NH / 2, mx = (x1 + x2) / 2; edges.push(`<path class="e" data-from="${d}" data-to="${s.n}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`); }
+    const repo = (s.repo || '').replace(/^code\//, '');
+    nodes.push(`<g class="nd ${esc(s.effective || '')}" data-n="${s.n}" transform="translate(${p.x},${p.y})" style="--c:${mapColor(s)}"><title>S${s.n} · ${esc(s.goal)}
+${esc(repo)} · tier ${s.tier || '?'} · ${esc((s.effective || '').toUpperCase())}
+${deps.length ? 'needs ' + deps.map((d) => 'S' + d).join(', ') : 'no dependency: can start at once'}${s.owner ? '\nowner ' + esc(s.owner) : ''}</title><rect width="${NW}" height="${NH}" rx="8"/><text x="10" y="18" class="n">S${s.n}</text><text x="42" y="18" class="g">${esc(trunc(s.goal, 21))}</text><text x="10" y="35" class="i">${esc(trunc(repo, 15).toUpperCase())} · T${s.tier || '?'} · ${esc((s.effective || '').toUpperCase())}</text></g>`);
+  }
+  const ready = ss.filter((s) => s.effective === 'ready').map((s) => 'S' + s.n);
+  const note = ready.length ? 'CAN START NOW: ' + ready.join(', ') : ss.every((s) => s.effective === 'merged') ? 'ALL MERGED' : ss.some((s) => s.effective === 'progress' || s.effective === 'review') ? 'WAITING ON THE SESSIONS IN FLIGHT' : 'NOTHING READY';
+  return `<div class="sec"><span>BUILD MAP · ${W} WAVE${W > 1 ? 'S' : ''} · LONGEST CHAIN ${W}</span><span>${note}</span></div>
+  <div class="bmap" id="bmap-box"><svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${heads.join('')}${edges.join('')}${nodes.join('')}</svg></div>
+  <div class="legend"><span style="--c:${C.amber}">READY</span><span style="--c:${C.fire}">IN PROGRESS</span><span style="--c:${C.cyan}">IN REVIEW</span><span style="--c:${C.ok}">MERGED</span><span style="--c:${C.heat}">BLOCKED</span><span style="--c:${C.dim}">WAITING</span>· A WAVE IS WHAT CAN RUN TOGETHER · CLICK A SESSION FOR ITS CHAIN · <button class="btn" id="bmap-big" type="button" style="padding:2px 6px;font-size:8.5px">LARGE</button></div>`;
+}
+function wireMapSvg(svg, ss, onPick) {
+  const by = new Map(ss.map((s) => [s.n, s]));
+  const up = (n, acc) => { for (const d of (by.get(n) || {}).depends_on || []) if (d !== n && by.has(d) && !acc.has(d)) { acc.add(d); up(d, acc); } return acc; };
+  const down = (n, acc) => { for (const s of ss) if ((s.depends_on || []).includes(n) && s.n !== n && !acc.has(s.n)) { acc.add(s.n); down(s.n, acc); } return acc; };
+  let sel = null;
+  const paint = () => {
+    const u = sel === null ? new Set() : up(sel, new Set()), d = sel === null ? new Set() : down(sel, new Set());
+    const chain = new Set([...u, ...d]); if (sel !== null) chain.add(sel);
+    for (const g of svg.querySelectorAll('g.nd')) { const n = +g.dataset.n; g.classList.toggle('sel', sel === n); g.classList.toggle('up', u.has(n)); g.classList.toggle('down', d.has(n)); g.classList.toggle('dim', sel !== null && !chain.has(n)); }
+    for (const e of svg.querySelectorAll('path.e')) { const on = sel !== null && chain.has(+e.dataset.from) && chain.has(+e.dataset.to); e.classList.toggle('on', on); e.classList.toggle('dim', sel !== null && !on); }
+  };
+  for (const g of svg.querySelectorAll('g.nd')) g.onclick = () => { const n = +g.dataset.n; sel = sel === n ? null : n; paint(); if (onPick) onPick(sel); };
+}
+function wireMap(box, f, plan) {
+  const svg = box.querySelector('#bmap-box svg'); if (!svg) return;
+  const ss = plan.sessions || [];
+  wireMapSvg(svg, ss, (sel) => { const row = sel !== null && box.querySelector(`.srow[data-n="${sel}"]`); if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1400); } });
+  const big = box.querySelector('#bmap-big'); if (big) big.onclick = () => {
+    const m = $('bigmap'); m.querySelector('.body').innerHTML = `<div class="bmap" style="border:0;background:none">${box.querySelector('#bmap-box').innerHTML}</div>`;
+    $('bigmap-title').textContent = `BUILD MAP · ${f.app.toUpperCase()} / ${f.slug.toUpperCase()} · ${ss.length} SESSIONS`;
+    const s2 = m.querySelector('svg'); const vb = s2.viewBox.baseVal; const k = Math.max(1, Math.min((m.clientWidth - 40) / vb.width, (m.clientHeight - 80) / vb.height, 2.2));
+    s2.setAttribute('width', Math.round(vb.width * k)); s2.setAttribute('height', Math.round(vb.height * k));
+    wireMapSvg(s2, ss, null); m.classList.add('on');
+  };
+}
+$('bigmap-close').addEventListener('click', () => $('bigmap').classList.remove('on'));
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('bigmap').classList.contains('on')) { $('bigmap').classList.remove('on'); e.preventDefault(); } });
 function flowHtml(f) {
   const fl = f.flow || {}; const a = fl.action || {};
   const btn = { run: 'START THE SESSION', ask: 'ASK FOR THE SIGNATURE' + (a.roles && a.roles.length > 1 ? 'S' : ''), estimates: 'ASK THE LEADS', export: 'EXPORT TO HANDOFF', start: `START SESSION ${a.session || ''}`, release: 'RECORD THE RELEASE', close: 'MERGE AND CLOSE THE BRANCHES' }[a.kind];
@@ -956,9 +1047,10 @@ function renderFeature() {
   if (plan) {
     h.push(`<div class="sec"><span>SESSION PLAN · ${esc(plan.file)}</span><span>${plan.reviewed_by ? 'REVIEWED BY ' + esc(plan.reviewed_by.toUpperCase()) : 'NOT REVIEWED YET'}</span></div>`);
     for (const r of (plan.revised || [])) h.push(`<div class="warn" style="border-color:var(--amber);background:rgba(255,179,71,.06);color:var(--amber)">REVISED ${esc(r)}</div>`);
+    h.push(buildMapHtml(f, plan));
     for (const s of plan.sessions) {
       const live = (s.live || []).map((l) => `${esc(l.short)} ${l.state.toUpperCase()}${l.tier ? ' T' + l.tier : ''}`).join(', ');
-      h.push(`<div class="srow"><div class="n">S${s.n}</div><div><div class="g">${esc(s.goal)} ${plLink('session:' + s.n)}</div><div class="i">${esc((s.level || '').toUpperCase())} · TIER ${s.tier || '?'} · ${esc(s.repo || f.repos[0] || '')}${s.owner ? ' · ' + esc(s.owner.toUpperCase()) : ''}${s.depends_on && s.depends_on.length ? ' · AFTER ' + s.depends_on.join(', ') : ''}${s.attempts ? ` · ${s.attempts} ATTEMPT${s.attempts > 1 ? 'S' : ''}` : ''}${live ? ' · ' + live : ''}${s.note ? ' · ' + esc(s.note.toUpperCase()) : ''}${(s.warnings || []).map((w) => ` <span class="w">· ${esc(w)}</span>`).join('')}</div></div>
+      h.push(`<div class="srow" data-n="${s.n}"><div class="n">S${s.n}</div><div><div class="g">${esc(s.goal)} ${plLink('session:' + s.n)}</div><div class="i">${esc((s.level || '').toUpperCase())} · TIER ${s.tier || '?'} · ${esc(s.repo || f.repos[0] || '')}${s.owner ? ' · ' + esc(s.owner.toUpperCase()) : ''}${s.depends_on && s.depends_on.length ? ' · AFTER ' + s.depends_on.join(', ') : ''}${s.attempts ? ` · ${s.attempts} ATTEMPT${s.attempts > 1 ? 'S' : ''}` : ''}${live ? ' · ' + live : ''}${s.note ? ' · ' + esc(s.note.toUpperCase()) : ''}${(s.warnings || []).map((w) => ` <span class="w">· ${esc(w)}</span>`).join('')}</div></div>
         <div class="a"><span class="pill ${esc(s.effective)}">${esc((s.effective === 'review' ? 'IN REVIEW' : s.effective === 'progress' ? 'IN PROGRESS' : s.effective).toUpperCase())}</span>${s.pr_url || s.pr ? `<button class="btn" type="button" data-url="${esc(s.pr_url || s.pr)}">PR${s.pr_number ? ' #' + s.pr_number : ''}</button>` : ''}${(s.live || []).filter((l) => l.desktop).slice(0, 1).map((l) => `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(l.desktop)}">OPEN</button>`).join('')}${s.effective === 'ready' || s.effective === 'progress' ? `${pcs.length > 1 ? `<select class="startpc" data-n="${s.n}" style="background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:9.5px var(--mono);padding:5px 6px">${pcs.map((p) => `<option value="${esc(p.pc_id)}" ${p.pc_id === f.pc_id ? 'selected' : ''}>ON ${esc((p.name || '').toUpperCase())}</option>`).join('')}</select>` : ''}<button class="btn go start" type="button" data-n="${s.n}" ${s.prompt ? '' : 'disabled title="No prompt in the plan"'}>START</button>` : ''}</div></div>`);
     }
   } else if (!f.light) {
@@ -993,6 +1085,7 @@ function renderFeature() {
     setTimeout(refreshFeatures, 1500);
   };
   for (const b of box.querySelectorAll('button.hf')) b.onclick = () => preview({ id: f.handoff_id, entry: b.dataset.file, kind: 'page', title: `${f.app} / ${f.slug} · ${b.dataset.file}`, url: '' });
+  if (plan) wireMap(box, f, plan);
   const ppb = box.querySelector('button.pickprd'); if (ppb) ppb.onclick = () => openPrdPicker(f);
   const dsb = box.querySelector('button.design'); if (dsb) dsb.onclick = () => openDesign(f);
   for (const gate of box.querySelectorAll('.gate')) {

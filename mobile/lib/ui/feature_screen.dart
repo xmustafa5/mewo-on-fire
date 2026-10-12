@@ -60,6 +60,26 @@ class _FeatureScreenState extends State<FeatureScreen> {
     _toast(error.isEmpty ? 'Done: ${a.title}' : error);
   }
 
+  /// Which wave each session is in: 1 for no dependency, else one past its
+  /// deepest dependency. Sessions of one wave can run together.
+  Map<int, int> _waves(List<PlanSession> ss) {
+    final by = {for (final s in ss) s.n: s};
+    final w = <int, int>{};
+    int depth(int n, Set<int> seen) {
+      final cached = w[n];
+      if (cached != null) return cached;
+      if (!seen.add(n)) return 1;
+      final deps = (by[n]?.dependsOn ?? const <int>[]).where((d) => d != n && by.containsKey(d)).toList();
+      final v = deps.isEmpty ? 1 : 1 + deps.map((d) => depth(d, seen)).reduce((a, b) => a > b ? a : b);
+      w[n] = v;
+      return v;
+    }
+    for (final s in ss) {
+      depth(s.n, <int>{});
+    }
+    return w;
+  }
+
   /// The sign sheet of the gate the flow asks for, when you are the one to sign it.
   VoidCallback? _signFromFlow(TorchFeature f) {
     final a = f.flow.action;
@@ -312,7 +332,23 @@ class _FeatureScreenState extends State<FeatureScreen> {
       for (final r in plan.revised) {
         out.add(enter(_warning(context, 'Revised $r', color: Ember.amber)));
       }
-      for (final s in plan.sessions) {
+      final waveOf = _waves(plan.sessions);
+      final ordered = [...plan.sessions]..sort((a, b) => (waveOf[a.n] ?? 1) != (waveOf[b.n] ?? 1) ? (waveOf[a.n] ?? 1) - (waveOf[b.n] ?? 1) : a.n - b.n);
+      var shownWave = 0;
+      for (final s in ordered) {
+        final wave = waveOf[s.n] ?? 1;
+        if (wave != shownWave) {
+          shownWave = wave;
+          final together = ordered.where((x) => (waveOf[x.n] ?? 1) == wave).toList();
+          final ready = together.where((x) => x.effective == 'ready').length;
+          out.add(enter(Padding(
+            padding: const EdgeInsets.fromLTRB(6, 10, 6, 6),
+            child: Text(
+              'WAVE $wave · ${together.length == 1 ? 'ONE SESSION' : '${together.length} CAN RUN TOGETHER'}${ready > 0 ? ' · $ready READY NOW' : ''}',
+              style: t.labelSmall?.copyWith(fontFamily: mono, color: ready > 0 ? Ember.amber : Ember.text3, letterSpacing: 1.4, fontSize: 10),
+            ),
+          )));
+        }
         final pi = f.planeItems['session:${s.n}'];
         out.add(enter(_SessionRow(
           session: s,

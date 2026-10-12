@@ -711,17 +711,52 @@ pub fn parse_plan(ws: &Path, dir: &Path, rel: &str) -> Option<Plan> {
             }
         }
     }
-    // The order table.
-    let mut order: HashMap<u32, (String, String, u8, Vec<u32>, String, String)> = HashMap::new();
+    // The order table, by its header. The template's columns are
+    // `# | Session | Level | Tier | Depends on | Owner | Status`; a plan may
+    // add one (Repository) or reorder them, so the header decides.
+    let mut order: HashMap<u32, (String, String, u8, Vec<u32>, String, String, String)> = HashMap::new();
     if let Some((_, a, b)) = secs.iter().find(|(h, _, _)| h.eq_ignore_ascii_case("order")) {
+        let mut col: HashMap<&str, usize> = HashMap::new();
         for l in &lines[*a..*b] {
             let c = cells(l);
-            if c.len() < 7 || is_separator(l) {
+            if c.len() < 4 || is_separator(l) {
+                continue;
+            }
+            if c[0].parse::<u32>().is_err() {
+                if c.iter().any(|h| h.trim() == "#") {
+                    col.clear();
+                    for (i, h) in c.iter().enumerate() {
+                        let h = h.trim().to_ascii_lowercase();
+                        let key = if h == "session" || h == "goal" {
+                            "goal"
+                        } else if h == "level" {
+                            "level"
+                        } else if h.starts_with("repo") {
+                            "repo"
+                        } else if h == "tier" {
+                            "tier"
+                        } else if h.starts_with("depend") || h == "after" || h == "needs" {
+                            "depends"
+                        } else if h == "owner" || h == "dev" || h == "developer" {
+                            "owner"
+                        } else if h == "status" {
+                            "status"
+                        } else {
+                            continue;
+                        };
+                        col.entry(key).or_insert(i);
+                    }
+                }
                 continue;
             }
             let Ok(n) = c[0].parse::<u32>() else { continue };
-            let tier = c[3].trim().chars().find(|ch| ch.is_ascii_digit()).and_then(|ch| ch.to_digit(10)).unwrap_or(0) as u8;
-            order.insert(n, (clean(&c[1]), clean(&c[2]), tier, parse_depends(&c[4]), clean(&c[5]), clean(&c[6])));
+            let pick = |key: &str, default: usize| -> String {
+                let i = if col.is_empty() { Some(default) } else { col.get(key).copied() };
+                i.and_then(|i| c.get(i)).map(|s| s.to_string()).unwrap_or_default()
+            };
+            let tier = pick("tier", 3).trim().chars().find(|ch| ch.is_ascii_digit()).and_then(|ch| ch.to_digit(10)).unwrap_or(0) as u8;
+            let deps: Vec<u32> = parse_depends(&pick("depends", 4)).into_iter().filter(|d| *d != n).collect();
+            order.insert(n, (clean(&pick("goal", 1)), clean(&pick("level", 2)), tier, deps, clean(&pick("owner", 5)), clean(&pick("status", 6)), clean(&pick("repo", usize::MAX))));
         }
     }
     let mut sessions = Vec::new();
@@ -731,7 +766,7 @@ pub fn parse_plan(ws: &Path, dir: &Path, rel: &str) -> Option<Plan> {
         let Ok(n) = num.trim().parse::<u32>() else { continue };
         let body = &lines[*a..*b];
         let mut s = PlanSession { n, goal: clean(goal), ..PlanSession::default() };
-        if let Some((g, level, tier, dep, owner, status)) = order.get(&n) {
+        if let Some((g, level, tier, dep, owner, status, _)) = order.get(&n) {
             if s.goal.is_empty() {
                 s.goal = g.clone();
             }
@@ -761,7 +796,7 @@ pub fn parse_plan(ws: &Path, dir: &Path, rel: &str) -> Option<Plan> {
                 s.done_when = list_after(body, i);
             } else if let Some(v) = field_value(body, i, "Depends on") {
                 if s.depends_on.is_empty() && !placeholder(&v) {
-                    s.depends_on = parse_depends(&v);
+                    s.depends_on = parse_depends(&v).into_iter().filter(|d| *d != n).collect();
                 }
             } else if let Some(v) = field_value(body, i, "Pull request") {
                 s.pr = clean(&v);
@@ -772,8 +807,11 @@ pub fn parse_plan(ws: &Path, dir: &Path, rel: &str) -> Option<Plan> {
                 }
             }
         }
+        // The order table's Repository column wins, then the repositories the
+        // prompt names, then the plan's first.
+        let listed = order.get(&n).map(|t| t.6.clone()).filter(|r| !r.is_empty()).map(|r| if r.starts_with("code/") { r } else { format!("code/{r}") });
         let mentioned = s.load_first.iter().chain(std::iter::once(&s.prompt)).find_map(|t| repo_in(t));
-        s.repo = mentioned.or_else(|| plan.repos.first().cloned()).unwrap_or_default();
+        s.repo = listed.or(mentioned).or_else(|| plan.repos.first().cloned()).unwrap_or_default();
         let repo_dir = ws.join(&s.repo);
         s.folder = if !s.repo.is_empty() && is_repo(&repo_dir) {
             repo_dir.to_string_lossy().into_owned()
