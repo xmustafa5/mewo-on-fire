@@ -60,6 +60,15 @@ class _FeatureScreenState extends State<FeatureScreen> {
     _toast(error.isEmpty ? 'Done: ${a.title}' : error);
   }
 
+  /// The sign sheet of the gate the flow asks for, when you are the one to sign it.
+  VoidCallback? _signFromFlow(TorchFeature f) {
+    final a = f.flow.action;
+    if (a.kind != 'ask' || a.gate.isEmpty) return null;
+    final g = f.gates.where((x) => x.id == a.gate).firstOrNull;
+    if (g == null || g.signed || !g.present) return null;
+    return () => showSignSheet(context, pcId: widget.pcId, feature: f, gate: g);
+  }
+
   /// v2.4: the step's session again; for the design the earlier boards stop counting.
   Future<void> _doRedo(TorchFeature f) async {
     if (_flowBusy) return;
@@ -271,6 +280,7 @@ class _FeatureScreenState extends State<FeatureScreen> {
       busy: _flowBusy,
       onNext: () => _doNext(f),
       onRedo: () => _doRedo(f),
+      onSign: _signFromFlow(f),
       onAutopilot: (v) async {
         final e = await _state.flowSet(widget.pcId, f, v);
         if (e.isNotEmpty && mounted) _toast(e);
@@ -769,6 +779,7 @@ class _FlowCard extends StatelessWidget {
     required this.busy,
     required this.onNext,
     required this.onRedo,
+    required this.onSign,
     required this.onAutopilot,
     required this.onEstimate,
     required this.onEstimatesDone,
@@ -779,6 +790,9 @@ class _FlowCard extends StatelessWidget {
   final bool busy;
   final VoidCallback onNext;
   final VoidCallback onRedo;
+
+  /// Sign the gate the step asks for yourself (null when there is none to sign).
+  final VoidCallback? onSign;
   final ValueChanged<bool> onAutopilot;
   final VoidCallback onEstimate;
   final VoidCallback onEstimatesDone;
@@ -867,6 +881,7 @@ class _FlowCard extends StatelessWidget {
                     onPressed: busy ? null : onNext,
                   ),
                 if (estimatesPhase && a.kind != 'estimates') EmberButton(label: 'Add my estimate', icon: Icons.timelapse_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onEstimate),
+                if (a.kind == 'ask' && onSign != null) EmberButton(label: 'Sign it myself', icon: Icons.draw_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: busy ? null : onSign),
                 if (redoLabels.containsKey(a.step) && a.kind != 'run') EmberButton(label: redoLabels[a.step]!, icon: Icons.replay_rounded, small: true, style: EmberButtonStyle.ghost, onPressed: busy ? null : onRedo),
                 if (estimatesPhase && fl.estimates.length >= 3) EmberButton(label: 'Estimates are in the PRD', small: true, style: EmberButtonStyle.ghost, onPressed: onEstimatesDone),
                 if (a.gate == 'uat' || a.step >= 11 && a.step <= 12 && !feature.released) EmberButton(label: 'Add a UAT user', icon: Icons.groups_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: onUat),
