@@ -172,7 +172,7 @@ impl AppState {
             // The PRD's signature as a gate of its own (v1.8).
             if !f.light {
                 let prd_gate = json!({
-                    "id": "prd", "checklist": "A", "title": "PRD signed (V1.0)", "step": 3,
+                    "id": "prd", "checklist": "A", "title": "PRD signed", "step": 3,
                     "file": f.prd, "items": [], "roles": ["CEO"],
                     "signatures": if f.prd_signed { json!([{"role": "CEO", "name": "signed"}]) } else { json!([]) },
                     "date": "", "signed": f.prd_signed, "present": !f.prd.is_empty(),

@@ -909,6 +909,24 @@ pub fn prd_file(ws: &Path, app: &str, slug: &str, named: &str, pick: &str) -> Op
     None
 }
 
+/// A PRD is signed from V1.0 on, or at any version when its header says
+/// so (`| Status | Signed |`, Approved or Released): the CEO may sign a
+/// draft as it stands without renaming it (the Register then says
+/// "signed as V0.2").
+pub fn prd_signed(path: &Path, major: u32) -> bool {
+    if major >= 1 {
+        return true;
+    }
+    let text = read_lines(path).unwrap_or_default();
+    text.lines().take(40).any(|l| {
+        let c = cells(l);
+        c.len() >= 2 && c[0].trim().eq_ignore_ascii_case("status") && {
+            let v = c[1].trim().trim_matches('*').to_ascii_lowercase();
+            v.starts_with("signed") || v.starts_with("approved") || v.starts_with("released")
+        }
+    })
+}
+
 /// Every `…_PRD_V….md` under torch-product: `(path, lowercased name,
 /// major, minor, patch rank)`, newest first.
 fn all_prds(ws: &Path) -> Vec<(PathBuf, String, u32, u32, u32)> {
@@ -952,7 +970,7 @@ pub fn prd_choices(ws: &Path, app: &str, pick: &str) -> Vec<Value> {
             "file": file,
             "folder": folder,
             "version": format!("V{version}"),
-            "signed": a >= 1,
+            "signed": prd_signed(&p, a),
             "app": n[..i].starts_with(&app_l),
             "current": !pick_l.is_empty() && n[..i] == pick_l,
         }));
@@ -1325,7 +1343,7 @@ fn read_features(ws: &Path) -> Vec<Feature> {
             let named = plan.as_ref().map(|p| p.prd.clone()).unwrap_or_default();
             let pick = crate::flow::picked_prd(ws, &format!("{app}/{slug}"));
             let (prd, prd_signed, prd_source) = match prd_file(ws, &app, &slug, &named, &pick) {
-                Some((path, major, _, source)) => (path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), major >= 1, source.to_string()),
+                Some((path, major, _, source)) => (path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), prd_signed(&path, major), source.to_string()),
                 None => (String::new(), false, String::new()),
             };
             let mut gates = Vec::new();

@@ -1062,7 +1062,7 @@ pub fn sign_prd(ws: &Path, f: &Feature, name: &str) -> Result<Value, String> {
         return Err("A name is needed for the signature".to_string());
     }
     let (path, major, minor) = find_prd(ws, f).ok_or_else(|| "No PRD file found for this feature".to_string())?;
-    if major >= 1 {
+    if policy::prd_signed(&path, major) {
         return Ok(json!({"ok": true, "already": true, "file": path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()}));
     }
     let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
