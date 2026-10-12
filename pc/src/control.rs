@@ -908,7 +908,7 @@ fn session_detail(state: &AppState, ws: &std::path::Path, f: &policy::Feature, n
     let run = runs.last().map(|r| {
         let alive = r.pid != 0 && crate::runner::alive(r.pid);
         let (log, err) = run_log_tail(&format!("{}-S{}-", f.slug, n), false, 1600);
-        json!({"started": r.started, "pid": r.pid, "headless": r.pid != 0, "alive": alive, "exit": crate::runner::exit_code(r.pid), "elapsed_s": now.saturating_sub(r.started) / 1000, "attempt": runs.len(), "log": log, "err": err})
+        json!({"started": r.started, "pid": r.pid, "headless": r.pid != 0, "alive": alive, "exit": crate::runner::exit_code(r.pid), "elapsed_s": now.saturating_sub(r.started) / 1000, "attempt": runs.len(), "log": log, "err": err, "folder": r.folder})
     });
     let review_pid = st.history.iter().rev().find(|j| j.kind == "review" && j.data.get("session").and_then(Value::as_u64) == Some(n as u64)).and_then(|j| j.data.get("pid").and_then(Value::as_u64)).unwrap_or(0) as u32;
     let review = st.reviews.get(&n).map(|t| {

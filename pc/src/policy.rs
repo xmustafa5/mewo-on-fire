@@ -1005,6 +1005,64 @@ pub fn prepare_repo(repo: &Path, branch: &str) -> Result<String, String> {
     Ok(format!("created the branch from {base}"))
 }
 
+/// v2.8: a worktree of the repository `repo_rel` (under the workspace)
+/// for one session or review: `code/.worktrees/<repo>-<tag>` on `branch`,
+/// made from `base` (origin's copy when it has one) unless the branch
+/// already exists. Sessions in one repository then run side by side.
+pub fn worktree_for(ws: &Path, repo_rel: &str, tag: &str, branch: &str, base: &str) -> Result<PathBuf, String> {
+    let repo = ws.join(repo_rel);
+    if !is_repo(&repo) {
+        return Err(format!("{repo_rel} is not a git repository"));
+    }
+    let name = format!("{}-{tag}", repo_rel.rsplit('/').next().unwrap_or(repo_rel));
+    let wt = ws.join("code").join(".worktrees").join(&name);
+    // Kept out of torch-main's status (a local exclude, never committed).
+    let exclude = ws.join(".git").join("info").join("exclude");
+    if let Ok(text) = fs::read_to_string(&exclude) {
+        if !text.lines().any(|l| l.trim() == "code/.worktrees/") {
+            let _ = fs::write(&exclude, format!("{}\ncode/.worktrees/\n", text.trim_end()));
+        }
+    } else {
+        let _ = fs::create_dir_all(exclude.parent().unwrap_or(ws));
+        let _ = fs::write(&exclude, "code/.worktrees/\n");
+    }
+    if wt.join(".git").exists() {
+        // Already there: the branch it is on stays; a fast-forward from origin when possible.
+        let _ = git_now(&wt, &["pull", "--quiet", "--ff-only"], 60);
+        return Ok(wt);
+    }
+    let _ = git_now(&repo, &["worktree", "prune"], 20);
+    let _ = git_now(&repo, &["fetch", "--quiet", "origin"], 60);
+    let _ = fs::create_dir_all(wt.parent().unwrap_or(ws));
+    let wt_s = wt.to_string_lossy().into_owned();
+    let have_branch = git_now(&repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")], 20).is_some();
+    let have_remote = git_now(&repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")], 20).is_some();
+    let start = if git_now(&repo, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{base}")], 20).is_some() { format!("origin/{base}") } else { base.to_string() };
+    let ok = if have_branch {
+        git_now(&repo, &["worktree", "add", "--quiet", &wt_s, branch], 60).is_some()
+    } else if have_remote {
+        git_now(&repo, &["worktree", "add", "--quiet", "--track", "-b", branch, &wt_s, &format!("origin/{branch}")], 60).is_some()
+    } else {
+        git_now(&repo, &["worktree", "add", "--quiet", "-b", branch, &wt_s, &start], 60).is_some()
+    };
+    if !ok {
+        return Err(format!("could not make a worktree of {repo_rel} for {branch}"));
+    }
+    Ok(wt)
+}
+
+/// v2.8: a worktree that is no longer needed (its session merged).
+pub fn remove_worktree(ws: &Path, repo_rel: &str, tag: &str) {
+    let repo = ws.join(repo_rel);
+    let name = format!("{}-{tag}", repo_rel.rsplit('/').next().unwrap_or(repo_rel));
+    let wt = ws.join("code").join(".worktrees").join(&name);
+    if wt.exists() {
+        let _ = git_now(&repo, &["worktree", "remove", "--force", &wt.to_string_lossy()], 60);
+        let _ = fs::remove_dir_all(&wt);
+        let _ = git_now(&repo, &["worktree", "prune"], 20);
+    }
+}
+
 /// `git <args>` in `dir` with its own timeout, ignoring the blocked
 /// marker and never setting it: for work that must not be mistaken
 /// for a hang elsewhere.

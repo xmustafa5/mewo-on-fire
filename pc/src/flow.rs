@@ -33,6 +33,8 @@ pub struct Run {
     pub note: String,
     /// v2.6: the headless process, when the build autopilot started it.
     pub pid: u32,
+    /// v2.8: the folder it runs in (its own worktree).
+    pub folder: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]

@@ -894,3 +894,15 @@ every day) is kept in config.json; outside them the build autopilot
 starts nothing and reviews nothing, and the flow notes the change.
 `features` carries `work: {hours, days, within, next_start}` and each
 feature's `flow.build.within_hours`.
+
+# v2.8 — every session in its own worktree
+
+A build session runs in a git worktree of its repository,
+`code/.worktrees/<repo>-S<n>` on `feature/<app>-<slug>-s<n>` made from
+the feature branch (origin's copy when it has one); a review runs in
+`code/.worktrees/<repo>-S<n>-review` on the pull request's branch. So
+sessions of one repository run side by side, and the only limit is the
+autopilot's "at a time". The worktrees are removed when the session is
+merged; `code/.worktrees/` is in torch-main's local exclude. The
+prompt tells the session where it is and where the workspace root is.
+`session_detail.run.folder` says which folder a run used.

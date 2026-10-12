@@ -168,6 +168,12 @@ pub fn gh_path() -> Option<PathBuf> {
     }
 }
 
+/// v2.8: the head branch of a pull request, by its url.
+pub fn pr_head(cwd: &str, url: &str) -> Option<String> {
+    let gh = gh_path()?;
+    run(cwd, &gh, &["pr", "view", url, "--json", "headRefName", "-q", ".headRefName"]).ok().filter(|s| !s.is_empty())
+}
+
 /// Runs a command in [cwd]: stdout trimmed, or the first line of stderr.
 fn run(cwd: &str, program: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new(program)

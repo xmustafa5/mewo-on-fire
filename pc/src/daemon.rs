@@ -317,7 +317,7 @@ impl AppState {
                 if reply.get("ok").and_then(Value::as_bool).unwrap_or(false) {
                     let started = now_ms();
                     flow::update(ws, &f.key, |st| {
-                        st.runs.push(flow::Run { step: 9, started, note: a.session.to_string(), pid: 0 });
+                        st.runs.push(flow::Run { step: 9, started, note: a.session.to_string(), pid: 0, folder: String::new() });
                         st.note(format!("Started session {} on {name}", a.session));
                     });
                     flow::journal(ws, &f.key, "start", &format!("Started session {} on {name}", a.session), Vec::new(), "", true, json!({"started": started, "session": a.session, "step": 9, "pc": pc_id}));
@@ -367,7 +367,7 @@ impl AppState {
                         let note = if a.kind == "start" { a.session.to_string() } else { f.prd.clone() };
                         let started = now_ms();
                         flow::update(ws, &f.key, |st| {
-                            st.runs.push(flow::Run { step: a.step, started, note, pid: 0 });
+                            st.runs.push(flow::Run { step: a.step, started, note, pid: 0, folder: a.folder.clone() });
                             st.note(format!("Started: {}", a.title));
                         });
                         flow::journal(ws, &f.key, &a.kind, &format!("Started: {}", a.title), Vec::new(), "", true, json!({"started": started, "session": a.session, "step": a.step}));
@@ -1220,6 +1220,15 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
         if let Some(w) = want {
             let (ws2, key, n, pr) = (ws.to_path_buf(), f.key.clone(), s.n, s.pr_url.clone());
             let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, w, &pr)).await;
+            if w == "Merged" && !s.repo.is_empty() {
+                // Its worktrees are done with.
+                let (ws3, repo, n) = (ws.to_path_buf(), s.repo.clone(), s.n);
+                let _ = tokio::task::spawn_blocking(move || {
+                    policy::remove_worktree(&ws3, &repo, &format!("S{n}"));
+                    policy::remove_worktree(&ws3, &repo, &format!("S{n}-review"));
+                })
+                .await;
+            }
         }
     }
     // Every session merged: the build is done.
@@ -1254,8 +1263,26 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
                 }
                 continue;
             }
-            let prompt = review_prompt(f, s);
-            match runner::spawn(&s.folder, &prompt, None, &format!("{}-S{}-review", f.slug, s.n)) {
+            let mut prompt = review_prompt(f, s);
+            let mut folder = s.folder.clone();
+            if !s.repo.is_empty() && !s.pr_url.is_empty() {
+                // The pull request's branch, in a worktree of its own.
+                let head = prs::pr_head(&s.folder, &s.pr_url).unwrap_or_default();
+                if !head.is_empty() {
+                    let (ws2, repo, n, head2, base) = (ws.to_path_buf(), s.repo.clone(), s.n, head.clone(), f.branch.clone());
+                    match tokio::task::spawn_blocking(move || policy::worktree_for(&ws2, &repo, &format!("S{n}-review"), &head2, &base)).await {
+                        Ok(Ok(wt)) => {
+                            prompt = format!("You review in your own git worktree of {} at {} , on the pull request's branch {head}; other sessions work in other worktrees at the same time. The workspace root (torch-main, with context/, app-notebooks/ and code/) is {}. Push fixes to that branch. {prompt}", s.repo, wt.display(), ws.display());
+                            folder = wt.to_string_lossy().into_owned();
+                        }
+                        Ok(Err(e)) => {
+                            flow::update(ws, &f.key, |x| x.note(format!("Review of session {}: {e}; reviewing in the repository itself", s.n)));
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+            match runner::spawn(&folder, &prompt, None, &format!("{}-S{}-review", f.slug, s.n)) {
                 Ok(pid) => {
                     flow::update(ws, &f.key, |x| {
                         x.reviews.insert(s.n, now);
@@ -1339,9 +1366,8 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     if busy >= parallel {
         return;
     }
-    // One session per repository at a time: they share its working tree.
-    let busy_folders: Vec<String> = plan.sessions.iter().filter(|s| active(s)).map(|s| s.folder.clone()).collect();
-    if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n) && !live(s.n) && !busy_folders.contains(&s.folder)) {
+    // Every session runs in its own worktree, so the only limit is `parallel`.
+    if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n) && !live(s.n)) {
         if let Err(e) = start_headless(&state, ws, f, s, &s.prompt, s.tier, &format!("Start session {}", s.n)).await {
             flow::update(ws, &f.key, |x| x.note(format!("Could not start session {}: {e}", s.n)));
         }
@@ -1359,15 +1385,25 @@ async fn start_headless(state: &Arc<AppState>, ws: &Path, f: &policy::Feature, s
             flow::update(ws, &f.key, |x| x.note(format!("{}: {done}", s.repo)));
         }
     }
-    let pid = runner::spawn(&s.folder, prompt, runner::model_for(tier), &format!("{}-S{}", f.slug, s.n))?;
+    // Its own worktree on its own branch, so sessions of one repository run side by side.
+    let mut folder = s.folder.clone();
+    let mut prompt = prompt.to_string();
+    if !s.repo.is_empty() && s.folder != ws.to_string_lossy() {
+        let branch = format!("{}-s{}", f.branch, s.n);
+        let (ws2, repo, n, b2, base) = (ws.to_path_buf(), s.repo.clone(), s.n, branch.clone(), f.branch.clone());
+        let wt = tokio::task::spawn_blocking(move || policy::worktree_for(&ws2, &repo, &format!("S{n}"), &b2, &base)).await.map_err(|e| e.to_string())??;
+        prompt = format!("This session runs in its own git worktree of {} at {} , on branch {branch} made from {}; other sessions work in other worktrees of the same repository at the same time. The workspace root (torch-main, with context/, app-notebooks/ and code/) is {}; paths in the brief that start with code/{}/ mean this worktree. Commit on {branch} and open the pull request into {}.\n\n{prompt}", s.repo, wt.display(), f.branch, ws.display(), s.repo.trim_start_matches("code/"), f.branch);
+        folder = wt.to_string_lossy().into_owned();
+    }
+    let pid = runner::spawn(&folder, &prompt, runner::model_for(tier), &format!("{}-S{}", f.slug, s.n))?;
     let (ws2, key, n) = (ws.to_path_buf(), f.key.clone(), s.n);
     let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, "In progress", "")).await;
     let started = now_ms();
     flow::update(ws, &f.key, |x| {
-        x.runs.push(flow::Run { step: 9, started, note: s.n.to_string(), pid });
-        x.note(format!("{title} (headless, pid {pid})"));
+        x.runs.push(flow::Run { step: 9, started, note: s.n.to_string(), pid, folder: folder.clone() });
+        x.note(format!("{title} (headless, pid {pid}, {})", folder.rsplit('/').next().unwrap_or("")));
     });
-    flow::journal(ws, &f.key, "start", &format!("{title}: {}", s.goal), Vec::new(), "", true, json!({"started": started, "session": s.n, "step": 9, "pid": pid, "headless": true}));
+    flow::journal(ws, &f.key, "start", &format!("{title}: {}", s.goal), Vec::new(), "", true, json!({"started": started, "session": s.n, "step": 9, "pid": pid, "headless": true, "folder": folder}));
     let _ = state;
     Ok(pid)
 }
