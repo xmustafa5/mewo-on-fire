@@ -384,7 +384,10 @@ class _FeatureScreenState extends State<FeatureScreen> {
           )));
         }
         final pi = f.planeItems['session:${s.n}'];
-        out.add(enter(_SessionRow(
+        out.add(enter(GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: () => showSessionDetailSheet(context, pcId: widget.pcId, feature: f, session: s),
+          child: _SessionRow(
           session: s,
           feature: f,
           pcId: widget.pcId,
@@ -396,7 +399,7 @@ class _FeatureScreenState extends State<FeatureScreen> {
           planeSeq: pi?.sequenceId ?? 0,
           onTasks: pi == null ? null : () => showTasksSheet(context, pcId: widget.pcId, feature: f, session: s),
           onOpenPlane: pi == null ? null : () => _openPlane(pi.url),
-        )));
+        ))));
       }
     }
 

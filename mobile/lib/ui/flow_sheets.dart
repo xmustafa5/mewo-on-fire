@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:async';
 import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../models.dart';
+import 'chat_screen.dart';
 import 'theme/ember.dart';
 import 'theme/glass.dart';
 import 'theme/motion.dart';
@@ -469,6 +472,219 @@ class _RolesSheetState extends State<_RolesSheet> {
         );
       },
     );
+  }
+}
+
+// ---- one plan session in full (v2.6) ----
+
+Future<void> showSessionDetailSheet(BuildContext context, {required String pcId, required TorchFeature feature, required PlanSession session}) {
+  return showModalBottomSheet<void>(context: context, isScrollControlled: true, builder: (_) => _SessionDetailSheet(pcId: pcId, feature: feature, session: session));
+}
+
+class _SessionDetailSheet extends StatefulWidget {
+  const _SessionDetailSheet({required this.pcId, required this.feature, required this.session});
+  final String pcId;
+  final TorchFeature feature;
+  final PlanSession session;
+  @override
+  State<_SessionDetailSheet> createState() => _SessionDetailSheetState();
+}
+
+class _SessionDetailSheetState extends State<_SessionDetailSheet> {
+  final AppState _state = AppState.instance;
+  Map<String, dynamic>? _d;
+  String _error = '';
+  bool _busy = false;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final r = await _state.sessionDetail(widget.pcId, widget.feature, widget.session.n);
+    if (!mounted) return;
+    setState(() {
+      if (r['ok'] == true) {
+        _d = r;
+        _error = '';
+      } else {
+        _error = '${r['error'] ?? 'Could not load it'}';
+      }
+    });
+  }
+
+  static String _dur(num? s) {
+    final v = (s ?? 0).round();
+    final h = v ~/ 3600, m = (v % 3600) ~/ 60;
+    if (h > 0) return '${h}h ${m.toString().padLeft(2, '0')}m';
+    if (m > 0) return '${m}m';
+    return '${v}s';
+  }
+
+  static String _at(num? ms) {
+    if (ms == null || ms == 0) return '—';
+    final t = DateTime.fromMillisecondsSinceEpoch(ms.toInt());
+    return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _stop() async {
+    setState(() => _busy = true);
+    final e = await _state.sessionStop(widget.pcId, widget.feature, widget.session.n);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = e;
+    });
+    _load();
+  }
+
+  Widget _row(BuildContext context, String k, String v) {
+    final t = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 92, child: Text(k, style: t.labelSmall?.copyWith(color: Ember.text3, fontFamily: Ember.mono(context), fontSize: 10, letterSpacing: 1.2))),
+          Expanded(child: Text(v, style: t.bodySmall?.copyWith(color: Ember.text))),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final s0 = widget.session;
+    final d = _d;
+    final s = d?['session'] is Map ? Map<String, dynamic>.from(d!['session'] as Map) : null;
+    final tm = d?['timing'] is Map ? Map<String, dynamic>.from(d!['timing'] as Map) : const <String, dynamic>{};
+    final run = d?['run'] is Map ? Map<String, dynamic>.from(d!['run'] as Map) : null;
+    final rv = d?['review'] is Map ? Map<String, dynamic>.from(d!['review'] as Map) : null;
+    final live = <Map<String, dynamic>>[if (d?['live'] is List) for (final l in d!['live'] as List) if (l is Map) Map<String, dynamic>.from(l)];
+    final now = live.where((l) => l['state'] == 'working' || l['state'] == 'waiting').firstOrNull ?? live.lastOrNull;
+    final eff = '${s?['effective'] ?? s0.effective}';
+    final running = run != null && run['alive'] == true;
+    final reviewing = rv != null && rv['alive'] == true;
+    final what = eff == 'merged'
+        ? 'Merged. Done.'
+        : eff == 'review'
+            ? (reviewing ? 'A reviewer session is on the pull request, ${_dur(rv!['elapsed_s'] as num?)} so far.' : 'Pull request open, waiting for its review.')
+            : running
+                ? 'Working headless on the PC.'
+                : eff == 'progress'
+                    ? (now != null && now['state'] == 'waiting' ? 'Waiting for your answer.' : 'Started; no live run at the moment.')
+                    : eff == 'ready'
+                        ? 'Ready: its dependencies are merged. The autopilot starts it next.'
+                        : eff == 'blocked'
+                            ? 'Blocked: a person decides.'
+                            : 'Waiting for ${s0.dependsOn.map((x) => 'S$x').join(', ')}.';
+    final steps = now != null && now['chat'] is List ? [for (final c in (now['chat'] as List).reversed.take(8)) if (c is Map) Map<String, dynamic>.from(c)] : const <Map<String, dynamic>>[];
+    final color = _SessionTone.of(eff);
+    return _sheet(
+      context,
+      Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(context, Icons.insights_rounded, 'S${s0.n} · ${s0.goal}', '${s0.repo.replaceFirst('code/', '')} · tier ${s0.tier}${s0.dependsOn.isNotEmpty ? ' · after ${s0.dependsOn.map((x) => 'S$x').join(', ')}' : ''}'),
+          if (d == null && _error.isEmpty) const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)))),
+          if (d != null) ...[
+            GlassCard(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+              radius: 14,
+              borderColor: color.withValues(alpha: 0.5),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(what, style: t.bodyMedium?.copyWith(color: Ember.text)),
+                  const SizedBox(height: 8),
+                  _row(context, 'ELAPSED', tm['started_at'] != null ? _dur(tm['elapsed_s'] as num?) : '—'),
+                  _row(context, 'ESTIMATE', eff == 'progress' && tm['eta_s'] != null ? 'about ${_dur(tm['eta_s'] as num?)} left' : 'typically ${_dur(tm['typical_s'] as num?)} for tier ${s0.tier}${(tm['typical_from'] ?? 0) == 0 ? ' (a default)' : ''}'),
+                  _row(context, 'WHOLE BUILD', '${tm['build_merged']}/${tm['build_total']} merged · roughly ${_dur(tm['build_remaining_s'] as num?)} left'),
+                  _row(context, 'STARTED', _at(tm['started_at'] as num?)),
+                  _row(context, 'IN REVIEW', _at(tm['in_review_at'] as num?)),
+                  _row(context, 'MERGED', _at(tm['merged_at'] as num?)),
+                  if (run != null) _row(context, 'RUN', run['headless'] == true ? 'headless · ${run['alive'] == true ? 'alive' : 'ended'}${run['exit'] != null ? ' · exit ${run['exit']}' : ''} · attempt ${run['attempt']}' : 'in Claude Desktop'),
+                ],
+              ),
+            ),
+            if (steps.isNotEmpty || (now?['last_text'] ?? '').toString().isNotEmpty) ...[
+              _label(context, 'LAST STEPS${now != null ? ' · ${now['short']}' : ''}'),
+              GlassCard(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+                radius: 14,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final c in steps)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: RichText(
+                          text: TextSpan(style: t.bodySmall?.copyWith(color: Ember.text), children: [
+                            TextSpan(text: '${(c['tool'] ?? (c['role'] == 'assistant' ? 'CLAUDE' : c['role'] == 'user' ? 'PROMPT' : c['role'])).toString().toUpperCase()}  ', style: t.labelSmall?.copyWith(color: c['tool'] != null ? Ember.amber : Ember.mewoSoft, fontFamily: Ember.mono(context), fontSize: 9, letterSpacing: 1.2)),
+                            TextSpan(text: '${c['text'] ?? ''}'),
+                          ]),
+                        ),
+                      ),
+                    if (steps.isEmpty) Text('${now?['last_text'] ?? ''}', style: t.bodySmall?.copyWith(color: Ember.text)),
+                  ],
+                ),
+              ),
+            ],
+            if (s0.doneWhen.isNotEmpty) ...[
+              _label(context, 'DONE WHEN'),
+              for (final x in s0.doneWhen) Padding(padding: const EdgeInsets.fromLTRB(6, 2, 0, 2), child: Text('• $x', style: t.bodySmall?.copyWith(color: Ember.text2))),
+            ],
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if ((s?['pr_url'] ?? '').toString().isNotEmpty) EmberButton(label: 'Open the pull request', icon: Icons.open_in_new_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: () => launchUrl(Uri.parse('${s!['pr_url']}'), mode: LaunchMode.externalApplication)),
+                  if (now != null) EmberButton(label: 'Open its chat', icon: Icons.chat_bubble_outline_rounded, small: true, style: EmberButtonStyle.secondary, onPressed: () => Navigator.of(context).push(ChatScreen.route(widget.pcId, '${now['id']}'))),
+                  if (running || reviewing) EmberButton(label: 'Stop this run', icon: Icons.stop_circle_outlined, small: true, style: EmberButtonStyle.ghost, busy: _busy, onPressed: _busy ? null : _stop),
+                ],
+              ),
+            ),
+          ],
+          _errorLine(context, _error),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionTone {
+  static Color of(String effective) {
+    switch (effective) {
+      case 'merged':
+        return Ember.ok;
+      case 'review':
+        return Ember.mewoSoft;
+      case 'progress':
+        return Ember.ember;
+      case 'blocked':
+        return Ember.heat;
+      case 'ready':
+        return Ember.amber;
+      default:
+        return Ember.text3;
+    }
   }
 }
 

@@ -870,3 +870,13 @@ its token from gh's store goes into their environment as `GH_TOKEN`,
 so another session switching gh's active account on the computer
 changes nothing for the build. `github_status` → `{user, signed_in}`.
 Kept in config.json as `github_user`; empty means the active account.
+
+`session_detail {feature, workspace, n}` (also a phone frame) → one plan
+session in full: `session` (goal, repo, tier, dependencies, status,
+pull request, attempts, done-when), `run` (the headless run: pid,
+alive, exit, elapsed, the log's tail), `review` (the reviewer session),
+`live` (its Claude sessions with their last steps), `timing`
+(started, in review, merged, elapsed, `typical_s` for the tier from
+the sessions finished so far or a default, `eta_s` while it runs, and a
+rough `build_remaining_s`). `session_stop {feature, workspace, n}`
+ends its headless run and review with SIGTERM.

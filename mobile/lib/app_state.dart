@@ -715,6 +715,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// Does the flow's next action for [f] now. Empty string on success.
   Future<String> flowNext(String pcId, TorchFeature f) => _flowCmd(pcId, 'flow_next', {'feature': f.key, 'workspace': f.workspace, 'name': settings.signerName});
 
+  /// v2.6: one plan session in full (its run, review, live steps, timing).
+  Future<Map<String, dynamic>> sessionDetail(String pcId, TorchFeature f, int n) => policy(pcId, 'session_detail', {'feature': f.key, 'workspace': f.workspace, 'n': n});
+
+  /// v2.6: ends a session's headless run.
+  Future<String> sessionStop(String pcId, TorchFeature f, int n) => _flowCmd(pcId, 'session_stop', {'feature': f.key, 'workspace': f.workspace, 'n': n});
+
   /// v2.6: the build autopilot on or off.
   Future<String> buildSet(String pcId, TorchFeature f, {required bool on, int parallel = 2, bool review = true}) => _flowCmd(pcId, 'build_set', {'feature': f.key, 'workspace': f.workspace, 'on': on, 'parallel': parallel, 'review': review});
 

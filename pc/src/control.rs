@@ -16,6 +16,7 @@ use tokio::net::UnixListener;
 
 use crate::ask;
 use crate::notes;
+use crate::config::now_ms;
 use crate::daemon::AppState;
 use crate::hook;
 use crate::paths;
@@ -363,7 +364,7 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             tokio::task::block_in_place(|| plane_request(state, req))
         }
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" | "session_detail" | "session_stop" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -634,6 +635,35 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
             Some(f) => state.flow_execute(&ws, &f, None, &s("name")),
             None => json!({"ok": false, "error": "unknown feature"}),
         },
+        // v2.6: everything about one plan session: its run, its review, its live
+        // Claude sessions with their last steps, timing and a rough estimate.
+        "session_detail" => match state.feature(&ws, &key) {
+            Some(f) => session_detail(state, &ws, &f, req.get("n").and_then(Value::as_u64).unwrap_or(0) as u32),
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
+        "session_stop" => match state.feature(&ws, &key) {
+            Some(f) => {
+                let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as u32;
+                let st = flow::get(&ws, &f.key);
+                let pid = st.runs.iter().rev().find(|r| r.step == 9 && r.note == n.to_string()).map(|r| r.pid).unwrap_or(0);
+                let review_pid = st.history.iter().rev().find(|j| j.kind == "review" && j.data.get("session").and_then(Value::as_u64) == Some(n as u64)).and_then(|j| j.data.get("pid").and_then(Value::as_u64)).unwrap_or(0) as u32;
+                let mut stopped = Vec::new();
+                for p in [pid, review_pid] {
+                    if p != 0 && crate::runner::alive(p) {
+                        let _ = std::process::Command::new("kill").arg(p.to_string()).status();
+                        stopped.push(p);
+                    }
+                }
+                if stopped.is_empty() {
+                    json!({"ok": false, "error": "No headless run of this session is alive"})
+                } else {
+                    flow::update(&ws, &f.key, |x| x.note(format!("Session {n} stopped by hand")));
+                    flow::journal(&ws, &f.key, "stop", &format!("Session {n} stopped by hand"), Vec::new(), "", false, json!({"session": n, "pids": stopped}));
+                    json!({"ok": true, "stopped": stopped})
+                }
+            }
+            None => json!({"ok": false, "error": "unknown feature"}),
+        },
         // v2.6: the build autopilot.
         "build_set" => match state.feature(&ws, &key) {
             Some(f) => {
@@ -810,6 +840,93 @@ fn feature_branch_of(dir: &str, feature: &str) -> String {
     }
     let Some(ws) = policy::workspace_for(dir) else { return String::new() };
     policy::features(&ws).into_iter().find(|f| f.key == feature).map(|f| f.branch).unwrap_or_default()
+}
+
+/// The last `max` characters of the newest run log matching `prefix`
+/// (and `-review-` only when `review`).
+fn run_log_tail(prefix: &str, review: bool, max: usize) -> (String, String) {
+    let dir = crate::paths::state_dir().join("runs");
+    let Ok(rd) = std::fs::read_dir(&dir) else { return (String::new(), String::new()) };
+    let mut names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(prefix) && n.ends_with(".log") && n.contains("-review-") == review).collect();
+    names.sort();
+    let Some(name) = names.pop() else { return (String::new(), String::new()) };
+    let tail = |p: std::path::PathBuf| -> String {
+        let t = std::fs::read_to_string(p).unwrap_or_default();
+        let start = t.char_indices().rev().nth(max).map(|(i, _)| i).unwrap_or(0);
+        t[start..].to_string()
+    };
+    (tail(dir.join(&name)), tail(dir.join(name.replace(".log", ".err"))))
+}
+
+/// v2.6: one plan session in full, for the console and the phone.
+fn session_detail(state: &AppState, ws: &std::path::Path, f: &policy::Feature, n: u32) -> Value {
+    let Some(plan) = &f.plan else { return json!({"ok": false, "error": "no plan"}) };
+    let Some(ps) = plan.sessions.iter().find(|s| s.n == n) else { return json!({"ok": false, "error": format!("no session {n}")}) };
+    let st = flow::get(ws, &f.key);
+    let now = now_ms();
+    let runs: Vec<&flow::Run> = st.runs.iter().filter(|r| r.step == 9 && r.note == n.to_string()).collect();
+    let run = runs.last().map(|r| {
+        let alive = r.pid != 0 && crate::runner::alive(r.pid);
+        let (log, err) = run_log_tail(&format!("{}-S{}-", f.slug, n), false, 1600);
+        json!({"started": r.started, "pid": r.pid, "headless": r.pid != 0, "alive": alive, "exit": crate::runner::exit_code(r.pid), "elapsed_s": now.saturating_sub(r.started) / 1000, "attempt": runs.len(), "log": log, "err": err})
+    });
+    let review_pid = st.history.iter().rev().find(|j| j.kind == "review" && j.data.get("session").and_then(Value::as_u64) == Some(n as u64)).and_then(|j| j.data.get("pid").and_then(Value::as_u64)).unwrap_or(0) as u32;
+    let review = st.reviews.get(&n).map(|t| {
+        let (log, _) = run_log_tail(&format!("{}-S{}-", f.slug, n), true, 1600);
+        json!({"started": t, "pid": review_pid, "alive": review_pid != 0 && crate::runner::alive(review_pid), "elapsed_s": now.saturating_sub(*t) / 1000, "log": log})
+    });
+    // The live Claude sessions, with their last steps.
+    let mut live = Vec::new();
+    for l in &ps.live {
+        let id = l.get("id").and_then(Value::as_str).unwrap_or("");
+        if id.is_empty() {
+            continue;
+        }
+        let chat = tokio::runtime::Handle::current().block_on(state.chat(id, 14));
+        let (sess, items) = match chat {
+            Some(x) => x,
+            None => continue,
+        };
+        live.push(json!({
+            "id": sess.id, "short": sess.short, "state": sess.state, "title": sess.title, "last_ts": sess.last_ts, "last_text": sess.last_text.chars().take(600).collect::<String>(), "desktop": sess.desktop,
+            "chat": items.iter().map(|c| json!({"ts": c.ts, "role": c.role, "tool": c.tool, "text": c.text.chars().take(280).collect::<String>()})).collect::<Vec<_>>(),
+        }));
+    }
+    // Timing: this session's marks, and what sessions of the same tier took.
+    let mark = |m: u32, status: &str| st.history.iter().filter(|j| j.kind == "plan_status" && j.data.get("n").and_then(Value::as_u64) == Some(m as u64) && j.data.get("status").and_then(Value::as_str).map(|s| s.eq_ignore_ascii_case(status)).unwrap_or(false)).map(|j| j.ts).min();
+    // The run that counts: the last one started before the pull request
+    // opened (earlier attempts stopped), else the latest.
+    let start_of = |m: u32| -> Option<u64> {
+        let review = mark(m, "In review");
+        st.runs.iter().filter(|r| r.step == 9 && r.note == m.to_string() && review.map(|t| r.started < t).unwrap_or(true)).map(|r| r.started).max()
+    };
+    let started_at = start_of(n);
+    let in_review_at = mark(n, "In review");
+    let merged_at = mark(n, "Merged");
+    let mut by_tier: std::collections::HashMap<u8, Vec<u64>> = std::collections::HashMap::new();
+    for s in &plan.sessions {
+        if let (Some(a), Some(b)) = (start_of(s.n), mark(s.n, "In review")) {
+            if b > a {
+                by_tier.entry(s.tier).or_default().push((b - a) / 1000);
+            }
+        }
+    }
+    let default_s = |tier: u8| -> u64 { match tier { 1 => 25 * 60, 2 => 15 * 60, _ => 8 * 60 } };
+    let typical = |tier: u8| -> (u64, usize) { by_tier.get(&tier).filter(|v| !v.is_empty()).map(|v| (v.iter().sum::<u64>() / v.len() as u64, v.len())).unwrap_or((default_s(tier), 0)) };
+    let (typical_s, samples) = typical(ps.tier);
+    let elapsed_s = started_at.map(|a| (in_review_at.unwrap_or(now).saturating_sub(a)) / 1000).unwrap_or(0);
+    let eta_s = if ps.effective == "progress" { Some(typical_s.saturating_sub(elapsed_s)) } else { None };
+    let parallel = if st.build_parallel == 0 { 2 } else { st.build_parallel } as u64;
+    let remaining: u64 = plan.sessions.iter().filter(|s| s.effective != "merged").map(|s| typical(s.tier).0 + 6 * 60).sum::<u64>() / parallel.max(1);
+    let merged = plan.sessions.iter().filter(|s| s.effective == "merged").count();
+    json!({
+        "ok": true,
+        "session": {"n": ps.n, "goal": ps.goal, "level": ps.level, "tier": ps.tier, "repo": ps.repo, "folder": ps.folder, "owner": ps.owner, "status": ps.status, "effective": ps.effective, "depends_on": ps.depends_on, "pr_url": ps.pr_url, "pr_state": ps.pr_state, "attempts": ps.attempts, "done_when": ps.done_when, "load_first": ps.load_first, "warnings": ps.warnings, "note": ps.note, "running": ps.running},
+        "run": run,
+        "review": review,
+        "live": live,
+        "timing": {"started_at": started_at, "in_review_at": in_review_at, "merged_at": merged_at, "elapsed_s": elapsed_s, "typical_s": typical_s, "typical_from": samples, "eta_s": eta_s, "build_merged": merged, "build_total": plan.sessions.len(), "build_remaining_s": remaining, "parallel": parallel},
+    })
 }
 
 /// v2.3: the feature's design system words (its name, its checkout

@@ -116,6 +116,24 @@ header {
 .legend { font: 9px var(--mono); letter-spacing: .12em; color: var(--dim); margin: 6px 0 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; } .legend span::before { content: ''; width: 8px; height: 8px; border: 1px solid var(--c); background: color-mix(in srgb, var(--c) 30%, transparent); }
 .srow.flash { outline: 1px solid var(--amber); }
+#sdetail { position: absolute; top: 52px; left: 50%; transform: translateX(-50%); width: min(880px, 92vw); max-height: calc(100vh - 80px); display: none; flex-direction: column; z-index: 12; background: rgba(6, 12, 20, 0.98); border: 1px solid var(--cyan-line); box-shadow: 0 16px 50px rgba(0,0,0,.7), 0 0 30px rgba(79,209,255,.12); }
+#sdetail.on { display: flex; }
+#sdetail .hd { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--cyan-dim); }
+#sdetail .hd .t { font-weight: 700; color: #fff; font-size: 14px; flex: 1; }
+#sdetail .hd .x { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); width: 28px; height: 28px; font-size: 14px; line-height: 1; }
+#sdetail .body { overflow: auto; padding: 12px 14px 16px; }
+#sdetail .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+#sdetail .card { border: 1px solid var(--cyan-dim); padding: 10px 12px; }
+#sdetail .card .k { font: 9px var(--mono); letter-spacing: .16em; color: var(--dim); margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
+#sdetail .big { font: 700 22px var(--mono); color: #fff; } #sdetail .big small { font-size: 10px; letter-spacing: .14em; color: var(--dim); font-weight: 400; margin-left: 6px; }
+#sdetail .row { display: flex; justify-content: space-between; gap: 10px; font: 11px var(--mono); letter-spacing: .06em; color: var(--text); padding: 3px 0; border-bottom: 1px dashed rgba(79,209,255,.1); } #sdetail .row span:first-child { color: var(--dim); }
+#sdetail .steps { max-height: 220px; overflow: auto; font-size: 12px; line-height: 1.45; }
+#sdetail .steps .s { padding: 4px 0; border-bottom: 1px dashed rgba(79,209,255,.1); color: var(--text); } #sdetail .steps .s b { font: 9px var(--mono); letter-spacing: .12em; color: var(--cyan); margin-right: 6px; } #sdetail .steps .s.tool b { color: var(--amber); }
+#sdetail pre { font: 10.5px var(--mono); color: var(--text); background: rgba(0,0,0,.35); border: 1px solid var(--cyan-dim); padding: 8px; max-height: 200px; overflow: auto; white-space: pre-wrap; margin: 0; }
+#sdetail ul { margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.5; color: var(--text); }
+#sdetail .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+#sdetail .bar { height: 5px; background: rgba(79,209,255,.1); margin: 6px 0; } #sdetail .bar i { display: block; height: 100%; background: var(--amber); }
+.srow { cursor: pointer; }
 .build { margin-top: 10px; border: 1px solid var(--cyan-dim); padding: 9px 10px; background: rgba(79,209,255,.03); }
 .build.on { border-color: var(--amber); background: rgba(255,179,71,.05); }
 .build .bh { display: flex; gap: 10px; align-items: center; font: 9px var(--mono); letter-spacing: .14em; color: var(--dim); }
@@ -546,6 +564,7 @@ footer .seg { display: flex; gap: 22px; }
       <div class="row2"><button class="btn go" id="ds-save" type="button">SAVE</button><button class="btn" id="ds-glare" type="button">BACK TO GLARE</button><button class="btn" id="ds-close" type="button">CLOSE</button></div>
       <div class="msg" id="ds-msg"></div>
     </div>
+    <div id="sdetail"><div class="hd"><span class="k" id="sd-pill" style="font:9px var(--mono);letter-spacing:.2em;border:1px solid currentColor;padding:3px 7px"></span><div class="t" id="sd-title"></div><button class="x" id="sd-close" type="button" aria-label="Close">×</button></div><div class="body" id="sd-body"></div></div>
     <div id="bigmap"><div class="hd"><span id="bigmap-title">BUILD MAP</span><span style="flex:1"></span><button class="btn" id="bigmap-close" type="button">CLOSE · ESC</button></div><div class="body"></div></div>
     <div id="newsess">
       <div class="t">New session</div>
@@ -934,7 +953,8 @@ function wireMapSvg(svg, ss, onPick) {
 function wireMap(box, f, plan) {
   const svg = box.querySelector('#bmap-box svg'); if (!svg) return;
   const ss = plan.sessions || [];
-  wireMapSvg(svg, ss, (sel) => { const row = sel !== null && box.querySelector(`.srow[data-n="${sel}"]`); if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1400); } });
+  wireMapSvg(svg, ss, (sel) => { const row = sel !== null && box.querySelector(`.srow[data-n="${sel}"]`); if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1400); } if (sel !== null) openSessionDetail(f, sel); });
+  for (const row of box.querySelectorAll('.srow[data-n]')) row.addEventListener('click', (e) => { if (e.target.closest('button, select, a, input')) return; openSessionDetail(f, +row.dataset.n); });
   const big = box.querySelector('#bmap-big'); if (big) big.onclick = () => {
     const m = $('bigmap'); m.querySelector('.body').innerHTML = `<div class="bmap" style="border:0;background:none">${box.querySelector('#bmap-box').innerHTML}</div>`;
     $('bigmap-title').textContent = `BUILD MAP · ${f.app.toUpperCase()} / ${f.slug.toUpperCase()} · ${ss.length} SESSIONS`;
@@ -944,6 +964,65 @@ function wireMap(box, f, plan) {
   };
 }
 $('bigmap-close').addEventListener('click', () => $('bigmap').classList.remove('on'));
+// v2.6: one session in full: what it is doing now, how long, the estimate, its run and its review.
+let sdCur = null, sdTimer = null;
+const fmtDur = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${String(m).padStart(2, '0')}m` : m ? `${m}m` : `${s}s`; };
+const fmtAt = (ms) => ms ? hm(ms) : '—';
+async function openSessionDetail(f, n) {
+  sdCur = { f, n }; $('sdetail').classList.add('on'); $('sd-title').textContent = `S${n} · loading…`; $('sd-body').innerHTML = '';
+  await refreshSessionDetail();
+  clearInterval(sdTimer); sdTimer = setInterval(refreshSessionDetail, 10000);
+}
+function closeSessionDetail() { $('sdetail').classList.remove('on'); clearInterval(sdTimer); sdTimer = null; sdCur = null; }
+$('sd-close').addEventListener('click', closeSessionDetail);
+async function refreshSessionDetail() {
+  if (!sdCur || !$('sdetail').classList.contains('on')) return;
+  const { f, n } = sdCur;
+  const d = await daemon({ cmd: 'session_detail', feature: f.key, workspace: f.workspace, n, ...pcArg(f) });
+  if (!sdCur || sdCur.n !== n) return;
+  if (!d.ok) { $('sd-body').innerHTML = `<div class="warn">${esc(d.error || 'Could not load the session')}</div>`; return; }
+  const s = d.session, t = d.timing || {}, run = d.run, rv = d.review, live = d.live || [];
+  const eff = s.effective; const col = eff === 'merged' ? C.ok : eff === 'review' ? C.cyan : eff === 'progress' ? C.fire : eff === 'blocked' ? C.heat : eff === 'ready' ? C.amber : C.dim;
+  $('sd-pill').textContent = (eff === 'review' ? 'IN REVIEW' : eff === 'progress' ? 'IN PROGRESS' : eff).toUpperCase(); $('sd-pill').style.color = col;
+  $('sd-title').textContent = `S${s.n} · ${s.goal}`;
+  const running = run && run.alive, reviewing = rv && rv.alive;
+  const pct = eff === 'merged' ? 100 : eff === 'review' ? 90 : t.started_at ? Math.min(85, Math.round(100 * t.elapsed_s / Math.max(1, t.typical_s))) : 0;
+  const now = live.find((l) => l.state === 'working' || l.state === 'waiting') || live[live.length - 1];
+  const steps = now ? [...now.chat].slice(-10).reverse() : [];
+  const what = eff === 'merged' ? 'Merged. Done.' : eff === 'review' ? (reviewing ? `A reviewer session is on the pull request (${fmtDur(rv.elapsed_s)} so far): checklists G and H, lint, types, tests.` : 'Pull request open, waiting for its review.') : running ? 'Working headless on this Mac.' : eff === 'progress' ? (now && now.state === 'waiting' ? 'Waiting for your answer: see the phone.' : 'Started; no live run at the moment.') : eff === 'ready' ? 'Ready: its dependencies are merged. The autopilot starts it next, or press Start.' : eff === 'blocked' ? 'Blocked: a person decides.' : `Waiting for ${(s.depends_on || []).map((x) => 'S' + x).join(', ') || 'its turn'}.`;
+  $('sd-body').innerHTML = `
+    <div class="grid">
+      <div class="card"><div class="k">NOW</div><div style="font-size:12.5px;color:#fff;line-height:1.45">${esc(what)}</div>
+        <div class="bar"><i style="width:${pct}%;background:${col}"></i></div>
+        <div class="row"><span>ELAPSED</span><span>${t.started_at ? fmtDur(t.elapsed_s) : '—'}</span></div>
+        <div class="row"><span>ESTIMATE</span><span>${eff === 'progress' && t.eta_s !== null && t.eta_s !== undefined ? `about ${fmtDur(t.eta_s)} left` : `typically ${fmtDur(t.typical_s)} for tier ${s.tier}`}${t.typical_from ? ` <small style="color:var(--dim)">· from ${t.typical_from} finished</small>` : ' <small style="color:var(--dim)">· a default, no finished session of this tier yet</small>'}</span></div>
+        <div class="row"><span>WHOLE BUILD</span><span>${t.build_merged}/${t.build_total} merged · roughly ${fmtDur(t.build_remaining_s)} left at ${t.parallel} at a time</span></div>
+        ${now ? `<div class="row"><span>SESSION</span><span>${esc(now.short)} · ${stateLabel(now.state)} · last ${fmtAt(now.last_ts)}</span></div>` : ''}
+      </div>
+      <div class="card"><div class="k">WHAT IT IS</div>
+        <div class="row"><span>REPOSITORY</span><span>${esc(s.repo || '')}</span></div>
+        <div class="row"><span>LEVEL · TIER</span><span>${esc(s.level || '')} · ${s.tier}</span></div>
+        <div class="row"><span>NEEDS</span><span>${(s.depends_on || []).length ? s.depends_on.map((x) => 'S' + x).join(', ') : 'nothing'}</span></div>
+        <div class="row"><span>OWNER</span><span>${esc(s.owner || '—')}</span></div>
+        <div class="row"><span>ATTEMPTS</span><span>${s.attempts || 0}</span></div>
+        <div class="row"><span>STARTED</span><span>${fmtAt(t.started_at)}</span></div>
+        <div class="row"><span>IN REVIEW</span><span>${fmtAt(t.in_review_at)}</span></div>
+        <div class="row"><span>MERGED</span><span>${fmtAt(t.merged_at)}</span></div>
+        ${run ? `<div class="row"><span>RUN</span><span>${run.headless ? `headless · pid ${run.pid} · ${run.alive ? 'alive' : 'ended' + (run.exit !== null && run.exit !== undefined ? ' · exit ' + run.exit : '')}` : 'in Claude Desktop'}</span></div>` : ''}
+        <div class="acts">${s.pr_url ? `<button class="btn" type="button" data-url="${esc(s.pr_url)}">OPEN THE PULL REQUEST</button>` : ''}${now && now.desktop ? `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(now.desktop)}">OPEN IN DESKTOP</button>` : ''}${running || reviewing ? '<button class="btn" id="sd-stop" type="button" style="border-color:var(--heat);color:var(--heat)">STOP THIS RUN</button>' : ''}</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px"><div class="k">LAST STEPS${now ? ` · ${esc(now.short)}` : ''}</div>
+      <div class="steps">${steps.length ? steps.map((c) => `<div class="s ${c.tool ? 'tool' : ''}"><b>${esc((c.tool ? c.tool : c.role === 'assistant' ? 'CLAUDE' : c.role === 'user' ? 'PROMPT' : c.role).toUpperCase())}</b>${esc(c.text || '')}</div>`).join('') : (now && now.last_text ? `<div class="s"><b>CLAUDE</b>${esc(now.last_text)}</div>` : '<div class="s" style="color:var(--dim)">Nothing recorded yet.</div>')}</div>
+    </div>
+    ${(s.done_when || []).length ? `<div class="card" style="margin-top:12px"><div class="k">DONE WHEN</div><ul>${s.done_when.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+    ${(s.warnings || []).length ? `<div class="warn" style="margin-top:12px">${s.warnings.map(esc).join('<br>')}</div>` : ''}
+    ${run && (run.log || run.err) ? `<div class="card" style="margin-top:12px"><div class="k">THE RUN'S OUTPUT · ${run.alive ? 'STILL RUNNING, THE REPORT COMES AT THE END' : 'FINAL'}</div><pre>${esc((run.log || '').trim() || (run.err || '').trim() || '(nothing yet)')}</pre></div>` : ''}
+    ${rv && rv.log ? `<div class="card" style="margin-top:12px"><div class="k">THE REVIEWER'S REPORT</div><pre>${esc(rv.log.trim())}</pre></div>` : ''}`;
+  for (const b of $('sd-body').querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
+  const stop = $('sd-body').querySelector('#sd-stop'); if (stop) stop.onclick = async () => { if (!confirm(`Stop the headless run of S${s.n}? The autopilot will treat it as stopped and may run it again.`)) return; stop.disabled = true; const r = await daemon({ cmd: 'session_stop', feature: f.key, workspace: f.workspace, n, ...pcArg(f) }); if (!r.ok) alert(r.error || 'Could not stop it'); refreshSessionDetail(); };
+}
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('sdetail').classList.contains('on')) { closeSessionDetail(); e.preventDefault(); } });
 addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('bigmap').classList.contains('on')) { $('bigmap').classList.remove('on'); e.preventDefault(); } });
 function flowHtml(f) {
   const fl = f.flow || {}; const a = fl.action || {};
