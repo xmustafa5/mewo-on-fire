@@ -418,6 +418,51 @@ main {
 #detail .act .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #detail .act.primary { background: rgba(79,209,255,0.14); border-color: var(--cyan); }
 #detail .none { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim2); }
+#detail .mhead { flex: none; width: 54px; margin: -2px 0 0 -2px; }
+/* The mascot (chat-mascot: a cat of SVG and CSS; data-state says what Claude does). */
+.mascot { --ink: var(--mewo); --white: #fff; --pupil: var(--mewo); display: block; width: 100%; height: auto; overflow: visible; }
+.mascot .m-body { transform-origin: 627px 505px; animation: mascot-breathe 3.2s ease-in-out infinite; }
+.mascot .m-ear-l { transform-origin: 478px 250px; transition: transform .35s cubic-bezier(.3,1.4,.5,1); }
+.mascot .m-ear-r { transform-origin: 776px 250px; transition: transform .35s cubic-bezier(.3,1.4,.5,1); }
+.mascot .eye { transform-origin: center 300px; transition: transform .25s ease; }
+.mascot .pupil { transition: transform .3s ease; }
+.mascot .px { transition: opacity .3s; }
+.mascot.blink .eye { animation: mascot-blink .22s ease; }
+.mascot[data-state="listening"] .m-ear-l { transform: rotate(-7deg) translateY(-6px); }
+.mascot[data-state="listening"] .m-ear-r { transform: rotate(7deg) translateY(-6px); }
+.mascot[data-state="listening"] .eye { transform: scaleY(1.25); }
+.mascot[data-state="listening"] .pupil { transform: translate(0, 10px); }
+.mascot[data-state="thinking"] .eye { transform: scaleY(.7); }
+.mascot[data-state="thinking"] .pupil { transform: translate(-14px, -2px); }
+.mascot[data-state="thinking"] .px { animation: mascot-shimmer 1s ease-in-out infinite; }
+.mascot[data-state="thinking"] .px:nth-child(2) { animation-delay: .33s; }
+.mascot[data-state="thinking"] .px:nth-child(3) { animation-delay: .66s; }
+.mascot[data-state="thinking"] .m-ear-r { transform: rotate(-4deg); }
+.mascot[data-state="responding"] .m-body { animation: mascot-bob .55s ease-in-out infinite; }
+.mascot[data-state="responding"] .px { animation: mascot-pulse .55s ease-in-out infinite; }
+.mascot[data-state="responding"] .px:nth-child(2) { animation-delay: .18s; }
+.mascot[data-state="responding"] .px:nth-child(3) { animation-delay: .36s; }
+.mascot[data-state="responding"] .eye { transform: scaleY(1.05); }
+.mascot[data-state="done"] .eye { animation: mascot-happy .9s ease forwards; }
+.mascot[data-state="done"] .m-ear-l { transform: rotate(-5deg); }
+.mascot[data-state="done"] .m-ear-r { transform: rotate(5deg); }
+.mascot[data-state="error"] .m-ear-l { transform: rotate(14deg) translateY(10px); }
+.mascot[data-state="error"] .m-ear-r { transform: rotate(-14deg) translateY(10px); }
+.mascot[data-state="error"] .pupil { transform: scale(.55); transform-box: fill-box; transform-origin: center; }
+.mascot[data-state="error"] .eye { transform: scaleY(1.3); }
+.mascot[data-state="error"] .m-body { animation: mascot-shake .4s ease; }
+/* A closed session: the cat asleep. */
+.mascot.asleep { opacity: .5; } .mascot.asleep .eye { transform: scaleY(.18); } .mascot.asleep .m-body { animation-duration: 6s; }
+@keyframes mascot-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.015); } }
+@keyframes mascot-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@keyframes mascot-blink { 0%,100% { transform: scaleY(1); } 50% { transform: scaleY(.08); } }
+@keyframes mascot-shimmer { 0%,100% { opacity: .25; } 50% { opacity: 1; } }
+@keyframes mascot-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .6; transform: scale(.85); } }
+@keyframes mascot-happy { 0% { transform: scaleY(1); } 30% { transform: scaleY(.08); } 60% { transform: scaleY(1.2); } 100% { transform: scaleY(1); } }
+@keyframes mascot-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
+@media (prefers-reduced-motion: reduce) { .mascot * { animation: none !important; transition: none !important; } }
+/* The PC's mascot, in the reactor at the centre of the network (over the canvas). */
+#core-mascot { position: absolute; left: -999px; top: -999px; width: 92px; transform: translate(-50%, -52%); pointer-events: none; z-index: 2; }
 #legacy {
   position: absolute; top: 12px; right: 14px; display: none; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em;
   color: var(--amber); border: 1px solid rgba(255,179,71,.4); padding: 6px 10px; background: rgba(255,179,71,.06);
@@ -542,6 +587,7 @@ footer .seg { display: flex; gap: 22px; }
   <section class="panel" id="center">
     <span class="c tl"></span><span class="c tr"></span><span class="c bl"></span><span class="c br"></span>
     <canvas id="net"></canvas>
+    <div id="core-mascot"></div>
     <canvas id="fnet"></canvas>
     <div id="fdetail"></div>
     <div id="pipe"><div id="plist"></div><div id="pdetail"><div class="msg" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);padding:20px">PICK A FEATURE</div></div></div>
@@ -635,6 +681,54 @@ const C = {
 };
 const stateColor = (s) => s === 'working' ? C.fire : s === 'waiting' ? C.amber : s === 'ended' ? C.ash : C.ok;
 const stateLabel = (s) => s === 'working' ? 'WORKING' : s === 'waiting' ? 'NEEDS YOU' : s === 'ended' ? 'CLOSED' : 'FINISHED';
+// The mascot (chat-mascot): a cat whose look says what Claude does. idle; listening (a
+// question waits for you); thinking (at work, quiet); responding (at work, active just
+// now); done (just finished); error (a policy warning); asleep on a closed session.
+let mascotSeq = 0;
+function mascotSVG(state, cls = '') {
+  const u = 'mc' + (++mascotSeq);
+  const EL = 'M505 300 L615 300 C615 326 595 342 560 342 C525 342 505 326 505 300 Z', ER = 'M645 300 L752 300 C752 326 735 342 698 342 C660 342 645 326 645 300 Z';
+  const eye = (side, d, cx) => `<g class="eye"><path fill="var(--white)" d="${d}"/><g clip-path="url(#${u}${side})"><circle class="pupil" fill="var(--pupil)" cx="${cx}" cy="304" r="15"/></g></g>`;
+  return `<svg class="mascot ${cls}" data-state="${state}" viewBox="330 95 620 430" role="img" aria-label="Claude: ${state}"><defs><clipPath id="${u}l"><path d="${EL}"/></clipPath><clipPath id="${u}r"><path d="${ER}"/></clipPath></defs>`
+    + '<g class="m-body"><path fill="var(--ink)" d="M392 508 L855 508 L855 467 L815 467 L815 427 L855 427 L855 387 L890 387 C872 332 842 287 808 250 L776 128 C771 112 756 114 746 124 L627 243 L508 124 C498 114 483 112 478 128 L446 250 C412 287 378 335 350 420 C336 462 352 506 392 508 Z"/>'
+    + '<g><rect class="px" fill="var(--ink)" x="855" y="427" width="40" height="40"/><rect class="px" fill="var(--ink)" x="895" y="467" width="40" height="40"/><rect class="px" fill="var(--ink)" x="815" y="467" width="40" height="40"/></g>'
+    + '<g class="m-ear-l"><path fill="var(--ink)" d="M446 252 L478 128 C483 112 498 114 508 124 L627 243 L627 262 L446 262 Z"/></g>'
+    + '<g class="m-ear-r"><path fill="var(--ink)" d="M808 252 L776 128 C771 112 756 114 746 124 L627 243 L627 262 L808 262 Z"/></g>'
+    + eye('l', EL, 560) + eye('r', ER, 698) + '</g></svg>';
+}
+function setMascot(el, state, asleep = false) {
+  if (!el) return;
+  if (el.dataset.state !== state) { el.dataset.state = state; el.setAttribute('aria-label', 'Claude: ' + state); }
+  el.classList.toggle('asleep', asleep);
+}
+// A session's mascot, from what its hooks say.
+function mascotOf(s) {
+  if (!s) return 'idle';
+  if (s.state === 'waiting') return 'listening';
+  if (s.state === 'working') return s.last_ts && Date.now() - s.last_ts < 10000 ? 'responding' : 'thinking';
+  if (s.state !== 'ended' && s.last_ts && Date.now() - s.last_ts < 120000) return 'done';
+  return 'idle';
+}
+// The PC's: a question waiting first, then Claude at work, a fresh policy warning, a reply just finished.
+function coreMascot() {
+  const ss = model.sessions || [];
+  if (ss.some((s) => s.state === 'waiting')) return 'listening';
+  const work = ss.filter((s) => s.state === 'working');
+  if (work.length) return work.some((s) => mascotOf(s) === 'responding') ? 'responding' : 'thinking';
+  if (model.warnAt && Date.now() - model.warnAt < 90000) return 'error';
+  return ss.some((s) => mascotOf(s) === 'done') ? 'done' : 'idle';
+}
+// It blinks now and then, as the original does: not while thinking, happy, in error or asleep.
+setInterval(() => {
+  const now = Date.now();
+  for (const m of document.querySelectorAll('.mascot')) {
+    if (!m.dataset.next) { m.dataset.next = now + 3000 + Math.random() * 4000; continue; }
+    if (now < +m.dataset.next) continue;
+    m.dataset.next = now + 3000 + Math.random() * 4000;
+    if (['thinking', 'done', 'error'].includes(m.dataset.state) || m.classList.contains('asleep')) continue;
+    m.classList.add('blink'); setTimeout(() => m.classList.remove('blink'), 260);
+  }
+}, 500);
 const $ = (id) => document.getElementById(id);
 const two = (n) => String(n).padStart(2, '0');
 const hm = (ms) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}`; };
@@ -735,6 +829,15 @@ function sizeNet() {
   W = r.width; H = r.height; net.width = W * dpr; net.height = H * dpr; nx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 sizeNet(); addEventListener('resize', () => { sizeNet(); layout(); });
+// The PC's mascot sits over the canvas, at the core; moved only when the core moves.
+const coreBox = $('core-mascot'); coreBox.innerHTML = mascotSVG('idle'); const coreSvg = coreBox.firstElementChild; let coreAt = '';
+function placeCoreMascot(x, y) {
+  const at = `${Math.round(net.offsetLeft + x)}px,${Math.round(net.offsetTop + y)}px`;
+  if (at !== coreAt) { coreAt = at; [coreBox.style.left, coreBox.style.top] = at.split(','); }
+  const show = view === 'net' ? 'block' : 'none';
+  if (coreBox.style.display !== show) coreBox.style.display = show;
+  setMascot(coreSvg, coreMascot());
+}
 net.addEventListener('mousemove', (e) => { const r = net.getBoundingClientRect(); mouse = { x: e.clientX - r.left, y: e.clientY - r.top }; });
 net.addEventListener('mouseleave', () => { mouse = { x: -1, y: -1 }; });
 // Links leave the page: the Mac app hands them to macOS, a browser opens them.
@@ -1534,10 +1637,12 @@ function md(src) {
 // A click on a session shows its card: open it in Claude Desktop, open what it made.
 const bursts = [];
 const detail = $('detail');
+let detailId = '';
 const kindLabel = (k) => k === 'design' ? 'DESIGN' : k === 'document' ? 'DOC' : k === 'page' ? 'PAGE' : 'ARTIFACT';
 function showDetail(s) {
   const arts = [...(s.artifacts || [])].reverse();
-  detail.innerHTML = `<div class="hd"><div class="t">${esc(s.title || s.project || s.id)}</div><button class="x" aria-label="Close">×</button></div>
+  detailId = s.id;
+  detail.innerHTML = `<div class="hd"><span class="mhead">${mascotSVG(mascotOf(s), s.state === 'ended' ? 'asleep' : '')}</span><div class="t">${esc(s.title || s.project || s.id)}</div><button class="x" aria-label="Close">×</button></div>
     <div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}${s.tier ? ` · TIER ${s.tier}` : ''}${s.branch ? ` · ${esc(s.branch)}` : ''}${s.feature ? ` · ${esc(s.feature.toUpperCase())}${s.plan_session ? ' S' + s.plan_session : ''}` : ''}</div>
     ${s.last_text ? `<div class="last">${esc(s.last_text)}</div>` : ''}
     ${s.pc_name ? `<div class="none">ON ${esc(s.pc_name.toUpperCase())}${s.desktop ? ' · OPEN IT THERE' : ''}</div>` : s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
@@ -1739,7 +1844,7 @@ function drawNet(now) {
   if (now - last < FRAME_MS) { requestAnimationFrame(drawNet); return; }
   const dt = Math.min(0.08, (now - last) / 1000); last = now; tglob += reduced ? 0 : dt;
   nx.clearRect(0, 0, W, H);
-  if (!model.daemon) { requestAnimationFrame(drawNet); return; }
+  if (!model.daemon) { coreBox.style.display = 'none'; requestAnimationFrame(drawNet); return; }
   // ease nodes
   for (const n of nodes.values()) { const k = reduced ? 1 : 0.085; n.x += (n.tx - n.x) * k; n.y += (n.ty - n.y) * k; }
   spawnParticles(dt);
@@ -1770,23 +1875,24 @@ function drawNet(now) {
   const hot = model.sessions.some((s) => s.state === 'working');
   const pulse = 1 + Math.sin(tglob * 2.2) * 0.06;
   nx.save(); nx.translate(core.x, core.y);
-  const glow = nx.createRadialGradient(0, 0, 0, 0, 0, 70);
-  glow.addColorStop(0, hot ? 'rgba(255,107,53,0.35)' : 'rgba(79,209,255,0.35)'); glow.addColorStop(1, 'rgba(79,209,255,0)');
-  nx.fillStyle = glow; nx.beginPath(); nx.arc(0, 0, 70 * pulse, 0, Math.PI * 2); nx.fill();
-  const rings = [[44, 1, 0.9, C.cyan, [10, 6]], [36, -1.6, 1.4, hot ? C.fire : C.cyan, [2, 5]], [27, 0.7, 1, C.cyan, []]];
+  // Wide enough for the mascot inside.
+  const glow = nx.createRadialGradient(0, 0, 0, 0, 0, 100);
+  glow.addColorStop(0, hot ? 'rgba(255,107,53,0.30)' : 'rgba(79,209,255,0.30)'); glow.addColorStop(1, 'rgba(79,209,255,0)');
+  nx.fillStyle = glow; nx.beginPath(); nx.arc(0, 0, 100 * pulse, 0, Math.PI * 2); nx.fill();
+  const rings = [[78, 1, 0.9, C.cyan, [10, 6]], [69, -1.6, 1.4, hot ? C.fire : C.cyan, [2, 5]], [60, 0.7, 1, C.cyan, []]];
   for (const [r, sp, lw, col, dash] of rings) {
     nx.beginPath(); nx.setLineDash(dash); nx.lineDashOffset = -tglob * 20 * sp;
     nx.arc(0, 0, r, tglob * sp, tglob * sp + Math.PI * 1.75); nx.strokeStyle = col; nx.lineWidth = lw; nx.globalAlpha = 0.9; nx.stroke();
   }
   nx.setLineDash([]); nx.globalAlpha = 1;
   // ticks
-  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2 + tglob * 0.15; nx.beginPath(); nx.moveTo(Math.cos(a) * 50, Math.sin(a) * 50); nx.lineTo(Math.cos(a) * (i % 6 ? 53 : 57), Math.sin(a) * (i % 6 ? 53 : 57)); nx.strokeStyle = 'rgba(79,209,255,0.5)'; nx.lineWidth = 1; nx.stroke(); }
+  for (let i = 0; i < 24; i++) { const a = (i / 24) * Math.PI * 2 + tglob * 0.15; nx.beginPath(); nx.moveTo(Math.cos(a) * 84, Math.sin(a) * 84); nx.lineTo(Math.cos(a) * (i % 6 ? 87 : 91), Math.sin(a) * (i % 6 ? 87 : 91)); nx.strokeStyle = 'rgba(79,209,255,0.5)'; nx.lineWidth = 1; nx.stroke(); }
   const waiting = model.sessions.some((s) => s.state === 'waiting');
-  nx.beginPath(); nx.arc(0, 0, 14 * pulse, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : C.cyan; nx.shadowColor = hot ? C.fire : C.cyan; nx.shadowBlur = 30; nx.fill(); nx.shadowBlur = 0;
-  nx.beginPath(); nx.arc(0, 0, 6, 0, Math.PI * 2); nx.fillStyle = '#fff'; nx.fill();
   nx.restore();
-  roundRectLabel(core.x, core.y + 64, (model.daemon.name || 'PC').toUpperCase(), '#fff', 11, 800);
-  roundRectLabel(core.x, core.y + 79, hot ? 'CLAUDE AT WORK' : waiting ? 'NEEDS YOU' : 'STANDING BY', hot ? C.fire : waiting ? C.amber : C.dim, 9, 600);
+  // The mascot: what Claude does on this PC.
+  placeCoreMascot(core.x, core.y);
+  roundRectLabel(core.x, core.y + 100, (model.daemon.name || 'PC').toUpperCase(), '#fff', 11, 800);
+  roundRectLabel(core.x, core.y + 115, hot ? 'CLAUDE AT WORK' : waiting ? 'NEEDS YOU' : 'STANDING BY', hot ? C.fire : waiting ? C.amber : C.dim, 9, 600);
 
   // peers: a bigger hexagon with a reactor of its own
   for (const n of nodes.values()) {
@@ -1934,7 +2040,9 @@ function apply(s) {
   }
   $('offline').style.display = 'none';
   const d = s.daemon, sessions = s.sessions || [], events = s.events || [], requests = s.requests || [];
-  model = { sessions, daemon: d, legacy: !!s.legacy, peers: s.peers || [] };
+  model = { sessions, daemon: d, legacy: !!s.legacy, peers: s.peers || [], warnAt: Math.max(0, ...events.filter((e) => e.kind === 'warning').map((e) => e.ts || 0)) };
+  // An open session card keeps its mascot live.
+  if (detail.style.display === 'block' && detailId) { const ds = sessions.find((x) => x.id === detailId); if (ds) setMascot(detail.querySelector('.mascot'), mascotOf(ds), ds.state === 'ended'); }
   renderFleet();
   if (Array.isArray(s.features)) { features = s.features; if (s.features_meta) meta = { ...s.features_meta, members: meta.members || [] }; if (view === 'pipe') renderPipeline(); if (view === 'feat' && fpicked) renderFeatureDetail(); }
   $('legacy').style.display = s.legacy ? 'block' : 'none';
