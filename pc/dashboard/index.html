@@ -941,14 +941,16 @@ function wireMapSvg(svg, ss, onPick) {
   const by = new Map(ss.map((s) => [s.n, s]));
   const up = (n, acc) => { for (const d of (by.get(n) || {}).depends_on || []) if (d !== n && by.has(d) && !acc.has(d)) { acc.add(d); up(d, acc); } return acc; };
   const down = (n, acc) => { for (const s of ss) if ((s.depends_on || []).includes(n) && s.n !== n && !acc.has(s.n)) { acc.add(s.n); down(s.n, acc); } return acc; };
-  let sel = null;
+  const inPanel = !!svg.closest('#bmap-box');
+  let sel = inPanel ? mapSel : null;
   const paint = () => {
     const u = sel === null ? new Set() : up(sel, new Set()), d = sel === null ? new Set() : down(sel, new Set());
     const chain = new Set([...u, ...d]); if (sel !== null) chain.add(sel);
     for (const g of svg.querySelectorAll('g.nd')) { const n = +g.dataset.n; g.classList.toggle('sel', sel === n); g.classList.toggle('up', u.has(n)); g.classList.toggle('down', d.has(n)); g.classList.toggle('dim', sel !== null && !chain.has(n)); }
     for (const e of svg.querySelectorAll('path.e')) { const on = sel !== null && chain.has(+e.dataset.from) && chain.has(+e.dataset.to); e.classList.toggle('on', on); e.classList.toggle('dim', sel !== null && !on); }
   };
-  for (const g of svg.querySelectorAll('g.nd')) g.onclick = () => { const n = +g.dataset.n; sel = sel === n ? null : n; paint(); if (onPick) onPick(sel); };
+  for (const g of svg.querySelectorAll('g.nd')) g.onclick = () => { const n = +g.dataset.n; sel = sel === n ? null : n; if (inPanel) mapSel = sel; paint(); if (onPick) onPick(sel); };
+  if (sel !== null) paint();
 }
 function wireMap(box, f, plan) {
   const svg = box.querySelector('#bmap-box svg'); if (!svg) return;
@@ -1137,12 +1139,21 @@ function gateHtml(f, g) {
     </form>
   </div>`;
 }
+$('pdetail').addEventListener('focusout', () => { setTimeout(() => { const box = $('pdetail'); if (box.dataset.pending && !box.contains(document.activeElement)) renderFeature(); }, 80); });
+let mapSel = null;
 function renderFeature() {
   const d0 = model.daemon || {};
   const copies = features.filter((x) => x.key === picked);
   const f = copies.find((c) => c.pc_id === d0.pc_id) || copies[0]; const box = $('pdetail');
-  if (!f) { box.innerHTML = ''; return; }
+  if (!f) { box.innerHTML = ''; box.dataset.sig = ''; return; }
   const pcs = copies.map((c) => ({ pc_id: c.pc_id, name: c.pc_name, ready: (c.branches || []).length > 0 || !(c.fetched_repos || []).length, sync: c.sync || {} }));
+  // Redraw only when something changed, never under your hands, and keep your place.
+  const sig = JSON.stringify([f, pcs, meta.work || null]);
+  if (box.dataset.sig === sig && box.innerHTML) return;
+  const focused = document.activeElement;
+  if (focused && box.contains(focused) && /^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)) { box.dataset.pending = '1'; return; }
+  const scroller = [box, box.parentElement, document.scrollingElement].find((el) => el && el.scrollHeight > el.clientHeight + 4) || box;
+  const keep = { top: scroller.scrollTop, forms: [...box.querySelectorAll('.form')].filter((x) => x.id && x.style.display !== 'none' && x.style.display !== '').map((x) => x.id) };
   const plan = f.plan;
   const h = [];
   const plItem = (k) => (f.plane && f.plane.items && f.plane.items[k]) || null;
@@ -1175,6 +1186,9 @@ function renderFeature() {
     for (const j of hist.slice(0, 12)) h.push(`<div class="srow" style="grid-template-columns:52px 1fr auto"><div class="n" style="font-size:10px">${hm(j.ts)}</div><div><div class="g" style="${j.undone ? 'text-decoration:line-through;color:var(--dim)' : ''}">${esc(j.title)}</div><div class="i">${esc((j.kind || '').toUpperCase())}${j.commit ? ' · ' + esc(j.commit.slice(0, 7)) : j.files && j.files.length ? ' · NOT COMMITTED' : ''}${j.undone ? ' · ROLLED BACK' : ''}</div></div><div class="a">${j.undoable && !j.undone ? `<button class="btn rb" type="button" data-id="${j.id}">ROLL BACK</button>` : ''}</div></div>`);
   }
   box.innerHTML = h.join('');
+  box.dataset.sig = sig; box.dataset.pending = '';
+  for (const id of keep.forms) { const el = box.querySelector('#' + id); if (el) el.style.display = 'grid'; }
+  scroller.scrollTop = keep.top;
   for (const b of box.querySelectorAll('button.rb')) b.onclick = async () => {
     if (!confirm('Roll back this entry? Its commit is reverted on the feature branch.')) return;
     b.disabled = true; b.textContent = 'ROLLING BACK…';
