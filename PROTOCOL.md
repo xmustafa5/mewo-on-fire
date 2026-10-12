@@ -922,3 +922,23 @@ sleep (`caffeinate -i` tied to its pid); a closed lid still sleeps a
 MacBook. A headless session's brief says it runs unattended: where the
 plan says to ask or to run grill-me, it takes the most reasonable
 reading, records the choice in OPEN_QUESTIONS.md, and continues.
+
+# v3.0 — build with me
+
+`build_set {attended: true}` (with `on: true`; the console's BUILD WITH
+ME button) runs the same build autopilot, but each session opens in a
+terminal window of its own on the PC (Terminal on macOS; on Linux the
+desktop's default terminal through `xdg-terminal-exec`, else the first
+known one), running Claude Code interactively in its worktree with the
+session's prompt as its first message, on the tier's model, permissions
+skipped as for a headless run. Its brief says someone is watching:
+where the plan says to ask or to run grill-me, it asks and waits, and
+the hooks bring the question to the phones too. A small script under
+`<state>/runs/` records the pid and then becomes Claude Code, so the run
+is tracked like a headless one: while its window is open nothing reminds
+or restarts it, Stop now ends it, and a window closed without a pull
+request is run again. Once its pull request is open, an open window no
+longer counts against "at a time". Reviews stay headless.
+`attended: false` (BUILD EVERYTHING) goes back to headless sessions;
+leaving it out (resume, pause, merge on pass) keeps the setting.
+`flow.build.attended` carries it.

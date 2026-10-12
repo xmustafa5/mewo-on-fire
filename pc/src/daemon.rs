@@ -191,7 +191,7 @@ impl AppState {
                     "autopilot": st.autopilot,
                     "estimates": st.estimates,
                     "estimates_done": st.estimates_done,
-                    "build": {"on": st.build_auto, "parallel": if st.build_parallel == 0 { 2 } else { st.build_parallel }, "review": !st.build_no_review, "resume_at": st.build_resume_at, "within_hours": crate::clock::within_now(), "merge_on_pass": st.build_merge_on_pass},
+                    "build": {"on": st.build_auto, "parallel": if st.build_parallel == 0 { 2 } else { st.build_parallel }, "review": !st.build_no_review, "resume_at": st.build_resume_at, "within_hours": crate::clock::within_now(), "merge_on_pass": st.build_merge_on_pass, "attended": st.build_attended},
                     "log": st.log,
                     "released_at": st.released_at,
                     "closed_at": st.closed_at,
@@ -1415,7 +1415,7 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
             let attempt = s.attempts + 1;
             let prompt = format!("{}\n\n(Attempt {attempt} of this session: the earlier one stopped without a pull request. Continue from the branch as it is, do not redo what is done{}.)", s.prompt, if attempt >= 3 { "; policy 9.1: run this attempt one tier up" } else { "" });
             let tier = if attempt >= 3 { s.tier.saturating_sub(1).max(1) } else { s.tier };
-            if let Err(e) = start_headless(&state, ws, f, s, &prompt, tier, &format!("Start session {} again", s.n)).await {
+            if let Err(e) = start_build_session(&state, ws, f, s, &prompt, tier, &format!("Start session {} again", s.n), st.build_attended).await {
                 flow::update(ws, &f.key, |x| x.note(format!("Could not run session {} again: {e}", s.n)));
             } else {
                 flow::update(ws, &f.key, |x| {
@@ -1439,22 +1439,25 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     // session the hooks still call running (unless its headless process is
     // gone: a Stop event lost in a daemon restart). Merged sessions never.
     let hook_running = |s: &policy::PlanSession| s.running && last_of(s.n).map(|r| r.pid == 0 || runner::alive(r.pid)).unwrap_or(true);
-    let active = |s: &policy::PlanSession| s.effective != "merged" && (hook_running(s) || live(s.n) || (s.effective == "progress" && fresh(s.n)));
+    // A window you watch stays open after its pull request: from then on it holds no slot.
+    let active = |s: &policy::PlanSession| s.effective != "merged" && (hook_running(s) || (live(s.n) && !(st.build_attended && s.effective == "review")) || (s.effective == "progress" && fresh(s.n)));
     let busy = plan.sessions.iter().filter(|s| active(s)).count();
     if busy >= parallel {
         return;
     }
     // Every session runs in its own worktree, so the only limit is `parallel`.
     if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n) && !live(s.n)) {
-        if let Err(e) = start_headless(&state, ws, f, s, &s.prompt, s.tier, &format!("Start session {}", s.n)).await {
+        if let Err(e) = start_build_session(&state, ws, f, s, &s.prompt, s.tier, &format!("Start session {}", s.n), st.build_attended).await {
             flow::update(ws, &f.key, |x| x.note(format!("Could not start session {}: {e}", s.n)));
         }
     }
 }
 
-/// A plan session run headless by the build autopilot: the plan says In
-/// progress, the run is remembered with its pid, History gets the start.
-async fn start_headless(state: &Arc<AppState>, ws: &Path, f: &policy::Feature, s: &policy::PlanSession, prompt: &str, tier: u8, title: &str) -> Result<u32, String> {
+/// A plan session started by the build autopilot, headless or, with
+/// `attended` ("Build with me"), in a terminal window you watch: the plan
+/// says In progress, the run is remembered with its pid, History gets the
+/// start.
+async fn start_build_session(state: &Arc<AppState>, ws: &Path, f: &policy::Feature, s: &policy::PlanSession, prompt: &str, tier: u8, title: &str, attended: bool) -> Result<u32, String> {
     // The repository on the feature branch first (policy 7.2).
     if s.folder != ws.to_string_lossy() {
         let (folder, branch) = (PathBuf::from(&s.folder), f.branch.clone());
@@ -1470,18 +1473,29 @@ async fn start_headless(state: &Arc<AppState>, ws: &Path, f: &policy::Feature, s
         let branch = format!("{}-s{}", f.branch, s.n);
         let (ws2, repo, n, b2, base) = (ws.to_path_buf(), s.repo.clone(), s.n, branch.clone(), f.branch.clone());
         let wt = tokio::task::spawn_blocking(move || policy::worktree_for(&ws2, &repo, &format!("S{n}"), &b2, &base)).await.map_err(|e| e.to_string())??;
-        prompt = format!("This session runs in its own git worktree of {} at {} , on branch {branch} made from {}; other sessions work in other worktrees of the same repository at the same time. The workspace root (torch-main, with context/, app-notebooks/ and code/) is {}; paths in the brief that start with code/{}/ mean this worktree. Commit on {branch} and open the pull request into {}. It runs unattended: nobody is there to answer a question tonight. Where the brief says to ask, or to run grill-me, take the most reasonable reading, write the choice and its reason into app-notebooks/{}/features/{}/OPEN_QUESTIONS.md with you as owner, and continue; stop without a pull request only for a blocker you truly cannot work around, and say exactly what it is.\n\n{prompt}", s.repo, wt.display(), f.branch, ws.display(), s.repo.trim_start_matches("code/"), f.branch, f.app, f.slug);
+        let who = if attended {
+            "Someone is watching this session in its window: where the brief says to ask, or to run grill-me, ask, and wait for the answer.".to_string()
+        } else {
+            format!("It runs unattended: nobody is there to answer a question tonight. Where the brief says to ask, or to run grill-me, take the most reasonable reading, write the choice and its reason into app-notebooks/{}/features/{}/OPEN_QUESTIONS.md with you as owner, and continue; stop without a pull request only for a blocker you truly cannot work around, and say exactly what it is.", f.app, f.slug)
+        };
+        prompt = format!("This session runs in its own git worktree of {} at {} , on branch {branch} made from {}; other sessions work in other worktrees of the same repository at the same time. The workspace root (torch-main, with context/, app-notebooks/ and code/) is {}; paths in the brief that start with code/{}/ mean this worktree. Commit on {branch} and open the pull request into {}. {who}\n\n{prompt}", s.repo, wt.display(), f.branch, ws.display(), s.repo.trim_start_matches("code/"), f.branch);
         folder = wt.to_string_lossy().into_owned();
     }
-    let pid = runner::spawn(&folder, &prompt, runner::model_for(tier), &format!("{}-S{}", f.slug, s.n))?;
+    let tag = format!("{}-S{}", f.slug, s.n);
+    let pid = if attended {
+        let (folder2, prompt2, window) = (folder.clone(), prompt.clone(), format!("{} · Session {}", f.slug, s.n));
+        tokio::task::spawn_blocking(move || runner::spawn_visible(&folder2, &prompt2, runner::model_for(tier), &tag, &window)).await.map_err(|e| e.to_string())??
+    } else {
+        runner::spawn(&folder, &prompt, runner::model_for(tier), &tag)?
+    };
     let (ws2, key, n) = (ws.to_path_buf(), f.key.clone(), s.n);
     let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, "In progress", "")).await;
     let started = now_ms();
     flow::update(ws, &f.key, |x| {
         x.runs.push(flow::Run { step: 9, started, note: s.n.to_string(), pid, folder: folder.clone() });
-        x.note(format!("{title} (headless, pid {pid}, {})", folder.rsplit('/').next().unwrap_or("")));
+        x.note(format!("{title} ({}, pid {pid}, {})", if attended { "in a window" } else { "headless" }, folder.rsplit('/').next().unwrap_or("")));
     });
-    flow::journal(ws, &f.key, "start", &format!("{title}: {}", s.goal), Vec::new(), "", true, json!({"started": started, "session": s.n, "step": 9, "pid": pid, "headless": true, "folder": folder}));
+    flow::journal(ws, &f.key, "start", &format!("{title}: {}", s.goal), Vec::new(), "", true, json!({"started": started, "session": s.n, "step": 9, "pid": pid, "headless": !attended, "folder": folder}));
     let _ = state;
     Ok(pid)
 }

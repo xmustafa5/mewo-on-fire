@@ -700,7 +700,7 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                 } else {
                     req.get("resume_at").and_then(Value::as_u64).unwrap_or(0)
                 };
-                let mut v = flow::set_build(&ws, &f, on, req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool), resume_at, req.get("merge_on_pass").and_then(Value::as_bool));
+                let mut v = flow::set_build(&ws, &f, on, req.get("parallel").and_then(Value::as_u64).map(|p| p as u8), req.get("review").and_then(Value::as_bool), resume_at, req.get("merge_on_pass").and_then(Value::as_bool), req.get("attended").and_then(Value::as_bool));
                 if !on && req.get("stop_running").and_then(Value::as_bool).unwrap_or(false) {
                     let st = flow::get(&ws, &f.key);
                     let pids = flow::alive_pids(&st);

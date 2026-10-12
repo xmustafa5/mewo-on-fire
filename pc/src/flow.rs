@@ -105,6 +105,10 @@ pub struct FlowState {
     /// with PASS (your choice: no second GitHub account, no approval on
     /// GitHub, the review comment is the record).
     pub build_merge_on_pass: bool,
+    /// v3.0: "Build with me": each session opens in a terminal window you
+    /// watch, and asks you where the plan says to ask, instead of running
+    /// headless and deciding by itself.
+    pub build_attended: bool,
 }
 
 impl FlowState {
@@ -356,15 +360,15 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
 
 /// v2.6: the build autopilot on or off, with how many sessions run at a
 /// time and whether Claude reviews and merges the pull requests.
-pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review: Option<bool>, resume_at: u64, merge_on_pass: Option<bool>) -> Value {
+pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review: Option<bool>, resume_at: u64, merge_on_pass: Option<bool>, attended: Option<bool>) -> Value {
     let prev = get(ws, &f.key).build_auto;
     // Only the merge switch: no journal, no change to the rest.
-    if let (Some(m), true) = (merge_on_pass, on == prev && parallel.is_none() && review.is_none() && resume_at == 0) {
+    if let (Some(m), true) = (merge_on_pass, on == prev && parallel.is_none() && review.is_none() && attended.is_none() && resume_at == 0) {
         let st = update(ws, &f.key, |st| {
             st.build_merge_on_pass = m;
             st.note(if m { "Merge on pass on: a pull request whose review ends with PASS is merged by the daemon" } else { "Merge on pass off" });
         });
-        return json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review, "resume_at": st.build_resume_at, "merge_on_pass": st.build_merge_on_pass});
+        return json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review, "resume_at": st.build_resume_at, "merge_on_pass": st.build_merge_on_pass, "attended": st.build_attended});
     }
     let st = update(ws, &f.key, |st| {
         if let Some(m) = merge_on_pass {
@@ -378,6 +382,9 @@ pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review:
         if let Some(r) = review {
             st.build_no_review = !r;
         }
+        if let Some(a) = attended {
+            st.build_attended = a;
+        }
         if st.build_parallel == 0 {
             st.build_parallel = 2;
         }
@@ -387,14 +394,14 @@ pub fn set_build(ws: &Path, f: &Feature, on: bool, parallel: Option<u8>, review:
         st.note(if on { "Build autopilot on".to_string() } else if resume_at > 0 { "Build paused: what runs finishes, nothing new starts until it resumes".to_string() } else { "Build autopilot off".to_string() });
     });
     let title = if on {
-        format!("Build autopilot on: {} at a time, {}", st.build_parallel, if st.build_no_review { "you merge" } else { "Claude reviews and merges" })
+        format!("Build autopilot on: {} at a time, {}, {}", st.build_parallel, if st.build_attended { "in windows you watch" } else { "headless" }, if st.build_no_review { "you merge" } else { "Claude reviews and merges" })
     } else if resume_at > 0 {
         "Build paused".to_string()
     } else {
         "Build autopilot off".to_string()
     };
     journal(ws, &f.key, "build", &title, Vec::new(), "", true, json!({"prev": prev, "on": on}));
-    json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review, "resume_at": st.build_resume_at, "merge_on_pass": st.build_merge_on_pass})
+    json!({"ok": true, "on": st.build_auto, "parallel": st.build_parallel, "review": !st.build_no_review, "resume_at": st.build_resume_at, "merge_on_pass": st.build_merge_on_pass, "attended": st.build_attended})
 }
 
 /// v2.7: the headless runs and reviews of a feature that are alive.

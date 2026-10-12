@@ -85,6 +85,13 @@ pub fn model_for(tier: u8) -> Option<&'static str> {
     }
 }
 
+/// launchd and systemd give the daemon a short PATH; a session needs
+/// where Homebrew, the installer and the user put their tools.
+fn session_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    format!("{home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/Library/Developer/CommandLineTools/usr/bin:{}", std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string()))
+}
+
 /// Starts a session in `folder` that runs `prompt` to the end with
 /// permissions skipped (the Mewo guard hook still refuses pushes to
 /// main). Returns its pid; its output goes to `<state>/runs/<tag>-<ts>.log`.
@@ -100,14 +107,12 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
     let log = dir.join(format!("{safe}-{}.log", now_ms()));
     let out = File::create(&log).map_err(|e| e.to_string())?;
     let err = File::create(log.with_extension("err")).map_err(|e| e.to_string())?;
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = format!("{home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/Library/Developer/CommandLineTools/usr/bin:{}", std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string()));
     let mut cmd = Command::new(bin);
     cmd.current_dir(folder).arg("-p").arg(prompt).arg("--dangerously-skip-permissions").arg("--output-format").arg("text");
     if let Some(m) = model {
         cmd.arg("--model").arg(m);
     }
-    cmd.env("PATH", path).env("MEWO_HEADLESS", "1").stdin(Stdio::null()).stdout(out).stderr(err);
+    cmd.env("PATH", session_path()).env("MEWO_HEADLESS", "1").stdin(Stdio::null()).stdout(out).stderr(err);
     // The pinned GitHub account, whatever gh has active.
     cmd.envs(crate::github::envs());
     // Its own process group: a daemon restart must not take the session down.
@@ -121,6 +126,94 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
         g.get_or_insert_with(HashMap::new).insert(pid, code);
     });
     Ok(pid)
+}
+
+/// v3.0: a session you watch ("Build with me"): Claude Code in a terminal
+/// window of its own, in `folder`, with `prompt` as its first message.
+/// Permissions are skipped as for a headless run, but a question waits
+/// for you, in the window and on the phones. A small script under
+/// `<state>/runs/` records its pid and then becomes Claude Code, so the
+/// returned pid is the session's own: alive while the window is open.
+pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str, title: &str) -> Result<u32, String> {
+    ready()?;
+    let bin = claude_bin().ok_or_else(|| format!("Claude Code is not installed on {HERE}"))?;
+    if !std::path::Path::new(folder).is_dir() {
+        return Err(format!("No such folder on {HERE}: {folder}"));
+    }
+    let dir = paths::state_dir().join("runs");
+    let _ = fs::create_dir_all(&dir);
+    let safe: String = tag.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+    let base = format!("{safe}-{}", now_ms());
+    let prompt_file = dir.join(format!("{base}.prompt"));
+    let pid_file = dir.join(format!("{base}.pid"));
+    let script = dir.join(format!("{base}.sh"));
+    fs::write(&prompt_file, prompt).map_err(|e| e.to_string())?;
+    let sq = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
+    let mut sh = String::from("#!/bin/sh\n# Mewo on Fire: a build session to watch (Build with me).\n");
+    sh.push_str(&format!("export PATH={}\n", sq(&session_path())));
+    // The pinned GitHub account, read from gh's store here: no token on disk.
+    let user = crate::github::user();
+    if let (Some(gh), false) = (crate::prs::gh_path(), user.is_empty()) {
+        sh.push_str(&format!("GH_TOKEN=$(env -u GH_TOKEN {} auth token --user {} 2>/dev/null) && [ -n \"$GH_TOKEN\" ] && export GH_TOKEN\n", sq(&gh.to_string_lossy()), sq(&user)));
+    }
+    sh.push_str(&format!("echo $$ > {}\n", sq(&pid_file.to_string_lossy())));
+    sh.push_str(&format!("printf '\\033]0;%s\\007' {}\n", sq(title)));
+    sh.push_str(&format!("cd {} || exit 1\n", sq(folder)));
+    sh.push_str(&format!(
+        "exec {} --dangerously-skip-permissions{} \"$(cat {})\"\n",
+        sq(&bin.to_string_lossy()),
+        model.map(|m| format!(" --model {m}")).unwrap_or_default(),
+        sq(&prompt_file.to_string_lossy())
+    ));
+    fs::write(&script, sh).map_err(|e| e.to_string())?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    }
+    open_terminal(&script.to_string_lossy())?;
+    // The window takes a moment; its script writes the pid first thing.
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if let Some(pid) = fs::read_to_string(&pid_file).ok().and_then(|t| t.trim().parse::<u32>().ok()).filter(|p| *p != 0) {
+            return Ok(pid);
+        }
+    }
+    Err(format!("No terminal window opened on {HERE} for the session"))
+}
+
+/// Runs `script` in a new terminal window: Terminal on macOS; on Linux
+/// the desktop's default terminal (xdg-terminal-exec), else the first
+/// known one installed.
+fn open_terminal(script: &str) -> Result<(), String> {
+    let s = script.to_string();
+    let tries: Vec<(&str, Vec<String>)> = if cfg!(target_os = "macos") {
+        vec![("open", vec!["-a".into(), "Terminal".into(), s])]
+    } else {
+        vec![
+            ("xdg-terminal-exec", vec![s.clone()]),
+            ("ptyxis", vec!["--new-window".into(), "--".into(), s.clone()]),
+            ("gnome-terminal", vec!["--".into(), s.clone()]),
+            ("konsole", vec!["-e".into(), s.clone()]),
+            ("xfce4-terminal", vec!["-x".into(), s.clone()]),
+            ("kitty", vec![s.clone()]),
+            ("alacritty", vec!["-e".into(), s.clone()]),
+            ("x-terminal-emulator", vec!["-e".into(), s.clone()]),
+            ("xterm", vec!["-e".into(), s]),
+        ]
+    };
+    let dirs = session_path();
+    for (name, args) in tries {
+        let Some(bin) = dirs.split(':').chain(["/usr/bin", "/bin"]).map(|d| PathBuf::from(d).join(name)).find(|p| p.is_file()) else { continue };
+        let mut cmd = Command::new(bin);
+        cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
+        if let Ok(mut child) = cmd.spawn() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Ok(());
+        }
+    }
+    Err(format!("No terminal app found on {HERE} to open the session in"))
 }
 
 /// Still running?
