@@ -573,6 +573,8 @@ footer .seg { display: flex; gap: 22px; }
 (() => {
 'use strict';
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Every canvas loop paints at 30 frames a second: enough for this motion, half the work.
+const FRAME_MS = 1000 / 30;
 const C = {
   cyan: '#4fd1ff', fire: '#ff6b35', heat: '#ff3d1f', amber: '#ffb347', ok: '#3dd68c', ash: '#6b7280', mewo: '#2f6bff', text: '#dbeafe', dim: '#7b93ab',
 };
@@ -617,9 +619,11 @@ setTimeout(() => { const b = $('boot'); b.classList.add('hide'); setTimeout(() =
 // ---------- brand mark (small reactor) ----------
 (function mark() {
   const cv = $('mark'), ctx = cv.getContext('2d');
-  let t = 0;
-  const draw = () => {
-    t += reduced ? 0 : 0.02;
+  let t = 0, lastMark = 0;
+  const draw = (now = 0) => {
+    if (now - lastMark < FRAME_MS * 2) { requestAnimationFrame(draw); return; }
+    lastMark = now;
+    t += reduced ? 0 : 0.04;
     ctx.clearRect(0, 0, 60, 60);
     ctx.save(); ctx.translate(30, 30);
     for (let i = 0; i < 3; i++) {
@@ -637,30 +641,40 @@ setTimeout(() => { const b = $('boot'); b.classList.add('hide'); setTimeout(() =
 // ---------- background ----------
 const bg = $('bg'), bgx = bg.getContext('2d');
 const dust = [];
+// The gradient and the grid never change between resizes: painted once, copied each frame.
+const bgStill = document.createElement('canvas');
 function sizeBg() {
-  const dpr = devicePixelRatio || 1;
+  const dpr = Math.min(1.5, devicePixelRatio || 1);
   bg.width = innerWidth * dpr; bg.height = innerHeight * dpr; bgx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = innerWidth, h = innerHeight;
+  bgStill.width = bg.width; bgStill.height = bg.height;
+  const sx = bgStill.getContext('2d'); sx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const g = sx.createRadialGradient(w / 2, h * 0.45, 0, w / 2, h * 0.45, Math.max(w, h) * 0.75);
+  g.addColorStop(0, '#0a1626'); g.addColorStop(0.5, '#060b13'); g.addColorStop(1, '#03050a');
+  sx.fillStyle = g; sx.fillRect(0, 0, w, h);
+  sx.strokeStyle = 'rgba(79,209,255,0.045)'; sx.lineWidth = 1;
+  sx.beginPath();
+  for (let x = 0; x < w; x += 48) { sx.moveTo(x + 0.5, 0); sx.lineTo(x + 0.5, h); }
+  for (let y = 0; y < h; y += 48) { sx.moveTo(0, y + 0.5); sx.lineTo(w, y + 0.5); }
+  sx.stroke();
   dust.length = 0;
-  for (let i = 0; i < 70; i++) dust.push({ x: Math.random() * innerWidth, y: Math.random() * innerHeight, r: Math.random() * 1.4 + 0.3, s: Math.random() * 0.25 + 0.05, a: Math.random() * 0.5 + 0.2 });
+  for (let i = 0; i < 50; i++) dust.push({ x: Math.random() * w, y: Math.random() * h, r: Math.random() * 1.4 + 0.3, s: Math.random() * 0.5 + 0.1, a: Math.random() * 0.5 + 0.2 });
 }
 sizeBg(); addEventListener('resize', sizeBg);
-function drawBg() {
+let lastBg = 0;
+function drawBg(now = 0) {
+  if (now - lastBg < FRAME_MS) { requestAnimationFrame(drawBg); return; }
+  lastBg = now;
   const w = innerWidth, h = innerHeight;
-  const g = bgx.createRadialGradient(w / 2, h * 0.45, 0, w / 2, h * 0.45, Math.max(w, h) * 0.75);
-  g.addColorStop(0, '#0a1626'); g.addColorStop(0.5, '#060b13'); g.addColorStop(1, '#03050a');
-  bgx.fillStyle = g; bgx.fillRect(0, 0, w, h);
-  // grid
-  bgx.strokeStyle = 'rgba(79,209,255,0.045)'; bgx.lineWidth = 1;
+  bgx.drawImage(bgStill, 0, 0, w, h);
+  bgx.fillStyle = 'rgba(79,209,255,0.2)';
   bgx.beginPath();
-  for (let x = 0; x < w; x += 48) { bgx.moveTo(x + 0.5, 0); bgx.lineTo(x + 0.5, h); }
-  for (let y = 0; y < h; y += 48) { bgx.moveTo(0, y + 0.5); bgx.lineTo(w, y + 0.5); }
-  bgx.stroke();
-  // dust
   for (const d of dust) {
     if (!reduced) { d.y -= d.s; if (d.y < -4) { d.y = h + 4; d.x = Math.random() * w; } }
-    bgx.beginPath(); bgx.arc(d.x, d.y, d.r, 0, Math.PI * 2); bgx.fillStyle = `rgba(79,209,255,${d.a * 0.45})`; bgx.fill();
+    bgx.moveTo(d.x + d.r, d.y); bgx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
   }
-  requestAnimationFrame(drawBg);
+  bgx.fill();
+  if (!reduced) requestAnimationFrame(drawBg);
 }
 drawBg();
 
@@ -1406,8 +1420,11 @@ function roundRectLabel(x, y, text, color, size = 11, weight = 600) {
 const trunc = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
 
 let last = performance.now(), tglob = 0;
+let netRect = { left: 0, top: 0 };
+setInterval(() => { netRect = net.getBoundingClientRect(); }, 1000);
 function drawNet(now) {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now; tglob += reduced ? 0 : dt;
+  if (now - last < FRAME_MS) { requestAnimationFrame(drawNet); return; }
+  const dt = Math.min(0.08, (now - last) / 1000); last = now; tglob += reduced ? 0 : dt;
   nx.clearRect(0, 0, W, H);
   if (!model.daemon) { requestAnimationFrame(drawNet); return; }
   // ease nodes
@@ -1432,8 +1449,8 @@ function drawNet(now) {
   // particles
   for (const p of particles) {
     const x = p.a.x + (p.b.x - p.a.x) * p.p, y = p.a.y + (p.b.y - p.a.y) * p.p;
-    nx.beginPath(); nx.arc(x, y, p.r, 0, Math.PI * 2); nx.fillStyle = p.c; nx.shadowColor = p.c; nx.shadowBlur = 12; nx.globalAlpha = 0.9; nx.fill();
-    nx.shadowBlur = 0; nx.globalAlpha = 1;
+    nx.beginPath(); nx.arc(x, y, p.r + 1, 0, Math.PI * 2); nx.fillStyle = p.c; nx.globalAlpha = 0.85; nx.fill();
+    nx.globalAlpha = 1;
   }
   // core reactor
   const core = nodes.get('core');
@@ -1454,9 +1471,9 @@ function drawNet(now) {
   // The one robot head: this PC, its face saying what Claude is doing here.
   const waiting = model.sessions.some((s) => s.state === 'waiting');
   const fresh = model.sessions.some((s) => s.state !== 'ended' && s.state !== 'working' && s.last_ts && Date.now() - s.last_ts < 180000);
-  const ch = netHead('core', { shape: 'rectangle', state: hot ? 'working' : waiting ? 'listening' : fresh ? 'happy' : 'idle', size: 88, antenna: true, color: '#1b3350', screenColor: hot ? C.fire : waiting ? C.amber : C.cyan });
+  const ch = netHead('core', { shape: 'rectangle', state: hot ? 'working' : waiting ? 'listening' : fresh ? 'happy' : 'idle', size: 88, antenna: true, color: '#1b3350', screenColor: hot ? C.fire : waiting ? C.amber : C.cyan, fps: 24 });
   if (ch && ch.canvas.width) {
-    const nr = net.getBoundingClientRect(); ch.pointerAt(nr.left + core.x, nr.top + core.y); const b = ch.box;
+    ch.pointerAt(netRect.left + core.x, netRect.top + core.y); const b = ch.box;
     nx.drawImage(ch.canvas, -b.cx, -b.cy + 6, b.w, b.h);
   } else {
     nx.beginPath(); nx.arc(0, 0, 14 * pulse, 0, Math.PI * 2); nx.fillStyle = hot ? C.fire : C.cyan; nx.shadowColor = hot ? C.fire : C.cyan; nx.shadowBlur = 30; nx.fill(); nx.shadowBlur = 0;
@@ -1515,7 +1532,7 @@ function drawNet(now) {
     nx.beginPath(); nx.arc(0, 0, r, 0, Math.PI * 2);
     nx.fillStyle = col; nx.globalAlpha *= 0.18; nx.fill(); nx.globalAlpha = ended ? 0.55 : age;
     nx.strokeStyle = col; nx.lineWidth = 1.6; if (ended) nx.setLineDash([3, 3]);
-    if (!ended) { nx.shadowColor = col; nx.shadowBlur = isH ? 26 : 14; }
+    if (isH || s.state === 'working' || s.state === 'waiting') { nx.shadowColor = col; nx.shadowBlur = isH ? 26 : 14; }
     nx.stroke(); nx.setLineDash([]); nx.shadowBlur = 0;
     nx.beginPath(); nx.arc(0, 0, r * 0.32, 0, Math.PI * 2); nx.fillStyle = col; nx.fill();
     if ((s.queued || 0) > 0) { nx.beginPath(); nx.arc(r * 0.8, -r * 0.8, 5, 0, Math.PI * 2); nx.fillStyle = C.mewo; nx.shadowColor = C.mewo; nx.shadowBlur = 10; nx.fill(); nx.shadowBlur = 0; }
