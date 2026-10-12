@@ -1037,6 +1037,10 @@ fn watchdog() {
         .name("mewo-watchdog".to_string())
         .spawn(|| {
             let mut misses = 0u32;
+            // A restart is when macOS may hold the daemon out of the user's
+            // folders until it is allowed; killing it then only repeats the
+            // wait. No kills in the first five minutes.
+            let born = std::time::Instant::now();
             loop {
                 std::thread::sleep(Duration::from_secs(20));
                 let ok = control::request(&json!({"cmd": "status"}), Duration::from_secs(10)).map(|v| v.get("ok").and_then(Value::as_bool).unwrap_or(false)).unwrap_or(false);
@@ -1046,6 +1050,10 @@ fn watchdog() {
                 }
                 misses += 1;
                 eprintln!("mewo: watchdog: no answer from the control socket ({misses}/3)");
+                if misses >= 3 && born.elapsed() < Duration::from_secs(300) {
+                    eprintln!("mewo: watchdog: still in the first minutes after a start, not restarting (is Files and Folders access allowed?)");
+                    continue;
+                }
                 if misses >= 3 {
                     eprintln!("mewo: watchdog: restarting the daemon");
                     std::process::exit(70);
