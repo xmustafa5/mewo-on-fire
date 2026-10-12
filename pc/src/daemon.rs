@@ -1242,6 +1242,36 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
             }
         }
     }
+    // Worktrees of merged sessions go, whenever they are still there (2.3 GB each on the backend).
+    {
+        let ws3 = ws.to_path_buf();
+        let gone: Vec<(String, u32)> = plan.sessions.iter().filter(|s| s.effective == "merged" && !s.repo.is_empty()).map(|s| (s.repo.clone(), s.n)).collect();
+        let _ = tokio::task::spawn_blocking(move || {
+            for (repo, n) in gone {
+                let name = format!("{}-S{n}", repo.rsplit('/').next().unwrap_or(&repo));
+                if ws3.join("code").join(".worktrees").join(&name).exists() || ws3.join("code").join(".worktrees").join(format!("{name}-review")).exists() {
+                    policy::remove_worktree(&ws3, &repo, &format!("S{n}"));
+                    policy::remove_worktree(&ws3, &repo, &format!("S{n}-review"));
+                }
+            }
+        })
+        .await;
+    }
+    // Sessions the hooks still call working whose headless process is gone.
+    {
+        let pid_of = |n: u32| st.runs.iter().rev().find(|r| r.step == 9 && r.note == n.to_string()).map(|r| r.pid).unwrap_or(0);
+        let review_pid_of = |n: u32| st.history.iter().rev().find(|j| j.kind == "review" && j.data.get("session").and_then(Value::as_u64) == Some(n as u64)).and_then(|j| j.data.get("pid").and_then(Value::as_u64)).unwrap_or(0) as u32;
+        for x in sessions.iter().filter(|x| x.feature == f.key && x.state == "working") {
+            let quiet = now.saturating_sub(x.last_ts);
+            let dead_run = x.plan_session != 0 && { let p = pid_of(x.plan_session); p != 0 && !runner::alive(p) };
+            let review_n = x.cwd.rsplit('/').next().and_then(|d| d.strip_suffix("-review")).and_then(|d| d.rsplit("-S").next()).and_then(|n| n.parse::<u32>().ok());
+            let dead_review = review_n.map(|n| { let p = review_pid_of(n); p != 0 && !runner::alive(p) }).unwrap_or(false);
+            if ((dead_run || dead_review) && quiet > 3 * min) || quiet > 90 * min {
+                let update = lock(&state.sessions).mark_idle(&x.id);
+                state.push_session(update);
+            }
+        }
+    }
     // Every session merged: the build is done.
     if !plan.sessions.is_empty() && plan.sessions.iter().all(|s| s.effective == "merged") {
         flow::update(ws, &f.key, |x| {

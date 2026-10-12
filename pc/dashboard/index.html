@@ -289,6 +289,11 @@ main {
 /* ---------- center ---------- */
 #center { position: relative; overflow: hidden; }
 #net { width: 100%; height: 100%; display: block; cursor: crosshair; }
+#fnet { position: absolute; inset: 0; width: 100%; height: 100%; display: none; cursor: crosshair; }
+#fdetail { position: absolute; top: 52px; right: 14px; bottom: 14px; width: 440px; display: none; z-index: 6; background: rgba(6,12,20,.96); border: 1px solid var(--cyan-line); box-shadow: 0 16px 50px rgba(0,0,0,.7); overflow: auto; padding: 12px 14px; }
+#fdetail.on { display: block; }
+#fdetail .hd { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; } #fdetail .hd > div:first-child { flex: 1; } #fdetail .hd .t { font-weight: 700; color: #fff; font-size: 14px; } #fdetail .hd .m { font: 10px var(--mono); letter-spacing: .14em; color: var(--dim); margin-top: 3px; }
+#fdetail .hd .x { cursor: pointer; background: none; border: 1px solid var(--cyan-dim); color: var(--dim); width: 28px; height: 28px; font-size: 14px; line-height: 1; }
 #tip {
   position: absolute; pointer-events: none; display: none; max-width: 300px; z-index: 5;
   background: rgba(6, 12, 20, 0.92); border: 1px solid var(--cyan-line); padding: 10px 12px;
@@ -495,7 +500,7 @@ footer .seg { display: flex; gap: 22px; }
       <div class="s">OPERATIONS CONSOLE</div>
     </div>
   </div>
-  <div class="views"><button id="v-net" class="on" type="button">NETWORK</button><button id="v-pipe" type="button">PIPELINE</button></div>
+  <div class="views"><button id="v-net" class="on" type="button">NETWORK</button><button id="v-feat" type="button">FEATURES</button><button id="v-pipe" type="button">PIPELINE</button></div>
   <div class="pc">
     <div class="name" id="pcname">—</div>
     <div class="state off" id="pcstate">LINKING</div>
@@ -536,6 +541,8 @@ footer .seg { display: flex; gap: 22px; }
   <section class="panel" id="center">
     <span class="c tl"></span><span class="c tr"></span><span class="c bl"></span><span class="c br"></span>
     <canvas id="net"></canvas>
+    <canvas id="fnet"></canvas>
+    <div id="fdetail"></div>
     <div id="pipe"><div id="plist"></div><div id="pdetail"><div class="msg" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);padding:20px">PICK A FEATURE</div></div></div>
     <div id="tip"></div>
     <button id="newbtn" type="button">+ NEW SESSION</button>
@@ -792,11 +799,87 @@ const STEPS = ['PRD draft', 'Estimates', 'Alignment', 'Design', 'Prototype', 'Ha
 let view = 'net', features = [], picked = null, signerName = '';
 try { signerName = localStorage.getItem('mewo.signer') || ''; } catch (e) {}
 function setView(v) {
-  view = v; $('v-net').classList.toggle('on', v === 'net'); $('v-pipe').classList.toggle('on', v === 'pipe');
-  $('pipe').classList.toggle('on', v === 'pipe'); $('net').style.visibility = v === 'pipe' ? 'hidden' : ''; $('newbtn').style.display = v === 'pipe' ? 'none' : '';
+  view = v; $('v-net').classList.toggle('on', v === 'net'); $('v-pipe').classList.toggle('on', v === 'pipe'); $('v-feat').classList.toggle('on', v === 'feat');
+  $('pipe').classList.toggle('on', v === 'pipe'); $('net').style.visibility = v === 'net' ? '' : 'hidden'; $('newbtn').style.display = v === 'net' ? '' : 'none';
+  $('fnet').style.display = v === 'feat' ? 'block' : 'none'; $('fdetail').classList.toggle('on', v === 'feat' && !!fpicked);
   if (v === 'pipe') renderPipeline();
+  if (v === 'feat') { sizeFnet(); requestAnimationFrame(drawFnet); if (fpicked) renderFeatureDetail(); }
 }
-$('v-net').addEventListener('click', () => setView('net')); $('v-pipe').addEventListener('click', () => setView('pipe'));
+$('v-net').addEventListener('click', () => setView('net')); $('v-pipe').addEventListener('click', () => setView('pipe')); $('v-feat').addEventListener('click', () => setView('feat'));
+// ---------- the features network (v2.9): one core per feature with sessions, its sessions around it ----------
+const fnet = $('fnet'), fx = fnet.getContext('2d'); let FW = 0, FH = 0, fmouse = { x: -1, y: -1 }, fhover = null, fpicked = null, flast = 0, ftime = 0, fdSig = '';
+function sizeFnet() { const dpr = Math.min(1.5, devicePixelRatio || 1), r = fnet.getBoundingClientRect(); FW = r.width; FH = r.height; fnet.width = FW * dpr; fnet.height = FH * dpr; fx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+addEventListener('resize', () => { if (view === 'feat') sizeFnet(); });
+fnet.addEventListener('mousemove', (e) => { const r = fnet.getBoundingClientRect(); fmouse = { x: e.clientX - r.left, y: e.clientY - r.top }; });
+fnet.addEventListener('mouseleave', () => { fmouse = { x: -1, y: -1 }; });
+fnet.addEventListener('click', () => { if (!fhover) return; if (fhover.kind === 'core') { fpicked = fhover.f.key; fdSig = ''; renderFeatureDetail(); } else openSessionDetail(fhover.f, fhover.s.n); });
+const sessColor = (s) => s.effective === 'merged' ? C.ok : s.effective === 'review' ? C.cyan : s.effective === 'progress' ? C.fire : s.effective === 'blocked' ? C.heat : s.effective === 'ready' ? C.amber : C.dim;
+const sessState = (e) => e === 'review' ? 'IN REVIEW' : e === 'progress' ? 'WORKING' : (e || '').toUpperCase();
+const liveOf = (f) => (model.sessions || []).filter((x) => x.feature === f.key);
+const activeFeatures = () => features.filter((f) => (f.plan && f.plan.sessions.some((s) => ['progress', 'review', 'ready', 'blocked'].includes(s.effective))) || liveOf(f).some((x) => x.state === 'working' || x.state === 'waiting'));
+function flabel(x, y, text, color, size = 11, weight = 600) { fx.font = `${weight} ${size}px ${getComputedStyle(document.body).getPropertyValue('--mono')}`; fx.textAlign = 'center'; fx.textBaseline = 'middle'; fx.fillStyle = color; fx.fillText(text, x, y); }
+function fnodes() {
+  const fs = activeFeatures(); const n = fs.length; const cx = FW / 2, cy = FH / 2 + 10; const R = n > 1 ? Math.min(FW, FH) * 0.3 : 0;
+  return fs.map((f, i) => {
+    const a = -Math.PI / 2 + (i / Math.max(1, n)) * Math.PI * 2; const x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R;
+    const sats = f.plan ? f.plan.sessions.filter((s) => s.effective !== 'waiting') : []; const ring = Math.min(190, Math.max(100, 70 + sats.length * 10));
+    return { kind: 'core', f, x, y, sats: sats.map((s, j) => { const b = -Math.PI / 2 + (j / Math.max(1, sats.length)) * Math.PI * 2; return { kind: 'sess', f, s, x: x + Math.cos(b) * ring, y: y + Math.sin(b) * ring }; }) };
+  });
+}
+function drawFnet(now) {
+  if (view !== 'feat') return;
+  if (now - flast < FRAME_MS) { requestAnimationFrame(drawFnet); return; }
+  const dt = Math.min(0.08, (now - flast) / 1000); flast = now; ftime += reduced ? 0 : dt;
+  fx.clearRect(0, 0, FW, FH);
+  const nodes = fnodes();
+  fhover = null; let best = 24;
+  for (const c of nodes) { for (const s of c.sats) { const d = Math.hypot(s.x - fmouse.x, s.y - fmouse.y); if (d < best) { best = d; fhover = s; } } const d = Math.hypot(c.x - fmouse.x, c.y - fmouse.y); if (d < 48 && (fhover === null || fhover.kind === 'core')) fhover = c; }
+  fnet.style.cursor = fhover ? 'pointer' : 'crosshair';
+  if (!nodes.length) { flabel(FW / 2, FH / 2, 'NO FEATURE HAS SESSIONS RUNNING', C.dim, 11, 700); requestAnimationFrame(drawFnet); return; }
+  for (const c of nodes) {
+    const f = c.f; const ss = f.plan ? f.plan.sessions : []; const running = ss.filter((s) => s.effective === 'progress').length, review = ss.filter((s) => s.effective === 'review').length, merged = ss.filter((s) => s.effective === 'merged').length;
+    const hot = running > 0, pk = fpicked === f.key, pulse = 1 + Math.sin(ftime * 2.2) * 0.05;
+    for (const s of c.sats) { fx.beginPath(); fx.moveTo(c.x, c.y); fx.lineTo(s.x, s.y); fx.strokeStyle = sessColor(s.s); fx.globalAlpha = s.s.effective === 'merged' ? 0.12 : 0.35; fx.lineWidth = 1; fx.stroke(); fx.globalAlpha = 1; }
+    fx.save(); fx.translate(c.x, c.y);
+    const glow = fx.createRadialGradient(0, 0, 0, 0, 0, 70); glow.addColorStop(0, hot ? 'rgba(255,107,53,0.30)' : 'rgba(79,209,255,0.25)'); glow.addColorStop(1, 'rgba(79,209,255,0)');
+    fx.fillStyle = glow; fx.beginPath(); fx.arc(0, 0, 70 * pulse, 0, Math.PI * 2); fx.fill();
+    for (const [r, sp, lw, col, dash] of [[40, 1, 0.9, C.cyan, [10, 6]], [32, -1.6, 1.4, hot ? C.fire : C.cyan, [2, 5]], [24, 0.7, 1, C.cyan, []]]) { fx.beginPath(); fx.setLineDash(dash); fx.lineDashOffset = -ftime * 20 * sp; fx.arc(0, 0, r, ftime * sp, ftime * sp + Math.PI * 1.75); fx.strokeStyle = col; fx.lineWidth = lw; fx.globalAlpha = 0.9; fx.stroke(); }
+    fx.setLineDash([]); fx.globalAlpha = 1;
+    fx.beginPath(); fx.arc(0, 0, 12 * pulse, 0, Math.PI * 2); fx.fillStyle = hot ? C.fire : C.cyan; fx.shadowColor = hot ? C.fire : C.cyan; fx.shadowBlur = pk || fhover === c ? 30 : 16; fx.fill(); fx.shadowBlur = 0;
+    fx.beginPath(); fx.arc(0, 0, 5, 0, Math.PI * 2); fx.fillStyle = '#fff'; fx.fill();
+    if (pk) { fx.beginPath(); fx.arc(0, 0, 50, 0, Math.PI * 2); fx.strokeStyle = C.amber; fx.lineWidth = 1; fx.setLineDash([3, 4]); fx.stroke(); fx.setLineDash([]); }
+    fx.restore();
+    flabel(c.x, c.y + 62, `${f.app} / ${f.slug}`.toUpperCase(), '#fff', 11, 800);
+    flabel(c.x, c.y + 77, `STEP ${f.step} · ${merged}/${ss.length} MERGED · ${running} RUNNING · ${review} IN REVIEW`, hot ? C.fire : C.dim, 8.5, 600);
+    for (const s of c.sats) {
+      const col = sessColor(s.s), e = s.s.effective, isH = fhover === s, r = e === 'merged' ? 7 : 11;
+      fx.save(); fx.translate(s.x, s.y); fx.globalAlpha = e === 'merged' ? 0.5 : 1;
+      if (e === 'progress') { fx.beginPath(); fx.arc(0, 0, r + 6, ftime * 2.4, ftime * 2.4 + Math.PI * 1.2); fx.strokeStyle = col; fx.lineWidth = 1.5; fx.shadowColor = col; fx.shadowBlur = 10; fx.stroke(); fx.shadowBlur = 0; }
+      if (e === 'review') { const k = 1 + ((Math.sin(ftime * 3) + 1) / 2) * 0.3; fx.beginPath(); fx.arc(0, 0, (r + 6) * k, 0, Math.PI * 2); fx.strokeStyle = col; fx.globalAlpha = 0.45 - (k - 1); fx.lineWidth = 1.2; fx.stroke(); fx.globalAlpha = 1; }
+      fx.beginPath(); fx.arc(0, 0, r, 0, Math.PI * 2); fx.fillStyle = col; fx.globalAlpha *= 0.2; fx.fill(); fx.globalAlpha = e === 'merged' ? 0.5 : 1;
+      fx.strokeStyle = col; fx.lineWidth = 1.5; if (isH || e === 'progress') { fx.shadowColor = col; fx.shadowBlur = isH ? 22 : 10; } fx.stroke(); fx.shadowBlur = 0;
+      flabel(0, 1, `S${s.s.n}`, col, 9, 800);
+      fx.restore();
+      if (e !== 'merged' || isH) { flabel(s.x, s.y + r + 10, trunc(s.s.goal, 20), e === 'merged' ? C.dim : '#fff', 9.5, 600); flabel(s.x, s.y + r + 22, sessState(e), col, 8, 700); }
+    }
+  }
+  requestAnimationFrame(drawFnet);
+}
+function renderFeatureDetail() {
+  const box = $('fdetail'); const f = features.find((x) => x.key === fpicked);
+  if (!f || view !== 'feat') { box.classList.remove('on'); return; }
+  const ss = f.plan ? f.plan.sessions.filter((s) => s.effective !== 'waiting') : []; const hist = (f.flow || {}).history || [];
+  const startOf = (n) => { const h = hist.find((j) => j.kind === 'start' && j.data && j.data.session === n); return h ? (h.data.started || h.ts) : 0; };
+  const sig = JSON.stringify([f.step, ss.map((s) => [s.n, s.effective, s.pr_url, Math.round((Date.now() - startOf(s.n)) / 60000)])]);
+  if (sig === fdSig && box.classList.contains('on')) return;
+  fdSig = sig; box.classList.add('on');
+  box.innerHTML = `<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">STEP ${f.step} · ${esc((f.step_label || '').toUpperCase())} · ${ss.filter((s) => s.effective === 'merged').length}/${f.plan ? f.plan.sessions.length : 0} MERGED</div></div><button class="btn" id="fd-pipe" type="button">PIPELINE</button><button class="x" id="fd-close" type="button" aria-label="Close">×</button></div>
+    ${ss.length ? ss.map((s) => `<div class="srow fd" data-n="${s.n}"><div class="n">S${s.n}</div><div><div class="g">${esc(s.goal)}</div><div class="i">${esc((s.repo || '').replace(/^code\//, '').toUpperCase())} · TIER ${s.tier || '?'}${startOf(s.n) ? ' · ' + fmtDur((Date.now() - startOf(s.n)) / 1000) + (s.effective === 'progress' ? ' SO FAR' : ' SINCE START') : ''}${s.pr_url ? ' · PR' : ''}</div></div><div class="a"><span class="pill ${esc(s.effective)}">${sessState(s.effective)}</span></div></div>`).join('') : '<div style="font:10px var(--mono);letter-spacing:.14em;color:var(--dim)">NO SESSION OF THIS FEATURE IS ACTIVE</div>'}
+    <div style="font:9px var(--mono);letter-spacing:.14em;color:var(--dim);margin-top:8px">CLICK A SESSION FOR WHAT IT DOES NOW, HOW LONG, AND ITS RUN</div>`;
+  for (const row of box.querySelectorAll('.srow.fd')) row.onclick = () => openSessionDetail(f, +row.dataset.n);
+  $('fd-close').onclick = () => { fpicked = null; fdSig = ''; box.classList.remove('on'); };
+  $('fd-pipe').onclick = () => { picked = f.key; setView('pipe'); };
+}
 const stepBar = (f) => `<div class="steps">${STEPS.map((_, i) => `<i class="${f.released || i + 1 < f.step ? 'done' : i + 1 === f.step ? 'now' : ''}"></i>`).join('')}</div>`;
 let meta = { roles: {}, apps: {}, role_names: [], workspaces: [] };
 let openBox = '';
@@ -1849,7 +1932,7 @@ function apply(s) {
   const d = s.daemon, sessions = s.sessions || [], events = s.events || [], requests = s.requests || [];
   model = { sessions, daemon: d, legacy: !!s.legacy, peers: s.peers || [] };
   renderFleet();
-  if (Array.isArray(s.features)) { features = s.features; if (s.features_meta) meta = { ...s.features_meta, members: meta.members || [] }; if (view === 'pipe') renderPipeline(); }
+  if (Array.isArray(s.features)) { features = s.features; if (s.features_meta) meta = { ...s.features_meta, members: meta.members || [] }; if (view === 'pipe') renderPipeline(); if (view === 'feat' && fpicked) renderFeatureDetail(); }
   $('legacy').style.display = s.legacy ? 'block' : 'none';
   $('pcname').textContent = (d.name || 'PC').toUpperCase();
   $('pcstate').textContent = `ONLINE · ${d.connected || 0} PHONE${d.connected === 1 ? '' : 'S'} LIVE`; $('pcstate').className = 'state';

@@ -764,6 +764,20 @@ impl Sessions {
         Some(snapshot)
     }
 
+    /// v2.9: a session the hooks still call working whose headless process
+    /// is gone (its Stop was lost in a daemon restart): idle, which the
+    /// console and the phones show as finished.
+    pub fn mark_idle(&mut self, id: &str) -> Option<Session> {
+        let entry = self.entries.get_mut(id)?;
+        if entry.session.state != "working" {
+            return None;
+        }
+        entry.session.state = "idle".to_string();
+        let snapshot = entry.session.clone();
+        self.persist();
+        Some(snapshot)
+    }
+
     /// v1.7: one line of the owner's self-check, from a phone.
     pub fn set_check(&mut self, session_id: &str, index: usize, checked: bool) -> Option<Session> {
         let entry = self.entries.get_mut(session_id)?;
