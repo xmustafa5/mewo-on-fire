@@ -1361,7 +1361,11 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     // A headless start gets 15 minutes to show up; a Desktop start (no pid) waits for a person, so only 3.
     let fresh = |n: u32| last_of(n).map(|r| now.saturating_sub(r.started) < if r.pid != 0 { 15 * min } else { 3 * min }).unwrap_or(false);
     let live = |n: u32| last_of(n).map(|r| r.pid != 0 && runner::alive(r.pid)).unwrap_or(false);
-    let active = |s: &policy::PlanSession| s.running || live(s.n) || (s.effective == "progress" && fresh(s.n));
+    // Counts against "at a time": a live headless run, a fresh start, or a
+    // session the hooks still call running (unless its headless process is
+    // gone: a Stop event lost in a daemon restart). Merged sessions never.
+    let hook_running = |s: &policy::PlanSession| s.running && last_of(s.n).map(|r| r.pid == 0 || runner::alive(r.pid)).unwrap_or(true);
+    let active = |s: &policy::PlanSession| s.effective != "merged" && (hook_running(s) || live(s.n) || (s.effective == "progress" && fresh(s.n)));
     let busy = plan.sessions.iter().filter(|s| active(s)).count();
     if busy >= parallel {
         return;
