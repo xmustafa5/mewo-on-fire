@@ -15,7 +15,10 @@ use crate::{config::now_ms, paths};
 /// Exit codes of the runs that finished, by pid.
 static EXITS: Mutex<Option<HashMap<u32, i32>>> = Mutex::new(None);
 
-/// Where the Claude Code command is on this Mac, when it is installed.
+/// What a message calls this computer.
+const HERE: &str = if cfg!(target_os = "macos") { "this Mac" } else { "this PC" };
+
+/// Where the Claude Code command is on this computer, when it is installed.
 pub fn claude_bin() -> Option<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     [
@@ -30,8 +33,14 @@ pub fn claude_bin() -> Option<PathBuf> {
 }
 
 /// Signed in? The command keeps its sign-in in the login keychain under
-/// "Claude Code-credentials"; without it every run stops at once.
+/// "Claude Code-credentials" on macOS, in `~/.claude/.credentials.json` on
+/// Linux (only whether the file is there is looked at); without it every
+/// run stops at once.
 pub fn signed_in() -> bool {
+    if !cfg!(target_os = "macos") {
+        let dir = std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude"));
+        return dir.join(".credentials.json").is_file() || std::env::var("ANTHROPIC_API_KEY").is_ok_and(|k| !k.is_empty());
+    }
     Command::new("security").args(["find-generic-password", "-s", "Claude Code-credentials"]).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
 }
 
@@ -39,7 +48,7 @@ pub fn signed_in() -> bool {
 /// it can run.
 pub fn ready() -> Result<(), String> {
     if claude_bin().is_none() {
-        return Err("Claude Code is not installed on this Mac: run the installer from claude.ai (curl -fsSL https://claude.ai/install.sh | bash)".to_string());
+        return Err(format!("Claude Code is not installed on {HERE}: run the installer from claude.ai (curl -fsSL https://claude.ai/install.sh | bash)"));
     }
     if !signed_in() {
         return Err("Claude Code is installed but not signed in: run `claude` in a terminal, then `/login`, once".to_string());
@@ -62,9 +71,9 @@ pub fn model_for(tier: u8) -> Option<&'static str> {
 /// main). Returns its pid; its output goes to `<state>/runs/<tag>-<ts>.log`.
 pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Result<u32, String> {
     ready()?;
-    let bin = claude_bin().ok_or_else(|| "Claude Code is not installed on this Mac".to_string())?;
+    let bin = claude_bin().ok_or_else(|| format!("Claude Code is not installed on {HERE}"))?;
     if !std::path::Path::new(folder).is_dir() {
-        return Err(format!("No such folder on this Mac: {folder}"));
+        return Err(format!("No such folder on {HERE}: {folder}"));
     }
     let dir = paths::state_dir().join("runs");
     let _ = fs::create_dir_all(&dir);

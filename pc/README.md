@@ -213,6 +213,18 @@ straight from the daemon's socket.
 pc/console/install.sh      # builds and installs "~/Applications/Mewo Console.app", then opens it
 ```
 
+**On Linux** the same script installs [`console/linux/`](console/linux/): a
+GTK + WebKitGTK window (needs `python3-gi` and `gir1.2-webkit2-4.1`, there on a
+stock Ubuntu desktop) that runs `mewo dashboard` on a free localhost port for
+itself and shows its page. It lands in the application menu as "Mewo Console"
+and as `mewo-console`; the tray's **Open Console** opens it (or the browser
+page when it is not installed). Ctrl+R reloads, F11 is full screen.
+
+Claude Desktop for Linux works like the Mac app: sessions are tagged from
+`~/.config/Claude/claude-code-sessions`, **Open** and **New session** go
+through its `claude://` handler (`xdg-open`), and the build autopilot's
+headless runs count `~/.claude/.credentials.json` as signed in.
+
 ## Firewall
 
 The phone connects to TCP port `47821`; discovery uses mDNS (UDP 5353).
