@@ -107,7 +107,7 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
     let log = dir.join(format!("{safe}-{}.log", now_ms()));
     let out = File::create(&log).map_err(|e| e.to_string())?;
     let err = File::create(log.with_extension("err")).map_err(|e| e.to_string())?;
-    let mut cmd = Command::new(bin);
+    let mut cmd = outliving(&bin);
     cmd.current_dir(folder).arg("-p").arg(prompt).arg("--dangerously-skip-permissions").arg("--output-format").arg("text");
     if let Some(m) = model {
         cmd.arg("--model").arg(m);
@@ -115,7 +115,7 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
     cmd.env("PATH", session_path()).env("MEWO_HEADLESS", "1").stdin(Stdio::null()).stdout(out).stderr(err);
     // The pinned GitHub account, whatever gh has active.
     cmd.envs(crate::github::envs());
-    // Its own process group: a daemon restart must not take the session down.
+    // Its own process group (launchd) and scope (systemd): a daemon restart must not take the session down.
     cmd.process_group(0);
     let mut child = cmd.spawn().map_err(|e| format!("could not start claude: {e}"))?;
     let pid = child.id();
@@ -200,8 +200,8 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
 }
 
 /// The Mewo Session window, when this computer can show it (Linux with
-/// GTK 3 and VTE for Python). Started in a systemd scope of its own, so a
-/// restart of the daemon's service leaves it open. False: use a terminal.
+/// GTK 3 and VTE for Python), started so a restart of the daemon leaves it
+/// open. False: use a terminal.
 fn open_session_window(folder: &str, script: &str, info_file: &std::path::Path, mut info: serde_json::Value) -> bool {
     if cfg!(target_os = "macos") {
         return false;
@@ -227,19 +227,8 @@ fn open_session_window(folder: &str, script: &str, info_file: &std::path::Path, 
     if fs::write(info_file, info.to_string()).is_err() {
         return false;
     }
-    let args = [window.to_string_lossy().into_owned(), info_file.to_string_lossy().into_owned()];
-    let mut cmd = match find_tool("systemd-run") {
-        Some(run) => {
-            let mut c = Command::new(run);
-            c.args(["--user", "--scope", "--quiet", "--collect", "--"]).arg(&python).args(&args);
-            c
-        }
-        None => {
-            let mut c = Command::new(&python);
-            c.args(&args);
-            c
-        }
-    };
+    let mut cmd = outliving(&python);
+    cmd.arg(&window).arg(info_file);
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
     match cmd.spawn() {
         Ok(mut child) => {
@@ -250,6 +239,24 @@ fn open_session_window(folder: &str, script: &str, info_file: &std::path::Path, 
         }
         Err(_) => false,
     }
+}
+
+/// A command that outlives a restart of the daemon. Stopping a systemd
+/// service ends every process in its cgroup, whatever its process group,
+/// and `mewo install` restarts the service; so under systemd a session, a
+/// review or a window starts in a scope of its own. `systemd-run --scope`
+/// becomes the command, so the pid, the exit code, the folder, the
+/// environment and the output stay the program's. Under launchd, and when
+/// the daemon runs outside systemd, its own process group is enough.
+fn outliving(program: &std::path::Path) -> Command {
+    if cfg!(target_os = "linux") && std::env::var_os("INVOCATION_ID").is_some() {
+        if let Some(run) = find_tool("systemd-run") {
+            let mut c = Command::new(run);
+            c.args(["--user", "--scope", "--quiet", "--collect", "--"]).arg(program);
+            return c;
+        }
+    }
+    Command::new(program)
 }
 
 /// A tool on the session PATH (the daemon's own is short).
@@ -279,7 +286,7 @@ fn open_terminal(script: &str) -> Result<(), String> {
     };
     for (name, args) in tries {
         let Some(bin) = find_tool(name) else { continue };
-        let mut cmd = Command::new(bin);
+        let mut cmd = outliving(&bin);
         cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
         if let Ok(mut child) = cmd.spawn() {
             std::thread::spawn(move || {

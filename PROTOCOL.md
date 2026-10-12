@@ -947,6 +947,12 @@ is tracked like a headless one: while its window is open nothing reminds
 or restarts it, Stop now ends it, and a window closed without a pull
 request is run again. Once its pull request is open, an open window no
 longer counts against "at a time". Reviews stay headless.
+Under systemd every session, review and window the daemon starts runs in
+a scope of its own (`systemd-run --user --scope`, which becomes the
+program, so the pid is the program's): stopping a service ends every
+process in its cgroup, whatever its process group, and `mewo install`
+restarts the service. Under launchd the run's own process group is
+enough. So an update of the daemon leaves the build's runs going.
 `attended: false` (BUILD EVERYTHING) goes back to headless sessions;
 leaving it out (resume, pause, merge on pass) keeps the setting.
 `flow.build.attended` carries it.
