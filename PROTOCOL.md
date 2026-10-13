@@ -1006,3 +1006,24 @@ after the computer restarted (the boot id kept in `<state>/boot`), the
 daemon closes the sessions it still holds as working or waiting: the
 restart ended them and none of them said so. A session of an earlier
 attempt is checked against that attempt's process, not the latest one.
+
+# v3.2 — show the session
+
+A Mewo Session window keeps `<state>/windows/<pid>.json` (`pid`,
+`folder`, `session_id` once Claude Code gave it, `n`, `feature`) while it
+is open and comes forward on SIGUSR1. `mewo dashboard` sets `window`
+(that pid) on the sessions that have one (by the session id; for a
+terminal window, on the live session in its folder), and the console
+shows SHOW THE SESSION on such a session: on its card in the network,
+on its row in the plan and in its detail. In the Linux console app the
+click goes to the app as `mewo-session:show?pid=…`: the shell only lets
+a program raise another's window on proof a person asked, so the app
+makes an activation token from the click, leaves it in
+`<state>/windows/<pid>.token` and sends the signal; the window activates
+itself with the token. In a browser, `POST /api/show_session {pid}`
+sends the signal without a token, and the shell may only mark the window
+as wanting attention. Only a pid with an entry that is a Mewo Session
+window is ever signalled. A window told to quit closes as on its close
+button, and Claude Code ends with its window whatever ends it
+(`setpriv --pdeathsig`), so the build sees the run end and starts it
+again.

@@ -93,6 +93,9 @@ class Console(Gtk.Application):
         web = WebKit2.WebView()
         web.set_background_color(Gdk.RGBA(0.016, 0.027, 0.047, 1))
         web.get_settings().set_enable_developer_extras(True)
+        # The page knows it is in this app: "Show the session" then goes through on_policy, where a click's token is.
+        web.get_user_content_manager().add_script(WebKit2.UserScript.new(
+            "window.mewoHost = 'linux';", WebKit2.UserContentInjectedFrames.TOP_FRAME, WebKit2.UserScriptInjectionTime.START, None, None))
         web.connect("decide-policy", self.on_policy)
         web.connect("create", self.on_create)
         win.add(web)
@@ -201,6 +204,10 @@ class Console(Gtk.Application):
         scheme = (GLib.Uri.peek_scheme(uri) or "").lower()
         if scheme in ("about", "data", "blob"):
             return False
+        if scheme == "mewo-session":
+            self.show_session(uri)
+            decision.ignore()
+            return True
         # A window.open(), a clicked link or another app's scheme leaves for that app;
         # anything else (what a design or a page loads in its frame) stays.
         clicked = action.get_navigation_type() == WebKit2.NavigationType.LINK_CLICKED
@@ -209,6 +216,35 @@ class Console(Gtk.Application):
             decision.ignore()
             return True
         return False
+
+    def show_session(self, uri):
+        """Brings a Mewo Session window forward: `mewo-session:show?pid=<its pid>`. The window is another
+        program, so the shell wants proof a person asked: an activation token made from the click here,
+        left for the window in <state>/windows/<pid>.token, then SIGUSR1."""
+        try:
+            pid = int(uri.split("pid=", 1)[1].split("&", 1)[0])
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                command = f.read()
+        except (IndexError, ValueError, OSError):
+            return
+        windows = os.path.expanduser("~/.local/state/mewo-on-fire/windows")
+        # Only a window that listed itself has the handler; to anything else SIGUSR1 is fatal.
+        if b"mewo-session" not in command or not os.path.exists(os.path.join(windows, f"{pid}.json")):
+            return
+        token = ""
+        try:
+            context = self.window.get_display().get_app_launch_context()
+            info = Gio.AppInfo.create_from_commandline("true", "Mewo Session", Gio.AppInfoCreateFlags.NONE)
+            token = context.get_startup_notify_id(info, []) or ""
+        except (GLib.Error, TypeError, AttributeError):
+            pass
+        try:
+            if token:
+                with open(os.path.join(windows, f"{pid}.token"), "w", encoding="utf-8") as f:
+                    f.write(token)
+            os.kill(pid, signal.SIGUSR1)
+        except OSError:
+            pass
 
     def on_create(self, _web, action):
         uri = action.get_request().get_uri() or ""

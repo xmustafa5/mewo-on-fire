@@ -28,6 +28,7 @@ right click offers Copy, Paste and Select all; Ctrl+= / Ctrl+- / Ctrl+0 zoom.
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -41,6 +42,12 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 try:
+    gi.require_version("GLibUnix", "2.0")
+    from gi.repository import GLibUnix  # noqa: E402
+    unix_signal_add = GLibUnix.signal_add
+except (ValueError, ImportError, AttributeError):
+    unix_signal_add = GLib.unix_signal_add
+try:
     gi.require_version("Vte", "2.91")
     from gi.repository import Vte  # noqa: E402
 except (ValueError, ImportError):
@@ -53,6 +60,9 @@ except (ValueError, ImportError):
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 CHAT_PAGE = os.path.join(HERE, "mewo-session-chat.html")
+# v3.2: each window keeps <pid>.json here while it is open (its folder and Claude Code session), so the
+# console can offer "Show the session"; on SIGUSR1 it comes forward, with the click's token from <pid>.token.
+WINDOWS = os.path.expanduser("~/.local/state/mewo-on-fire/windows")
 
 # The console's colours (dashboard/index.html :root).
 BG = "#04070c"
@@ -226,9 +236,14 @@ class Chat:
     # ---------- Claude Code ----------
 
     def start(self):
+        command = ["/bin/sh", self.info["script"], "chat"]
+        # Claude Code never outlives its window, even one that is killed outright: nobody could see or answer it.
+        setpriv = find_tool("setpriv")
+        if setpriv:
+            command = [setpriv, "--pdeathsig", "TERM", "--"] + command
         try:
             self.proc = subprocess.Popen(
-                ["/bin/sh", self.info["script"], "chat"], cwd=self.folder,
+                command, cwd=self.folder,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
         except OSError as e:
@@ -341,7 +356,9 @@ class Chat:
         for ev in fresh:
             t = ev.get("type")
             if t == "system" and ev.get("subtype") == "init":
-                self.session_id = ev.get("session_id") or self.session_id
+                if ev.get("session_id") and ev["session_id"] != self.session_id:
+                    self.session_id = ev["session_id"]
+                    self.win.register(self.session_id)
             elif t == "control_request":
                 r = ev.get("request") or {}
                 if r.get("subtype") == "can_use_tool":
@@ -626,6 +643,12 @@ class SessionWindow(Gtk.Window):
         self.add(box)
         self.connect("delete-event", self.on_close)
         self.connect("destroy", self.on_destroy)
+        # The handler first, then the entry that invites the signal.
+        unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, self.on_show_signal)
+        self.register("")
+        # Told to go (a logout, a kill): close as a click on the cross would, so Claude Code ends with the window.
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            unix_signal_add(GLib.PRIORITY_HIGH, sig, self.on_quit_signal)
 
         if self.chat:
             self.chat.start()
@@ -688,9 +711,53 @@ class SessionWindow(Gtk.Window):
         self.ended = True
         self.set_state("ended")
 
+    def on_quit_signal(self):
+        self.destroy()
+        return GLib.SOURCE_REMOVE
+
     def on_destroy(self, *_):
+        for ext in ("json", "token"):
+            try:
+                os.remove(os.path.join(WINDOWS, f"{os.getpid()}.{ext}"))
+            except OSError:
+                pass
         if self.chat:
             self.chat.stop()
+
+    # ---------- "Show the session" on the console ----------
+
+    def register(self, session_id):
+        """This window's entry in the list the console reads."""
+        entry = {"pid": os.getpid(), "folder": self.folder, "session_id": session_id, "n": self.info.get("n", ""), "feature": self.info.get("feature", "")}
+        path = os.path.join(WINDOWS, f"{os.getpid()}.json")
+        try:
+            os.makedirs(WINDOWS, exist_ok=True)
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(entry, f)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass
+
+    def on_show_signal(self):
+        token, path = "", os.path.join(WINDOWS, f"{os.getpid()}.token")
+        try:
+            if time.time() - os.path.getmtime(path) < 15:
+                with open(path, encoding="utf-8") as f:
+                    token = f.read().strip()
+            os.remove(path)
+        except OSError:
+            pass
+        self.deiconify()
+        if token:
+            # The console's click, handed over: with it the shell lets this window come forward.
+            self.set_startup_id(token)
+        else:
+            self.present()
+        if self.chat:
+            self.chat.web.grab_focus()
+        elif self.term:
+            self.term.grab_focus()
+        return GLib.SOURCE_CONTINUE
 
     def set_state(self, state):
         state = "finished" if state == "idle" else state

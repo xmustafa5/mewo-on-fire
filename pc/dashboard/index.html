@@ -1198,7 +1198,7 @@ async function refreshSessionDetail() {
         <div class="row"><span>IN REVIEW</span><span>${fmtAt(t.in_review_at)}</span></div>
         <div class="row"><span>MERGED</span><span>${fmtAt(t.merged_at)}</span></div>
         ${run ? `<div class="row"><span>RUN</span><span>${run.headless ? `headless · pid ${run.pid} · ${run.alive ? 'alive' : 'ended' + (run.exit !== null && run.exit !== undefined ? ' · exit ' + run.exit : '')}` : 'in Claude Desktop'}</span></div>` : ''}
-        <div class="acts">${s.pr_url ? `<button class="btn" type="button" data-url="${esc(s.pr_url)}">OPEN THE PULL REQUEST</button>` : ''}${now && now.desktop ? `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(now.desktop)}">OPEN IN DESKTOP</button>` : ''}${running || reviewing ? '<button class="btn" id="sd-stop" type="button" style="border-color:var(--heat);color:var(--heat)">STOP THIS RUN</button>' : ''}</div>
+        <div class="acts">${s.pr_url ? `<button class="btn" type="button" data-url="${esc(s.pr_url)}">OPEN THE PULL REQUEST</button>` : ''}${now && windowOf(now.id) ? `<button class="btn" type="button" data-win="${windowOf(now.id)}">SHOW THE SESSION</button>` : ''}${now && now.desktop ? `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(now.desktop)}">OPEN IN DESKTOP</button>` : ''}${running || reviewing ? '<button class="btn" id="sd-stop" type="button" style="border-color:var(--heat);color:var(--heat)">STOP THIS RUN</button>' : ''}</div>
       </div>
     </div>
     <div class="card" style="margin-top:12px"><div class="k">LAST STEPS${now ? ` · ${esc(now.short)}` : ''}</div>
@@ -1366,7 +1366,7 @@ function renderFeature() {
     for (const s of plan.sessions) {
       const live = (s.live || []).map((l) => `${esc(l.short)} ${l.state.toUpperCase()}${l.tier ? ' T' + l.tier : ''}`).join(', ');
       h.push(`<div class="srow" data-n="${s.n}"><div class="n">S${s.n}</div><div><div class="g">${esc(s.goal)} ${plLink('session:' + s.n)}</div><div class="i">${esc((s.level || '').toUpperCase())} · TIER ${s.tier || '?'} · ${esc(s.repo || f.repos[0] || '')}${s.owner ? ' · ' + esc(s.owner.toUpperCase()) : ''}${s.depends_on && s.depends_on.length ? ' · AFTER ' + s.depends_on.join(', ') : ''}${s.attempts ? ` · ${s.attempts} ATTEMPT${s.attempts > 1 ? 'S' : ''}` : ''}${live ? ' · ' + live : ''}${s.note ? ' · ' + esc(s.note.toUpperCase()) : ''}${(s.warnings || []).map((w) => ` <span class="w">· ${esc(w)}</span>`).join('')}</div></div>
-        <div class="a"><span class="pill ${esc(s.effective)}">${esc((s.effective === 'review' ? 'IN REVIEW' : s.effective === 'progress' ? 'IN PROGRESS' : s.effective).toUpperCase())}</span>${s.pr_url || s.pr ? `<button class="btn" type="button" data-url="${esc(s.pr_url || s.pr)}">PR${s.pr_number ? ' #' + s.pr_number : ''}</button>` : ''}${(s.live || []).filter((l) => l.desktop).slice(0, 1).map((l) => `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(l.desktop)}">OPEN</button>`).join('')}${s.effective === 'ready' || s.effective === 'progress' ? `${pcs.length > 1 ? `<select class="startpc" data-n="${s.n}" style="background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:9.5px var(--mono);padding:5px 6px">${pcs.map((p) => `<option value="${esc(p.pc_id)}" ${p.pc_id === f.pc_id ? 'selected' : ''}>ON ${esc((p.name || '').toUpperCase())}</option>`).join('')}</select>` : ''}<button class="btn go start" type="button" data-n="${s.n}" ${s.prompt ? '' : 'disabled title="No prompt in the plan"'}>START</button>` : ''}</div></div>`);
+        <div class="a"><span class="pill ${esc(s.effective)}">${esc((s.effective === 'review' ? 'IN REVIEW' : s.effective === 'progress' ? 'IN PROGRESS' : s.effective).toUpperCase())}</span>${s.pr_url || s.pr ? `<button class="btn" type="button" data-url="${esc(s.pr_url || s.pr)}">PR${s.pr_number ? ' #' + s.pr_number : ''}</button>` : ''}${(s.live || []).filter((l) => windowOf(l.id)).slice(0, 1).map((l) => `<button class="btn" type="button" data-win="${windowOf(l.id)}" title="Bring this session's window forward">SHOW</button>`).join('')}${(s.live || []).filter((l) => l.desktop).slice(0, 1).map((l) => `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(l.desktop)}">OPEN</button>`).join('')}${s.effective === 'ready' || s.effective === 'progress' ? `${pcs.length > 1 ? `<select class="startpc" data-n="${s.n}" style="background:rgba(79,209,255,0.05);border:1px solid var(--cyan-dim);color:var(--text);font:9.5px var(--mono);padding:5px 6px">${pcs.map((p) => `<option value="${esc(p.pc_id)}" ${p.pc_id === f.pc_id ? 'selected' : ''}>ON ${esc((p.name || '').toUpperCase())}</option>`).join('')}</select>` : ''}<button class="btn go start" type="button" data-n="${s.n}" ${s.prompt ? '' : 'disabled title="No prompt in the plan"'}>START</button>` : ''}</div></div>`);
     }
   } else if (!f.light) {
     h.push(`<div class="sec"><span>SESSION PLAN</span></div><div class="i" style="font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim)">NO SESSION_PLAN.md YET · WRITE IT IN CLAUDE COWORK WITH THE session-plan SKILL</div>`);
@@ -1634,7 +1634,16 @@ function md(src) {
   }
   return out.join('\n');
 }
-// A click on a session shows its card: open it in Claude Desktop, open what it made.
+// v3.2: a session's Mewo Session window comes forward. In the console app the request goes through the
+// app (it has the click the shell wants to see); in a browser the console server asks the window itself.
+const windowOf = (id) => +((model.sessions || []).find((x) => x.id === id) || {}).window || 0;
+async function showWindow(pid, btn) {
+  if (window.mewoHost === 'linux') { location.href = `mewo-session:show?pid=${pid}`; return; }
+  let r; try { r = await (await fetch('/api/show_session', { method: 'POST', body: JSON.stringify({ pid }) })).json(); } catch (e) { r = { ok: false, error: 'The console process stopped.' }; }
+  if (!r.ok) alert(r.error || 'Could not show it'); else if (btn) { const t = btn.textContent; btn.textContent = 'ASKED IT TO SHOW'; setTimeout(() => { btn.textContent = t; }, 1500); }
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-win]'); if (b) { e.stopPropagation(); showWindow(+b.dataset.win, b); } });
+// A click on a session shows its card: show its window, open it in Claude Desktop, open what it made.
 const bursts = [];
 const detail = $('detail');
 let detailId = '';
@@ -1645,7 +1654,7 @@ function showDetail(s) {
   detail.innerHTML = `<div class="hd"><span class="mhead">${mascotSVG(mascotOf(s), s.state === 'ended' ? 'asleep' : '')}</span><div class="t">${esc(s.title || s.project || s.id)}</div><button class="x" aria-label="Close">×</button></div>
     <div class="m">${esc((s.project || '').toUpperCase())} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + hm(s.last_ts) : ''}${s.tier ? ` · TIER ${s.tier}` : ''}${s.branch ? ` · ${esc(s.branch)}` : ''}${s.feature ? ` · ${esc(s.feature.toUpperCase())}${s.plan_session ? ' S' + s.plan_session : ''}` : ''}</div>
     ${s.last_text ? `<div class="last">${esc(s.last_text)}</div>` : ''}
-    ${s.pc_name ? `<div class="none">ON ${esc(s.pc_name.toUpperCase())}${s.desktop ? ' · OPEN IT THERE' : ''}</div>` : s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
+    ${s.pc_name ? `<div class="none">ON ${esc(s.pc_name.toUpperCase())}${s.desktop ? ' · OPEN IT THERE' : ''}</div>` : s.window ? `<button class="act primary" data-win="${+s.window}"><span class="k">SHOW</span><span class="n">Show the session</span></button>` : s.desktop ? `<button class="act primary" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}"><span class="k">OPEN</span><span class="n">Open in Claude Desktop</span></button>` : '<div class="none">NOT A CLAUDE DESKTOP SESSION</div>'}
     ${arts.length ? `<div class="sec">MADE BY CLAUDE</div>` + arts.map((a, i) => `<button class="act" style="--c:${a.kind === 'design' ? 'var(--amber)' : 'var(--cyan)'}" data-url="${esc(a.url)}" data-art="${i}"><span class="k">${kindLabel(a.kind)}</span><span class="n">${esc(a.title || 'Untitled ' + a.kind)}</span>${a.local ? '<span class="k" style="width:auto">VIEW</span>' : ''}</button>`).join('') : ''}`;
   detail.style.display = 'block';
   detail.querySelector('.x').onclick = () => { detail.style.display = 'none'; };

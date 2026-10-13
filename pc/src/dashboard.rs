@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::config::now_ms;
-use crate::{artifacts, control, desktop, paths};
+use crate::{artifacts, control, desktop, paths, windows};
 
 const HTML: &str = include_str!("../dashboard/index.html");
 pub const DEFAULT_PORT: u16 = 47824;
@@ -102,6 +102,17 @@ fn handle(mut stream: TcpStream, cache: &Cache) -> std::io::Result<()> {
             std::io::Read::read_exact(&mut reader, &mut raw)?;
             let req: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
             let reply = forward(&req);
+            ("200 OK", "application/json; charset=utf-8", reply.to_string().into_bytes())
+        }
+        // v3.2: a session's Mewo Session window comes forward.
+        ("POST", "/api/show_session") => {
+            let mut raw = vec![0u8; content_length];
+            std::io::Read::read_exact(&mut reader, &mut raw)?;
+            let req: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+            let reply = match windows::show(req.get("pid").and_then(Value::as_u64).unwrap_or(0) as u32) {
+                Ok(()) => json!({"ok": true}),
+                Err(e) => json!({"ok": false, "error": e}),
+            };
             ("200 OK", "application/json; charset=utf-8", reply.to_string().into_bytes())
         }
         ("POST", "/api/new_session") => {
@@ -226,6 +237,7 @@ fn collect() -> Value {
             Ok(status) => {
                 let mut sessions = field(&path, json!({"cmd": "sessions"}), "sessions");
                 desktop::tag(&mut sessions);
+                windows::tag(&mut sessions);
                 let events = field(&path, json!({"cmd": "events", "limit": 120}), "events");
                 let requests = field(&path, json!({"cmd": "requests"}), "requests");
                 let features_all = if legacy { Value::Null } else { control::request_at(&path, &json!({"cmd": "features"}), Duration::from_secs(20)).unwrap_or(Value::Null) };

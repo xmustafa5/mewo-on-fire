@@ -228,7 +228,9 @@ tool call with its input and output, edits as diffs, questions and
 permission prompts as buttons (your phone gets them too; the first answer
 wins), and a composer with the model, the permission mode, `@` for a file,
 `/` for a command, pasted images, Enter to send and Esc to stop. A file
-Claude names opens in VS Code at its line. It needs GTK 3 and WebKitGTK for
+Claude names opens in VS Code at its line. On the console, a session that
+has such a window open gets **Show the session**, which brings it forward.
+It needs GTK 3 and WebKitGTK for
 Python (`python3-gi`, `gir1.2-webkit2-4.1`: what the console itself needs).
 Without WebKitGTK, or with `"session_terminal": true` in
 `~/.config/mewo-on-fire/config.json`, the window shows Claude Code in a
