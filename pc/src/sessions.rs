@@ -394,6 +394,8 @@ impl Sessions {
                         }
                         // No listener survives a restart.
                         entry.sync();
+                        // One that no feature claimed is looked at again (the match learned worktree branches in v3.1).
+                        entry.needs_match = entry.session.feature.is_empty() && !entry.session.branch.is_empty();
                         entries.insert(entry.session.id.clone(), entry);
                     }
                 }
@@ -776,6 +778,22 @@ impl Sessions {
         let snapshot = entry.session.clone();
         self.persist();
         Some(snapshot)
+    }
+
+    /// v3.1: the computer restarted. Nothing that was at work or waiting
+    /// for you survived it, and none of it said so: closed. Returns how many.
+    pub fn close_unfinished(&mut self) -> usize {
+        let mut closed = 0;
+        for e in self.entries.values_mut() {
+            if matches!(e.session.state.as_str(), "working" | "waiting") {
+                e.session.state = "ended".to_string();
+                closed += 1;
+            }
+        }
+        if closed > 0 {
+            self.persist();
+        }
+        closed
     }
 
     /// v1.7: one line of the owner's self-check, from a phone.

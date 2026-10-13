@@ -1545,13 +1545,29 @@ fn match_prompt(plan: &Plan, first_prompt: &str) -> Option<u32> {
 pub fn match_session(cwd: &str, branch: &str, first_prompt: &str) -> (String, u32) {
     let Some(ws) = workspace_for(cwd) else { return (String::new(), 0) };
     remember_workspace(&ws);
-    let Some((app, slug, _)) = parse_branch(&ws, branch) else { return (String::new(), 0) };
-    let dir = ws.join("app-notebooks").join(&app).join("features").join(&slug);
-    if !dir.is_dir() {
-        return (String::new(), 0);
+    let Some((app, mut slug, _)) = parse_branch(&ws, branch) else { return (String::new(), 0) };
+    let features = ws.join("app-notebooks").join(&app).join("features");
+    // v2.8: a build session works in its own worktree on `<feature branch>-s<n>`,
+    // and its review on that same branch in `…-S<n>-review`.
+    let mut from_branch = 0u32;
+    if !features.join(&slug).is_dir() {
+        let Some((base, n)) = slug.rsplit_once("-s").and_then(|(b, n)| n.parse::<u32>().ok().filter(|n| *n > 0).map(|n| (b.to_string(), n))) else { return (String::new(), 0) };
+        if !features.join(&base).is_dir() {
+            return (String::new(), 0);
+        }
+        slug = base;
+        from_branch = n;
     }
+    let dir = features.join(&slug);
     let key = format!("{app}/{slug}");
-    let n = parse_plan(&ws, &dir, "").and_then(|p| match_prompt(&p, first_prompt)).unwrap_or(0);
+    // A review belongs to the feature, not to the plan session's attempts.
+    let n = if cwd.trim_end_matches('/').ends_with("-review") {
+        0
+    } else if from_branch != 0 {
+        from_branch
+    } else {
+        parse_plan(&ws, &dir, "").and_then(|p| match_prompt(&p, first_prompt)).unwrap_or(0)
+    };
     (key, n)
 }
 
@@ -1593,9 +1609,10 @@ pub fn enrich(f: &mut Feature, sessions: &[Session], prs: &[Value]) {
                 break;
             }
         }
-        if ps.attempts >= 3 && ps.pr_state != "merged" {
+        let unfinished = ps.pr_state != "merged" && ps.pr_state != "open";
+        if ps.attempts >= 3 && unfinished {
             ps.warnings.push("Third attempt. Policy 9.1: after two failures at a tier, repeat one tier up; never the same prompt a third time.".to_string());
-        } else if ps.attempts == 2 && ps.pr_state != "merged" && !ps.running {
+        } else if ps.attempts == 2 && unfinished && !ps.running {
             ps.warnings.push("Failed twice? The next attempt goes one tier up (policy 9.1).".to_string());
         }
         let status = ps.status.to_ascii_lowercase();

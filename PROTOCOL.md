@@ -995,3 +995,14 @@ The window's info file gains `mode` (`chat`, or `terminal` when
 config.json has `"session_terminal": true`), `prompt_file` and `model`.
 Without WebKitGTK for Python (`gir1.2-webkit2-4.1`) the window opens
 its terminal body (VTE) instead; without that too, a terminal app.
+
+A session in a build worktree is on `<feature branch>-s<n>`: it is
+matched to its feature and to plan session `n` by that branch (before
+v3.1 it matched nothing, so a plan session's attempts stayed at zero and
+its dead runs were never noticed); a review, in `…-S<n>-review`, gets
+the feature and no plan session. A plan session with an open pull
+request no longer draws the "failed twice" hint. On its first start
+after the computer restarted (the boot id kept in `<state>/boot`), the
+daemon closes the sessions it still holds as working or waiting: the
+restart ended them and none of them said so. A session of an earlier
+attempt is checked against that attempt's process, not the latest one.

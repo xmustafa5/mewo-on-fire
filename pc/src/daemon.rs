@@ -970,7 +970,13 @@ async fn run_async() -> Result<()> {
     let identity = config::load_or_create_identity()?;
     let devices = config::load_devices();
     let store = Store::load(paths::events_file());
-    let sessions = Sessions::load(paths::sessions_file());
+    let mut sessions = Sessions::load(paths::sessions_file());
+    if paths::restarted_since_last_start() {
+        let closed = sessions.close_unfinished();
+        if closed > 0 {
+            eprintln!("mewo: the computer restarted: {closed} session(s) it caught at work are closed");
+        }
+    }
     let acceptor = server::tls_acceptor(&identity)?;
 
     let control_listener = control::bind()?;
@@ -1259,11 +1265,16 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     }
     // Sessions the hooks still call working whose headless process is gone.
     {
-        let pid_of = |n: u32| st.runs.iter().rev().find(|r| r.step == 9 && r.note == n.to_string()).map(|r| r.pid).unwrap_or(0);
+        // The run a session belongs to: the one that was the plan session's latest when it last moved
+        // (an earlier attempt is gone even while a later one runs).
+        let pid_of = |n: u32, at: u64| {
+            let mine = |r: &&flow::Run| r.step == 9 && r.note == n.to_string();
+            st.runs.iter().rev().filter(mine).find(|r| r.started <= at + 60_000).or_else(|| st.runs.iter().rev().find(mine)).map(|r| r.pid).unwrap_or(0)
+        };
         let review_pid_of = |n: u32| st.history.iter().rev().find(|j| j.kind == "review" && j.data.get("session").and_then(Value::as_u64) == Some(n as u64)).and_then(|j| j.data.get("pid").and_then(Value::as_u64)).unwrap_or(0) as u32;
         for x in sessions.iter().filter(|x| x.feature == f.key && x.state == "working") {
             let quiet = now.saturating_sub(x.last_ts);
-            let dead_run = x.plan_session != 0 && { let p = pid_of(x.plan_session); p != 0 && !runner::alive(p) };
+            let dead_run = x.plan_session != 0 && { let p = pid_of(x.plan_session, x.last_ts); p != 0 && !runner::alive(p) };
             let review_n = x.cwd.rsplit('/').next().and_then(|d| d.strip_suffix("-review")).and_then(|d| d.rsplit("-S").next()).and_then(|n| n.parse::<u32>().ok());
             let dead_review = review_n.map(|n| { let p = review_pid_of(n); p != 0 && !runner::alive(p) }).unwrap_or(false);
             if ((dead_run || dead_review) && quiet > 3 * min) || quiet > 90 * min {
