@@ -9,7 +9,10 @@ becomes Claude Code, so the daemon tracks the run as it tracks a headless
 one. The header follows the session through the daemon: its state (working,
 needs you, finished), its plan status and its pull request.
 
-Ctrl+Shift+C / Ctrl+Shift+V copy and paste, Ctrl+= / Ctrl+- / Ctrl+0 zoom.
+Ctrl+C copies the selection (with nothing selected it reaches Claude as
+usual), Ctrl+V pastes text (an image on the clipboard goes to Claude, which
+pastes it itself), Ctrl+Shift+C / Ctrl+Shift+V always copy and paste, a
+right click offers Copy, Paste and Select all; Ctrl+= / Ctrl+- / Ctrl+0 zoom.
 """
 
 import json
@@ -67,6 +70,11 @@ button.pr {{
   border: 1px solid rgba(79, 209, 255, 0.28); border-radius: 2px; background: none;
 }}
 button.pr:hover {{ background-color: rgba(79, 209, 255, 0.10); }}
+menu, .menu {{ background-color: {BG2}; border: 1px solid rgba(79, 209, 255, 0.28); padding: 4px 0; }}
+menu menuitem {{ color: {TEXT}; font-family: monospace; font-size: 9pt; padding: 6px 16px; }}
+menu menuitem:hover {{ background-color: rgba(79, 209, 255, 0.14); color: {CYAN}; }}
+menu menuitem:disabled {{ color: #4b5d70; }}
+menu menuitem accelerator {{ color: {DIM}; }}
 .edge {{ min-height: 2px; background-color: rgba(79, 209, 255, 0.18); }}
 .edge.working {{ background-color: {FIRE}; }}
 .edge.waiting {{ background-color: {AMBER}; }}
@@ -126,6 +134,8 @@ class SessionWindow(Gtk.Window):
         self.state = "starting"
         self.pr_url = ""
         self.font_scale = 1.0
+        self.status_text = ""
+        self.notice = 0
 
         self.set_default_size(1100, 760)
         icon = info.get("icon", "")
@@ -186,6 +196,9 @@ class SessionWindow(Gtk.Window):
         term.set_mouse_autohide(True)
         term.connect("child-exited", self.on_exit)
         term.connect("key-press-event", self.on_key)
+        term.connect("button-press-event", self.on_button)
+        # A double click takes a whole path or link, not one word of it.
+        term.set_word_char_exceptions("-,./?%&#:_=+@~")
         self.term = term
         scroll = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL, adjustment=term.get_vadjustment())
         # Breathing room around the text, painted in the terminal's own colour.
@@ -269,7 +282,9 @@ class SessionWindow(Gtk.Window):
         if out.get("state"):
             self.set_state(out["state"])
         if "status" in out:
-            self.status.set_markup(spaced(out["status"].upper(), DIM, size="8pt"))
+            self.status_text = out["status"].upper()
+            if not self.notice:
+                self.status.set_markup(spaced(self.status_text, DIM, size="8pt"))
         if out.get("pr") and out["pr"] != self.pr_url:
             self.pr_url = out["pr"]
             self.pr.show()
@@ -281,21 +296,69 @@ class SessionWindow(Gtk.Window):
 
     # ---------- keys and closing ----------
 
+    def copy(self, *_):
+        if not self.term.get_has_selection():
+            return
+        self.term.copy_clipboard_format(Vte.Format.TEXT)
+        self.flash("COPIED")
+
+    def paste(self, *_):
+        self.term.paste_clipboard()
+
+    def clipboard_has_text(self):
+        return Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_is_text_available()
+
+    def flash(self, text):
+        """A word in the header for a moment, where the plan status sits."""
+        self.notice += 1
+        mine = self.notice
+        self.status.set_markup(spaced(text, CYAN, size="8pt"))
+
+        def back():
+            if self.notice == mine:
+                self.notice = 0
+                self.status.set_markup(spaced(self.status_text, DIM, size="8pt") if self.status_text else "")
+            return False
+
+        GLib.timeout_add(1200, back)
+
     def on_key(self, _term, event):
         ctrl = event.state & Gdk.ModifierType.CONTROL_MASK
         shift = event.state & Gdk.ModifierType.SHIFT_MASK
         key = Gdk.keyval_to_lower(event.keyval)
-        if ctrl and shift and key == Gdk.KEY_c:
-            self.term.copy_clipboard_format(Vte.Format.TEXT)
+        # Ctrl+C copies a selection, as in an editor; with nothing selected it reaches Claude (stop).
+        if ctrl and key == Gdk.KEY_c and (shift or self.term.get_has_selection()):
+            self.copy()
             return True
-        if ctrl and shift and key == Gdk.KEY_v:
-            self.term.paste_clipboard()
+        # Ctrl+V pastes text; an image on the clipboard goes to Claude, which pastes images itself.
+        if ctrl and key == Gdk.KEY_v and (shift or self.clipboard_has_text()):
+            self.paste()
             return True
         if ctrl and key in (Gdk.KEY_equal, Gdk.KEY_plus, Gdk.KEY_minus, Gdk.KEY_0):
             self.font_scale = 1.0 if key == Gdk.KEY_0 else max(0.6, min(2.5, self.font_scale + (0.1 if key != Gdk.KEY_minus else -0.1)))
             self.term.set_font_scale(self.font_scale)
             return True
         return False
+
+    def on_button(self, _term, event):
+        if event.type != Gdk.EventType.BUTTON_PRESS or event.button != 3:
+            return False
+        menu = Gtk.Menu()
+        for label, key, mods, handler, sensitive in (
+            ("Copy", Gdk.KEY_c, Gdk.ModifierType.CONTROL_MASK, self.copy, self.term.get_has_selection()),
+            ("Paste", Gdk.KEY_v, Gdk.ModifierType.CONTROL_MASK, self.paste, True),
+            ("Select all", 0, 0, lambda *_: self.term.select_all(), True),
+        ):
+            item = Gtk.MenuItem(label=label)
+            if key:
+                item.get_child().set_accel(key, mods)
+            item.set_sensitive(sensitive)
+            item.connect("activate", handler)
+            menu.append(item)
+        menu.show_all()
+        menu.attach_to_widget(self.term, None)
+        menu.popup_at_pointer(event)
+        return True
 
     def on_close(self, *_):
         if not self.alive:
