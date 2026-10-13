@@ -128,9 +128,11 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
     Ok(pid)
 }
 
-/// v3.0: the Mewo Session window (console/linux/mewo-session), written
-/// next to the state when a session opens, so it always matches the daemon.
+/// v3.0: the Mewo Session window (console/linux/mewo-session) and, v3.1,
+/// the page of its chat, written next to the state when a session opens,
+/// so they always match the daemon.
 const SESSION_WINDOW: &str = include_str!("../console/linux/mewo-session");
+const SESSION_CHAT: &str = include_str!("../console/linux/mewo-session-chat.html");
 
 /// The console's colours, for a terminal that is not the Mewo Session
 /// window: foreground, background, cursor, then the sixteen ANSI colours.
@@ -138,12 +140,15 @@ const COLOURS: &str = "printf '\\033]10;#dbeafe\\007\\033]11;#04070c\\007\\033]1
 
 /// v3.0: a session you watch ("Build with me"): Claude Code in a window of
 /// its own, in `folder`, with `prompt` as its first message. On Linux it is
-/// the Mewo Session window (GTK and VTE, in the console's look, its header
-/// following the session through the daemon), else a terminal in the
-/// console's colours. Permissions are skipped as for a headless run, but a
-/// question waits for you, in the window and on the phones. A small script
-/// under `<state>/runs/` records its pid and then becomes Claude Code, so
-/// the returned pid is the session's own: alive while the window is open.
+/// the Mewo Session window, its header following the session: since v3.1 a
+/// chat drawn the way the Claude Code extension draws it, over Claude Code
+/// in its stream mode (the script's `chat` argument); without WebKitGTK,
+/// or with `session_terminal` in config.json, Claude Code in a terminal in
+/// that window; elsewhere a terminal app in the console's colours.
+/// Permissions are skipped as for a headless run, but a question waits for
+/// you, in the window and on the phones. A small script under
+/// `<state>/runs/` records its pid and then becomes Claude Code, so the
+/// returned pid is the session's own: alive while the window is open.
 /// `info` carries what the header shows (n, goal, feature, workspace,
 /// branch, model_label, title).
 pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str, info: serde_json::Value) -> Result<u32, String> {
@@ -170,6 +175,14 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
         sh.push_str(&format!("GH_TOKEN=$(env -u GH_TOKEN {} auth token --user {} 2>/dev/null) && [ -n \"$GH_TOKEN\" ] && export GH_TOKEN\n", sq(&gh.to_string_lossy()), sq(&user)));
     }
     sh.push_str(&format!("echo $$ > {}\n", sq(&pid_file.to_string_lossy())));
+    let model_arg = model.map(|m| format!(" --model {m}")).unwrap_or_default();
+    // The chat: JSON lines on stdin and stdout; the window sends the prompt and answers what asks.
+    sh.push_str(&format!(
+        "if [ \"$1\" = chat ]; then\n  cd {} || exit 1\n  exec {} -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio --dangerously-skip-permissions{}\nfi\n",
+        sq(folder),
+        sq(&bin.to_string_lossy()),
+        model_arg
+    ));
     sh.push_str(&format!("printf '\\033]0;%s\\007' {}\n", sq(&title)));
     sh.push_str(COLOURS);
     sh.push('\n');
@@ -177,7 +190,7 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
     sh.push_str(&format!(
         "exec {} --dangerously-skip-permissions{} \"$(cat {})\"\n",
         sq(&bin.to_string_lossy()),
-        model.map(|m| format!(" --model {m}")).unwrap_or_default(),
+        model_arg,
         sq(&prompt_file.to_string_lossy())
     ));
     fs::write(&script, sh).map_err(|e| e.to_string())?;
@@ -186,6 +199,12 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
     let script_s = script.to_string_lossy().into_owned();
+    let mut info = info;
+    if let Some(o) = info.as_object_mut() {
+        o.insert("prompt_file".into(), prompt_file.to_string_lossy().into_owned().into());
+        o.insert("model".into(), model.unwrap_or("").into());
+        o.insert("mode".into(), if crate::config::session_terminal() { "terminal" } else { "chat" }.into());
+    }
     if !open_session_window(folder, &script_s, &dir.join(format!("{base}.json")), info) {
         open_terminal(&script_s)?;
     }
@@ -200,20 +219,24 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
 }
 
 /// The Mewo Session window, when this computer can show it (Linux with
-/// GTK 3 and VTE for Python), started so a restart of the daemon leaves it
-/// open. False: use a terminal.
+/// GTK 3 for Python and WebKitGTK for the chat or VTE for the terminal),
+/// started so a restart of the daemon leaves it open. False: use a
+/// terminal app.
 fn open_session_window(folder: &str, script: &str, info_file: &std::path::Path, mut info: serde_json::Value) -> bool {
     if cfg!(target_os = "macos") {
         return false;
     }
     let Some(python) = find_tool("python3") else { return false };
-    let check = "import gi; gi.require_version('Gtk', '3.0'); gi.require_version('Vte', '2.91'); from gi.repository import Gtk, Vte";
+    let check = "import gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk\ntry:\n    gi.require_version('WebKit2', '4.1')\n    from gi.repository import WebKit2\nexcept (ValueError, ImportError):\n    gi.require_version('Vte', '2.91')\n    from gi.repository import Vte";
     if !Command::new(&python).args(["-c", check]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
         return false;
     }
     let window = paths::state_dir().join("mewo-session");
-    if fs::read_to_string(&window).ok().as_deref() != Some(SESSION_WINDOW) && fs::write(&window, SESSION_WINDOW).is_err() {
-        return false;
+    let chat = paths::state_dir().join("mewo-session-chat.html");
+    for (path, text) in [(&window, SESSION_WINDOW), (&chat, SESSION_CHAT)] {
+        if fs::read_to_string(path).ok().as_deref() != Some(text) && fs::write(path, text).is_err() {
+            return false;
+        }
     }
     let data = std::env::var("XDG_DATA_HOME").ok().filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"));
     if let Some(o) = info.as_object_mut() {

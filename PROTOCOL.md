@@ -956,3 +956,42 @@ enough. So an update of the daemon leaves the build's runs going.
 `attended: false` (BUILD EVERYTHING) goes back to headless sessions;
 leaving it out (resume, pause, merge on pass) keeps the setting.
 `flow.build.attended` carries it.
+
+# v3.1 — the session chat
+
+A "Build with me" session now opens as a chat in the Mewo Session
+window, drawn the way the Claude Code extension draws a conversation:
+your messages, Claude's text as it is written, each tool call with its
+input and output (a command with IN and OUT, an edit as a diff, todos as
+a list, an agent with its own steps under it), and a composer with the
+model, the permission mode, "@" for a file and "/" for a command. The
+page is `pc/console/linux/mewo-session-chat.html`, built into the binary
+beside the window and written to `<state>/mewo-session-chat.html`.
+
+Under it Claude Code runs in its stream mode: the run script's `chat`
+argument is `claude -p --input-format stream-json --output-format
+stream-json --verbose --include-partial-messages --permission-prompt-tool
+stdio --dangerously-skip-permissions [--model …]`, JSON lines on stdin
+and stdout. The window sends the session's prompt as the first user
+message (`prompt_file` in its info file) and every later one, images
+included; a message sent while Claude works is queued. It asks Claude
+Code for its commands and models at the start (`initialize`), stops a
+turn with `interrupt`, and changes the model and the permission mode
+with `set_model` and `set_permission_mode`. The pid in the pid file is
+Claude Code's own, as before, so the build tracks the run the same way.
+
+A question (`AskUserQuestion`), a plan to approve and, outside bypass
+mode, a permission prompt reach the window as a `can_use_tool` request
+and show as a card with the options as buttons; the answer goes back as
+its `control_response`. So that the phones keep their part, the window
+also hands each request to `mewo ask` (a PermissionRequest payload on
+its stdin): the phones get it as they get a terminal session's prompt,
+the first answer wins, and answering in the window ends that `mewo ask`,
+which takes the request off the phones. Claude Code's own Notification
+hook still says "needs you" after a few seconds, and its Stop hook still
+reports each reply.
+
+The window's info file gains `mode` (`chat`, or `terminal` when
+config.json has `"session_terminal": true`), `prompt_file` and `model`.
+Without WebKitGTK for Python (`gir1.2-webkit2-4.1`) the window opens
+its terminal body (VTE) instead; without that too, a terminal app.

@@ -48,6 +48,11 @@ pub struct Config {
     pub work_hours: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub work_days: Vec<u8>,
+    /// v3.1: a "Build with me" session opens as Claude Code in a terminal
+    /// (the Mewo Session window's other body) instead of the chat. Set by
+    /// hand in config.json; read each time a session opens.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub session_terminal: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -151,6 +156,14 @@ pub fn suggestions_enabled() -> bool {
         .is_some_and(|cfg| cfg.suggestions)
 }
 
+/// v3.1: `session_terminal` in config.json.
+pub fn session_terminal() -> bool {
+    fs::read_to_string(paths::config_file())
+        .ok()
+        .and_then(|text| serde_json::from_str::<Config>(&text).ok())
+        .is_some_and(|cfg| cfg.session_terminal)
+}
+
 pub fn set_suggestions(on: bool) -> Result<()> {
     let mut cfg = load_or_create()?;
     cfg.suggestions = on;
@@ -227,6 +240,7 @@ pub fn load_or_create() -> Result<Config> {
                 github_user: String::new(),
                 work_hours: String::new(),
                 work_days: Vec::new(),
+                session_terminal: false,
             };
             save_config(&cfg)?;
             Ok(cfg)

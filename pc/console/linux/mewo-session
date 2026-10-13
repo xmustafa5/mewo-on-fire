@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """Mewo Session for Linux: one build session of "Build with me" in a window
-of its own, in the Mewo on Fire look (GTK + the VTE terminal widget).
+of its own.
 
 The daemon writes this file next to its state and starts it with an info
 file (JSON): the session's number, goal, feature, worktree, model, the
 script to run and the daemon's socket. The script records its pid and then
 becomes Claude Code, so the daemon tracks the run as it tracks a headless
-one. The header follows the session through the daemon: its state (working,
-needs you, finished), its plan status and its pull request.
+one. The header follows the session: its state (working, needs you,
+finished), its plan status and its pull request.
 
-Ctrl+C copies the selection (with nothing selected it reaches Claude as
+Two bodies. The chat (info "mode": "chat", needs WebKitGTK): Claude Code
+runs in its stream mode (JSON lines on stdin and stdout) and the page
+beside this file, mewo-session-chat.html, draws the conversation the way
+the Claude Code extension does: messages, tool calls with input and output,
+diffs, questions and permission prompts as buttons, a composer with the
+model and the mode. A prompt that waits also goes to the phones, through
+`mewo ask`, and the first answer wins. The terminal (GTK + VTE) is the
+other body: Claude Code as it is in a terminal, in the console's colours;
+it is what opens without WebKitGTK.
+
+In the terminal, Ctrl+C copies the selection (with nothing selected it reaches Claude as
 usual), Ctrl+V pastes text (an image on the clipboard goes to Claude, which
 pastes it itself), Ctrl+Shift+C / Ctrl+Shift+V always copy and paste, a
 right click offers Copy, Paste and Select all; Ctrl+= / Ctrl+- / Ctrl+0 zoom.
@@ -17,16 +27,32 @@ right click offers Copy, Paste and Select all; Ctrl+= / Ctrl+- / Ctrl+0 zoom.
 
 import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
+import time
 
 import gi
 
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
-gi.require_version("Vte", "2.91")
-from gi.repository import Gdk, GLib, Gtk, Pango, Vte  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+
+try:
+    gi.require_version("Vte", "2.91")
+    from gi.repository import Vte  # noqa: E402
+except (ValueError, ImportError):
+    Vte = None
+try:
+    gi.require_version("WebKit2", "4.1")
+    from gi.repository import WebKit2  # noqa: E402
+except (ValueError, ImportError):
+    WebKit2 = None
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+CHAT_PAGE = os.path.join(HERE, "mewo-session-chat.html")
 
 # The console's colours (dashboard/index.html :root).
 BG = "#04070c"
@@ -38,6 +64,15 @@ FIRE = "#ff6b35"
 AMBER = "#ffb347"
 OK = "#3dd68c"
 ASH = "#6b7280"
+
+# The chat's colours (mewo-session-chat.html :root): the Claude Code extension's.
+CHAT_BG = "#1e2227"
+CHAT_LINE = "#181a1f"
+CHAT_TEXT = "#e2e4e8"
+CHAT_DIM = "#7f848e"
+CORAL = "#f48771"
+CHAT_AMBER = "#d8b88b"
+CHAT_OK = "#89ca78"
 
 # Black, red, green, yellow, blue, magenta, cyan, white; then the bright ones.
 PALETTE = [
@@ -83,10 +118,32 @@ box.pane {{ background-color: {BG}; }}
 scrollbar, scrollbar trough {{ background-color: {BG}; border: none; box-shadow: none; }}
 scrollbar slider {{ background-color: rgba(79, 209, 255, 0.30); border: none; min-width: 6px; min-height: 28px; border-radius: 3px; }}
 scrollbar slider:hover {{ background-color: rgba(79, 209, 255, 0.50); }}
+window.chat, .chat {{ background-color: {CHAT_BG}; }}
+.chat headerbar {{ background-color: {CHAT_BG}; border-bottom: 1px solid {CHAT_LINE}; min-height: 48px; }}
+.chat headerbar button {{ color: {CHAT_DIM}; }}
+.chat headerbar button:hover {{ color: {CHAT_TEXT}; background-color: rgba(172, 178, 191, 0.10); }}
+.chat .goal {{ color: {CHAT_TEXT}; font-size: 10.5pt; }}
+.chat .chip {{ font-family: sans-serif; font-weight: 600; font-size: 8.5pt; border-radius: 5px; padding: 2px 9px; }}
+.chat .chip.starting, .chat .chip.ready {{ color: {CHAT_DIM}; border-color: #2f333b; background-color: transparent; }}
+.chat .chip.working {{ color: {CORAL}; border-color: {CORAL}; background-color: rgba(244, 135, 113, 0.10); }}
+.chat .chip.waiting {{ color: {CHAT_AMBER}; border-color: {CHAT_AMBER}; background-color: rgba(216, 184, 139, 0.14); }}
+.chat .chip.finished {{ color: {CHAT_OK}; border-color: {CHAT_OK}; background-color: rgba(137, 202, 120, 0.10); }}
+.chat .chip.ended {{ color: {CHAT_DIM}; border-color: #2f333b; }}
+.chat .status {{ color: {CHAT_DIM}; font-family: sans-serif; }}
+.chat button.pr {{ color: {CORAL}; font-family: sans-serif; border: 1px solid rgba(244, 135, 113, 0.40); border-radius: 5px; }}
+.chat button.pr:hover {{ background-color: rgba(244, 135, 113, 0.10); }}
+.chat .edge {{ background-color: {CHAT_LINE}; }}
+.chat .edge.working {{ background-color: {CORAL}; }}
+.chat .edge.waiting {{ background-color: {CHAT_AMBER}; }}
+.chat .edge.finished {{ background-color: {CHAT_OK}; }}
+.chat menu, .chat .menu {{ background-color: #1e1f23; border: 1px solid #2f333b; }}
+.chat menu menuitem {{ color: #cccccc; font-family: sans-serif; }}
+.chat menu menuitem:hover {{ background-color: #2f3034; color: #ffffff; }}
 """
 
 STATES = {
     "starting": "STARTING",
+    "ready": "READY",
     "working": "WORKING",
     "waiting": "NEEDS YOU",
     "finished": "FINISHED",
@@ -124,6 +181,371 @@ def ask_daemon(sock, request, timeout=4):
     return json.loads(buf or b"{}")
 
 
+def find_tool(name):
+    """A command the daemon's short PATH may not have."""
+    home = os.path.expanduser("~")
+    for p in (shutil.which(name), f"{home}/.local/bin/{name}", f"/usr/local/bin/{name}", f"/usr/bin/{name}", f"/snap/bin/{name}", f"/opt/homebrew/bin/{name}"):
+        if p and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+class Chat:
+    """The chat body: the page in a WebKit view, Claude Code under it in stream mode."""
+
+    def __init__(self, win, info):
+        self.win, self.info, self.folder = win, info, win.folder
+        self.proc = None
+        self.session_id = ""
+        self.page_ready = False
+        self.inbox = []          # events read from Claude Code, not yet seen here
+        self.outbox = []         # events for the page
+        self.lock = threading.Lock()
+        self.asks = {}           # request id → {"request": ..., "proc": the `mewo ask` that holds it for the phones}
+        self.err_tail = []
+        self.files, self.files_at = None, 0.0
+        self.serial = 0
+        self.stopping = False
+
+        manager = WebKit2.UserContentManager()
+        manager.register_script_message_handler("mewo")
+        manager.connect("script-message-received::mewo", self.on_message)
+        web = WebKit2.WebView.new_with_user_content_manager(manager)
+        web.set_background_color(rgba(CHAT_BG))
+        settings = web.get_settings()
+        settings.set_enable_developer_extras(bool(os.environ.get("MEWO_SESSION_DEBUG")))
+        settings.set_enable_back_forward_navigation_gestures(False)
+        web.connect("decide-policy", self.on_policy)
+        web.connect("context-menu", self.on_context_menu)
+        web.connect("key-press-event", self.on_key)
+        self.page_uri = GLib.filename_to_uri(CHAT_PAGE, None)
+        web.load_uri(self.page_uri)
+        self.web = web
+        GLib.timeout_add(33, self.flush)
+
+    # ---------- Claude Code ----------
+
+    def start(self):
+        try:
+            self.proc = subprocess.Popen(
+                ["/bin/sh", self.info["script"], "chat"], cwd=self.folder,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+        except OSError as e:
+            self.push({"type": "mewo", "kind": "exit", "code": 1, "text": f"Could not start Claude Code: {e}"})
+            self.win.session_ended()
+            return
+        self.win.alive = True
+        threading.Thread(target=self.read_out, daemon=True).start()
+        threading.Thread(target=self.read_err, daemon=True).start()
+        self.push({"type": "mewo", "kind": "info", "cwd": self.folder, "model": self.info.get("model", ""), "mode": self.info.get("permission_mode", "bypassPermissions")})
+        # Its commands and models, for the "/" list and the model list, before the first message.
+        self.write({"type": "control_request", "request_id": "mewo-hello", "request": {"subtype": "initialize"}})
+        prompt = ""
+        try:
+            with open(self.info.get("prompt_file") or "", encoding="utf-8") as f:
+                prompt = f.read().strip()
+        except OSError:
+            pass
+        if prompt:
+            self.say(prompt, [])
+            self.push({"type": "mewo", "kind": "prompt", "text": prompt})
+
+    def read_out(self):
+        for raw in self.proc.stdout:
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                continue
+            with self.lock:
+                self.inbox.append(ev)
+        code = self.proc.wait()
+        GLib.idle_add(self.on_exit, code)
+
+    def read_err(self):
+        for raw in self.proc.stderr:
+            line = raw.decode("utf-8", "replace").rstrip()
+            if line:
+                self.err_tail = (self.err_tail + [line])[-6:]
+
+    def write(self, obj):
+        if not self.proc or self.proc.poll() is not None:
+            return False
+        try:
+            with self.lock:
+                self.proc.stdin.write(json.dumps(obj).encode() + b"\n")
+                self.proc.stdin.flush()
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def say(self, text, images):
+        content = [{"type": "image", "source": {"type": "base64", "media_type": i.get("media_type", "image/png"), "data": i.get("data", "")}} for i in images or []]
+        if text:
+            content.append({"type": "text", "text": text})
+        self.write({"type": "user", "message": {"role": "user", "content": content}})
+
+    def control(self, request):
+        self.serial += 1
+        self.write({"type": "control_request", "request_id": f"mewo-{self.serial}", "request": request})
+
+    def on_exit(self, code):
+        self.flush()
+        for ask in self.asks.values():
+            self.drop_phone(ask)
+        self.asks.clear()
+        text = "The session ended."
+        failed = code not in (0, None) and code > 0 and not self.stopping
+        if failed:
+            text = f"Claude Code stopped (exit {code})." + ("\n" + "\n".join(self.err_tail) if self.err_tail else "")
+        elif code not in (0, None) and not self.stopping:
+            text = "The session was stopped."  # a signal: Stop now on the console, or the build ending it
+        self.push({"type": "mewo", "kind": "exit", "code": code if failed else 0, "text": text})
+        self.win.session_ended()
+        return False
+
+    def stop(self):
+        """The window closes: Claude Code ends with it."""
+        self.stopping = True
+        for ask in self.asks.values():
+            self.drop_phone(ask)
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                self.proc.wait(1.5)
+            except subprocess.TimeoutExpired:
+                self.proc.terminate()
+
+    # ---------- events ----------
+
+    # What the page has no use for: hooks, a subagent's partial text, the frame of a message.
+    QUIET_STREAM = ("message_start", "message_delta", "message_stop", "content_block_stop")
+
+    def wanted(self, ev):
+        t = ev.get("type")
+        if t == "system":
+            return ev.get("subtype") in ("init", "status", "compact_boundary", "api_retry")
+        if t == "stream_event":
+            e = ev.get("event") or {}
+            if ev.get("parent_tool_use_id") or e.get("type") in self.QUIET_STREAM:
+                return False
+            return (e.get("delta") or {}).get("type") != "input_json_delta"
+        return t in ("assistant", "user", "result", "control_request", "control_cancel_request", "control_response", "rate_limit_event")
+
+    def flush(self):
+        with self.lock:
+            fresh, self.inbox = self.inbox, []
+        for ev in fresh:
+            t = ev.get("type")
+            if t == "system" and ev.get("subtype") == "init":
+                self.session_id = ev.get("session_id") or self.session_id
+            elif t == "control_request":
+                r = ev.get("request") or {}
+                if r.get("subtype") == "can_use_tool":
+                    self.ask_opened(ev.get("request_id", ""), r)
+                else:
+                    # Nothing here answers the other host requests (hook callbacks, MCP).
+                    self.write({"type": "control_response", "response": {"subtype": "error", "request_id": ev.get("request_id", ""), "error": "not supported by the Mewo Session window"}})
+                    continue
+            elif t == "control_cancel_request":
+                self.drop_phone(self.asks.pop(ev.get("request_id", ""), None))
+            elif t == "control_response" and (ev.get("response") or {}).get("request_id") == "mewo-hello":
+                r = (ev.get("response") or {}).get("response") or {}
+                self.outbox.append({
+                    "type": "mewo", "kind": "hello", "mode": r.get("current_permission_mode", ""),
+                    "commands": [{"name": c.get("name", ""), "description": c.get("description", "")} for c in r.get("commands") or []],
+                    "models": [{"value": m.get("value", ""), "name": m.get("displayName", ""), "description": m.get("description", ""), "resolved": m.get("resolvedModel", "")} for m in r.get("models") or []],
+                })
+                continue
+            if self.wanted(ev):
+                self.outbox.append(ev)
+        if self.page_ready and self.outbox:
+            batch, self.outbox = self.outbox, []
+            js = "mewo.recv(" + json.dumps(batch) + ")"
+            try:
+                self.web.evaluate_javascript(js, -1, None, None, None, None)
+            except (AttributeError, TypeError):
+                self.web.run_javascript(js, None, None, None)
+        return True
+
+    def push(self, ev):
+        self.outbox.append(ev)
+
+    # ---------- a prompt that waits: here, and on the phones ----------
+
+    def ask_opened(self, rid, r):
+        ask = {"request": r, "proc": None}
+        self.asks[rid] = ask
+        mewo = find_tool("mewo")
+        if mewo:
+            payload = {
+                "hook_event_name": "PermissionRequest", "tool_name": r.get("tool_name", ""), "tool_input": r.get("input") or {},
+                "session_id": self.session_id, "cwd": self.folder, "transcript_path": "",
+                "permission_suggestions": r.get("permission_suggestions") or [],
+            }
+            try:
+                ask["proc"] = subprocess.Popen([mewo, "ask"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                threading.Thread(target=self.wait_phone, args=(rid, ask["proc"], json.dumps(payload).encode()), daemon=True).start()
+            except OSError:
+                ask["proc"] = None
+
+    def wait_phone(self, rid, proc, payload):
+        try:
+            out, _ = proc.communicate(payload)
+            decision = json.loads(out)["hookSpecificOutput"]["decision"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+        GLib.idle_add(self.answer, rid, decision, "phone")
+
+    def drop_phone(self, ask):
+        proc = (ask or {}).get("proc")
+        if proc and proc.poll() is None:
+            proc.terminate()  # its socket closes, so the daemon takes the request off the phones
+
+    def answer(self, rid, decision, by):
+        """`decision` is a permission result: {"behavior": "allow"|"deny", ...}."""
+        ask = self.asks.pop(rid, None)
+        if ask is None:
+            return False
+        r = ask["request"]
+        if decision.get("behavior") == "allow":
+            response = {"behavior": "allow", "updatedInput": decision.get("updatedInput") or r.get("input") or {}}
+            if decision.get("updatedPermissions"):
+                response["updatedPermissions"] = decision["updatedPermissions"]
+        else:
+            response = {"behavior": "deny", "message": decision.get("message") or "The user said no."}
+        self.write({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": response}})
+        if by == "phone":
+            self.push({"type": "mewo", "kind": "resolved", "request_id": rid, "by": "phone"})
+        else:
+            self.drop_phone(ask)
+        if self.session_id:
+            self.tell_daemon({"cmd": "session_state", "session_id": self.session_id, "cwd": self.folder, "state": "working"})
+        return False
+
+    def tell_daemon(self, request):
+        sock = self.info.get("socket", "")
+
+        def run():
+            try:
+                ask_daemon(sock, request)
+            except (OSError, ValueError):
+                pass
+
+        threading.Thread(target=run, daemon=True).start()
+
+    # ---------- the page ----------
+
+    def on_message(self, _manager, result):
+        try:
+            value = result.get_js_value() if hasattr(result, "get_js_value") else result
+            msg = json.loads(value.to_string())
+        except (ValueError, AttributeError):
+            return
+        t = msg.get("t")
+        if t == "ready":
+            self.page_ready = True
+        elif t == "send":
+            self.say(msg.get("text", ""), msg.get("images") or [])
+        elif t == "respond":
+            self.answer(msg.get("request_id", ""), msg.get("response") or {}, "window")
+        elif t == "interrupt":
+            self.control({"subtype": "interrupt"})
+        elif t == "set_model":
+            self.control({"subtype": "set_model", "model": msg.get("model") or "default"})
+        elif t == "set_mode":
+            self.control({"subtype": "set_permission_mode", "mode": msg.get("mode") or "default"})
+        elif t == "state":
+            self.win.set_state(msg.get("state", ""))
+        elif t == "copy":
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(msg.get("text", ""), -1)
+        elif t == "url":
+            self.open_uri(msg.get("url", ""))
+        elif t == "open":
+            self.open_path(msg.get("path", ""), int(msg.get("line") or 0))
+        elif t == "files":
+            threading.Thread(target=self.find_files, args=(msg.get("q", ""),), daemon=True).start()
+
+    def open_uri(self, uri):
+        if uri.startswith(("http://", "https://")):
+            try:
+                Gio.AppInfo.launch_default_for_uri(uri, None)
+            except GLib.Error:
+                pass
+
+    def open_path(self, path, line):
+        """A file Claude names opens in VS Code at its line, else in the app that owns it."""
+        p = os.path.expanduser(path)
+        if not os.path.isabs(p):
+            p = os.path.join(self.folder, p)
+        if not os.path.exists(p):
+            self.win.flash("NO SUCH FILE")
+            return
+        code = find_tool("code")
+        try:
+            if code and os.path.isfile(p):
+                subprocess.Popen([code, "-g", f"{p}:{line}" if line else p], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(p, None), None)
+        except (OSError, GLib.Error):
+            self.win.flash("COULD NOT OPEN IT")
+
+    def find_files(self, q):
+        """The folder's files for an "@": git's list (tracked and new, not ignored), best matches first."""
+        if self.files is None or time.time() - self.files_at > 30:
+            try:
+                out = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=self.folder, capture_output=True, text=True, timeout=6).stdout.split("\n")
+            except (OSError, subprocess.SubprocessError):
+                out = []
+            self.files, self.files_at = [f for f in out if f][:60000], time.time()
+        needle = q.lower()
+
+        def rank(f):
+            low, base = f.lower(), os.path.basename(f).lower()
+            if not needle:
+                return (f.count("/"), len(f))
+            if base.startswith(needle):
+                return (0, len(f))
+            if needle in base:
+                return (1, len(f))
+            if needle in low:
+                return (2, len(f))
+            return None
+
+        scored = [(r, f) for f in self.files for r in [rank(f)] if r is not None]
+        scored.sort()
+        GLib.idle_add(self.push, {"type": "mewo", "kind": "files", "q": q, "files": [f for _, f in scored[:12]]})
+
+    def on_policy(self, _web, decision, kind):
+        if kind == WebKit2.PolicyDecisionType.RESPONSE:
+            return False
+        uri = decision.get_navigation_action().get_request().get_uri() or ""
+        if uri.split("#")[0] == self.page_uri:
+            return False
+        decision.ignore()  # the page never leaves; its links go through open_uri
+        return True
+
+    def on_context_menu(self, _web, menu, _event, _hit):
+        keep = (WebKit2.ContextMenuAction.COPY, WebKit2.ContextMenuAction.CUT, WebKit2.ContextMenuAction.PASTE, WebKit2.ContextMenuAction.SELECT_ALL)
+        for item in list(menu.get_items()):
+            if item.get_stock_action() not in keep:
+                menu.remove(item)
+        return menu.get_n_items() == 0
+
+    def on_key(self, _web, event):
+        if not event.state & Gdk.ModifierType.CONTROL_MASK:
+            return False
+        key = Gdk.keyval_to_lower(event.keyval)
+        if key in (Gdk.KEY_equal, Gdk.KEY_plus, Gdk.KEY_minus, Gdk.KEY_0):
+            zoom = 1.0 if key == Gdk.KEY_0 else max(0.7, min(2.0, self.web.get_zoom_level() + (0.1 if key != Gdk.KEY_minus else -0.1)))
+            self.web.set_zoom_level(zoom)
+            return True
+        return False
+
+
 class SessionWindow(Gtk.Window):
     def __init__(self, info):
         super().__init__(title=info.get("title", "Mewo Session"))
@@ -136,12 +558,17 @@ class SessionWindow(Gtk.Window):
         self.font_scale = 1.0
         self.status_text = ""
         self.notice = 0
+        self.term = None
+        self.chat = None
+        # The chat when it was asked for and this computer can show it, else the terminal.
+        self.chat_mode = info.get("mode") == "chat" and WebKit2 is not None and os.path.exists(CHAT_PAGE)
+        self.accent, self.dim = (CORAL, CHAT_DIM) if self.chat_mode else (CYAN, DIM)
 
-        self.set_default_size(1100, 760)
+        self.set_default_size(1100, 780 if self.chat_mode else 760)
         icon = info.get("icon", "")
         if icon and os.path.exists(icon):
             self.set_icon_from_file(icon)
-        self.get_style_context().add_class("mewo")
+        self.get_style_context().add_class("chat" if self.chat_mode else "mewo")
 
         # Header: the brand line and the goal; the state chip and the pull request on the right.
         bar = Gtk.HeaderBar()
@@ -149,7 +576,8 @@ class SessionWindow(Gtk.Window):
         titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
         brand = Gtk.Label(xalign=0)
         brand.set_markup(
-            spaced("◉ MEWO ON FIRE", CYAN) + spaced(f"  ·  SESSION {info.get('n', '')}", DIM)
+            spaced("◉ MEWO ON FIRE", self.accent, size="8pt" if self.chat_mode else "9pt")
+            + spaced(f"  ·  SESSION {info.get('n', '')}", self.dim, size="8pt" if self.chat_mode else "9pt")
         )
         goal = Gtk.Label(label=info.get("goal", ""), xalign=0)
         goal.get_style_context().add_class("goal")
@@ -181,7 +609,35 @@ class SessionWindow(Gtk.Window):
         self.edge = Gtk.Box()
         self.edge.get_style_context().add_class("edge")
 
-        # The terminal, in the console's colours.
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.pack_start(self.edge, False, False, 0)
+        if self.chat_mode:
+            self.chat = Chat(self, info)
+            box.pack_start(self.chat.web, True, True, 0)
+        elif Vte is not None:
+            box.pack_start(meta, False, False, 0)
+            box.pack_start(self.build_terminal(), True, True, 0)
+        else:
+            sorry = Gtk.Label(label="This window needs WebKitGTK or VTE for Python:\nsudo apt install gir1.2-webkit2-4.1 gir1.2-vte-2.91")
+            sorry.get_style_context().add_class("goal")
+            box.pack_start(sorry, True, True, 0)
+        self.add(box)
+        self.connect("delete-event", self.on_close)
+        self.connect("destroy", self.on_destroy)
+
+        if self.chat:
+            self.chat.start()
+            self.chat.web.grab_focus()
+        elif self.term:
+            self.term.spawn_async(
+                Vte.PtyFlags.DEFAULT, self.folder, ["/bin/sh", info["script"]], None,
+                GLib.SpawnFlags.DEFAULT, None, None, -1, None, self.on_spawned,
+            )
+        GLib.timeout_add_seconds(2, self.poll)
+        self.poll()
+
+    def build_terminal(self):
+        """The terminal, in the console's colours."""
         term = Vte.Terminal()
         term.set_colors(rgba(TEXT), rgba(BG), [rgba(c) for c in PALETTE])
         term.set_color_cursor(rgba(CYAN))
@@ -209,20 +665,7 @@ class SessionWindow(Gtk.Window):
         pane.get_style_context().add_class("pane")
         pane.pack_start(term, True, True, 0)
         pane.pack_end(scroll, False, False, 0)
-
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.pack_start(self.edge, False, False, 0)
-        box.pack_start(meta, False, False, 0)
-        box.pack_start(pane, True, True, 0)
-        self.add(box)
-        self.connect("delete-event", self.on_close)
-
-        term.spawn_async(
-            Vte.PtyFlags.DEFAULT, self.folder, ["/bin/sh", info["script"]], None,
-            GLib.SpawnFlags.DEFAULT, None, None, -1, None, self.on_spawned,
-        )
-        GLib.timeout_add_seconds(2, self.poll)
-        self.poll()
+        return pane
 
     # ---------- the session ----------
 
@@ -235,16 +678,23 @@ class SessionWindow(Gtk.Window):
         self.term.grab_focus()
 
     def on_exit(self, _term, _status):
+        self.session_ended()
+        self.term.feed("\r\n\x1b[38;2;123;147;171m  The session ended. You can close this window.\x1b[0m\r\n".encode())
+
+    def session_ended(self):
         self.alive = False
         self.ended = True
         self.set_state("ended")
-        self.term.feed("\r\n\x1b[38;2;123;147;171m  The session ended. You can close this window.\x1b[0m\r\n".encode())
+
+    def on_destroy(self, *_):
+        if self.chat:
+            self.chat.stop()
 
     def set_state(self, state):
         state = "finished" if state == "idle" else state
         if self.ended:
             state = "ended"
-        if state == self.state:
+        if state == self.state or state not in STATES:
             return
         for w in (self.chip, self.edge):
             ctx = w.get_style_context()
@@ -265,8 +715,8 @@ class SessionWindow(Gtk.Window):
         sock = self.info.get("socket", "")
         out = {}
         try:
-            sessions = ask_daemon(sock, {"cmd": "sessions"}).get("sessions") or []
-            mine = [s for s in sessions if os.path.realpath(s.get("cwd") or "/") == self.folder]
+            sessions = [] if self.chat else ask_daemon(sock, {"cmd": "sessions"}).get("sessions") or []
+            mine = [] if self.chat else [s for s in sessions if os.path.realpath(s.get("cwd") or "/") == self.folder]
             if mine:
                 out["state"] = max(mine, key=lambda s: s.get("last_ts") or 0).get("state", "")
             if self.info.get("feature") and self.info.get("n"):
@@ -284,7 +734,7 @@ class SessionWindow(Gtk.Window):
         if "status" in out:
             self.status_text = out["status"].upper()
             if not self.notice:
-                self.status.set_markup(spaced(self.status_text, DIM, size="8pt"))
+                self.status.set_markup(spaced(self.status_text, self.dim, size="8pt"))
         if out.get("pr") and out["pr"] != self.pr_url:
             self.pr_url = out["pr"]
             self.pr.show()
@@ -312,12 +762,12 @@ class SessionWindow(Gtk.Window):
         """A word in the header for a moment, where the plan status sits."""
         self.notice += 1
         mine = self.notice
-        self.status.set_markup(spaced(text, CYAN, size="8pt"))
+        self.status.set_markup(spaced(text, self.accent, size="8pt"))
 
         def back():
             if self.notice == mine:
                 self.notice = 0
-                self.status.set_markup(spaced(self.status_text, DIM, size="8pt") if self.status_text else "")
+                self.status.set_markup(spaced(self.status_text, self.dim, size="8pt") if self.status_text else "")
             return False
 
         GLib.timeout_add(1200, back)

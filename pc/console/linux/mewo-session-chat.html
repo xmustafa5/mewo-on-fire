@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mewo Session</title>
+<!--
+  The chat of a Mewo Session window: Claude Code's conversation drawn the way
+  the Claude Code extension draws it (messages, tool calls with their input
+  and output, diffs, questions and permission prompts as buttons, a composer
+  with the mode and the model). The window (mewo-session) runs Claude Code in
+  its stream mode, hands every event to mewo.recv([...]) and takes what the
+  page posts to window.webkit.messageHandlers.mewo (JSON text):
+    {t:'ready'} {t:'send',text,images} {t:'respond',request_id,response}
+    {t:'interrupt'} {t:'set_model',model} {t:'set_mode',mode}
+    {t:'open',path,line} {t:'url',url} {t:'copy',text} {t:'files',q} {t:'state',state}
+  Everything Claude writes is escaped before it reaches the page.
+-->
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #1e2227; --surface: #1e1f23; --line: #181a1f; --line2: #2f333b;
+  --text: #cccccc; --text2: #acb2bf; --dim: #7f848e; --dim2: #5c6370;
+  --accent: #f48771; --chip: #2f3034; --code-bg: #363a3f; --code: #d19a66;
+  --ok: #89ca78; --err: #ef596f; --warn-bg: #534635; --warn: #d8b88b; --link: #61afef;
+  --add: rgba(137, 202, 120, .14); --del: rgba(239, 89, 111, .14);
+  --sans: system-ui, -apple-system, "Segoe UI", Ubuntu, "Droid Sans", sans-serif;
+  --mono: "Droid Sans Mono", "Ubuntu Mono", "DejaVu Sans Mono", monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13px/1.5 var(--sans); display: flex; flex-direction: column; overflow: hidden; }
+::selection { background: rgba(97, 175, 239, .35); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(172, 178, 191, .18); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(172, 178, 191, .35); background-clip: content-box; border: 2px solid transparent; }
+button { font: inherit; color: inherit; cursor: pointer; }
+a { color: var(--link); text-decoration: none; } a:hover { text-decoration: underline; }
+code { font-family: var(--mono); font-size: .92em; background: var(--code-bg); color: var(--code); padding: 1px 5px; border-radius: 4px; }
+code.path { cursor: pointer; } code.path:hover { text-decoration: underline; }
+pre { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+
+#log { flex: 1; overflow-y: auto; padding: 12px 20px 6px; }
+#inner { max-width: 1180px; margin: 0 auto; }
+
+/* The empty chat. */
+#hello { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16vh 0 0; color: var(--dim); text-align: center; }
+#hello .mark { font-size: 34px; color: var(--accent); line-height: 1; }
+#hello .t { font-size: 15px; color: var(--text); font-weight: 600; }
+
+/* What you sent: a box across the chat, the time above it. */
+.u { margin: 16px 0 10px; }
+.u .time { text-align: right; font-size: 11px; color: var(--dim); margin: 0 2px 3px; }
+.u .time .q { color: var(--warn); margin-right: 8px; letter-spacing: .04em; }
+.u .bub { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; color: var(--text2); white-space: pre-wrap; word-break: break-word; }
+.u .bub.clamp { max-height: 9.4em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); }
+.u .imgs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; } .u .imgs img { max-height: 110px; max-width: 220px; border-radius: 4px; border: 1px solid var(--line2); }
+.more { background: none; border: 0; color: var(--dim); font-size: 12px; padding: 2px 0; } .more:hover { color: var(--text); }
+
+/* What Claude does: a row with a dot in the gutter. */
+.row { position: relative; padding-left: 26px; margin: 9px 0; min-width: 0; }
+.row::before { content: ''; position: absolute; left: 9px; top: .56em; width: 7px; height: 7px; border-radius: 50%; background: var(--dim2); }
+.row.a::before { background: var(--text2); }
+.row.tool[data-state="run"]::before { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.row.tool[data-state="ok"]::before { background: var(--ok); }
+.row.tool[data-state="err"]::before { background: var(--err); }
+.row.tool[data-state="stop"]::before { background: var(--dim2); }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+
+/* Markdown. */
+.md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; } .md ul, .md ol { margin: 0 0 8px; padding-left: 22px; } .md li { margin: 2px 0; } .md li > ul, .md li > ol { margin: 2px 0; }
+.md h1, .md h2, .md h3, .md h4 { margin: 14px 0 6px; line-height: 1.3; color: #e2e4e8; } .md h1 { font-size: 17px; } .md h2 { font-size: 15px; } .md h3, .md h4 { font-size: 13.5px; }
+.md strong { color: #e2e4e8; font-weight: 600; } .md hr { border: 0; border-top: 1px solid var(--line2); margin: 12px 0; }
+.md blockquote { margin: 0 0 8px; padding: 2px 12px; border-left: 3px solid var(--line2); color: var(--text2); }
+.md table { border-collapse: collapse; margin: 4px 0 10px; font-size: 12.5px; display: block; overflow-x: auto; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--line2); padding: 4px 9px; text-align: left; vertical-align: top; } .md th { background: var(--surface); color: var(--text2); font-weight: 600; }
+.md input[type=checkbox] { margin: 0 6px 0 -18px; vertical-align: -2px; }
+.code { border: 1px solid var(--line2); border-radius: 6px; background: var(--surface); margin: 4px 0 10px; overflow: hidden; }
+.code .ch { display: flex; align-items: center; justify-content: space-between; padding: 3px 6px 3px 10px; border-bottom: 1px solid var(--line2); color: var(--dim); font-size: 11px; }
+.code .ch button { background: none; border: 0; color: var(--dim); font-size: 11px; padding: 1px 6px; border-radius: 4px; } .code .ch button:hover { color: var(--text); background: var(--chip); }
+.code pre { padding: 8px 10px; overflow-x: auto; white-space: pre; word-break: normal; color: var(--text2); }
+.code pre code { background: none; color: inherit; padding: 0; font-size: 12px; }
+
+/* A tool call. */
+.th { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.th b { font-weight: 600; color: #e2e4e8; flex: none; }
+.th .sum { color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.th .sum code { background: none; color: var(--text2); padding: 0; }
+.th .meta { color: var(--dim2); font-size: 12px; flex: none; }
+.th .tog { background: none; border: 0; color: var(--dim2); padding: 0 4px; font-size: 11px; flex: none; } .th .tog:hover { color: var(--text); }
+.tb { margin-top: 5px; } .tb[hidden] { display: none; }
+.io { border: 1px solid var(--line2); border-radius: 6px; background: var(--surface); overflow: hidden; }
+.io .r { display: grid; grid-template-columns: 40px minmax(0, 1fr); } .io .r + .r { border-top: 1px solid var(--line2); } .io .r[hidden] { display: none; }
+.io .k { padding: 6px 0 6px 10px; color: var(--dim2); font: 11px/1.65 var(--mono); }
+.io .v { padding: 6px 10px 6px 0; color: var(--text2); min-width: 0; }
+.io .v.err { color: var(--err); } .io .v .none { color: var(--dim2); }
+.clampy { max-height: 13.6em; overflow: hidden; } .clampy.open { max-height: none; }
+.diff { border: 1px solid var(--line2); border-radius: 6px; background: var(--surface); overflow: hidden; font: 12px/1.5 var(--mono); }
+.diff .fn { padding: 4px 10px; border-bottom: 1px solid var(--line2); color: var(--text2); font: 12px var(--sans); display: flex; gap: 8px; }
+.diff .fn .st { color: var(--dim2); margin-left: auto; } .diff .fn .st .p { color: var(--ok); } .diff .fn .st .m { color: var(--err); }
+.diff .ls { overflow-x: auto; } .diff .ln { white-space: pre; padding: 0 10px 0 0; min-width: max-content; }
+.diff .ln::before { content: attr(data-s); display: inline-block; width: 22px; text-align: center; color: var(--dim2); }
+.diff .ln.add { background: var(--add); } .diff .ln.del { background: var(--del); } .diff .ln.add::before { color: var(--ok); } .diff .ln.del::before { color: var(--err); }
+.diff .ln.gap { color: var(--dim2); }
+.todos { list-style: none; margin: 0; padding: 0; } .todos li { display: flex; gap: 8px; padding: 1px 0; color: var(--text2); }
+.todos li::before { content: '☐'; color: var(--dim); } .todos li.completed { color: var(--dim2); text-decoration: line-through; } .todos li.completed::before { content: '☑'; color: var(--ok); }
+.todos li.in_progress { color: #e2e4e8; font-weight: 600; } .todos li.in_progress::before { content: '◐'; color: var(--accent); }
+.nest { margin: 6px 0 0; padding-left: 2px; border-left: 1px solid var(--line2); } .nest .row { margin: 6px 0; }
+.think { color: var(--dim); font-style: italic; } .think .tx { white-space: pre-wrap; margin-top: 4px; } .think summary { cursor: pointer; list-style: none; } .think summary::-webkit-details-marker { display: none; }
+.note { color: var(--dim); font-size: 12px; margin: 8px 0 8px 26px; } .note.err { color: var(--err); white-space: pre-wrap; } .note.sep { display: flex; align-items: center; gap: 10px; margin-left: 0; } .note.sep::before, .note.sep::after { content: ''; flex: 1; border-top: 1px solid var(--line2); }
+#spin { display: none; align-items: baseline; gap: 8px; margin: 12px 0 8px 5px; color: var(--accent); } #spin.on { display: flex; }
+#spin .g { width: 15px; text-align: center; font-size: 14px; } #spin .v { color: var(--accent); } #spin .s { color: var(--dim2); font-size: 12px; }
+#jump { position: absolute; right: 26px; top: -40px; width: 30px; height: 30px; border-radius: 50%; background: var(--chip); border: 1px solid var(--line2); color: var(--text2); } #jump[hidden] { display: none; }
+
+/* The dock: the limit banner, a prompt waiting for you, or the composer. */
+#dock { padding: 4px 20px 14px; } #dock-in { max-width: 760px; margin: 0 auto; position: relative; }
+#banner { background: var(--warn-bg); border: 1px solid var(--warn); border-bottom: 0; border-radius: 8px 8px 0 0; padding: 6px 12px; color: var(--warn); font-weight: 600; font-size: 12px; display: flex; gap: 8px; }
+#banner[hidden] { display: none; } #banner button { margin-left: auto; background: none; border: 0; color: var(--warn); padding: 0 2px; }
+#banner:not([hidden]) + #ask .card, #banner:not([hidden]) ~ #composer { border-top-left-radius: 0; border-top-right-radius: 0; }
+#composer { background: var(--surface); border: 1px solid var(--line2); border-radius: 8px; }
+#composer:focus-within { border-color: var(--accent); } #composer[hidden] { display: none; } #composer.off { opacity: .5; pointer-events: none; }
+#input { display: block; width: 100%; background: none; border: 0; outline: 0; resize: none; color: var(--text); font: 13px/1.5 var(--sans); padding: 10px 12px 4px; max-height: 38vh; min-height: 34px; }
+#input::placeholder { color: var(--dim2); }
+#strip { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 10px 0; } #strip:empty { display: none; }
+#strip .at { position: relative; } #strip img { height: 48px; border-radius: 4px; border: 1px solid var(--line2); display: block; }
+#strip .at button { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; border-radius: 50%; border: 0; background: var(--chip); color: var(--text); font-size: 10px; line-height: 1; padding: 0; }
+.bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px; }
+.ib { width: 26px; height: 26px; border-radius: 5px; background: none; border: 0; color: var(--text2); display: grid; place-items: center; padding: 0; } .ib:hover { background: var(--chip); }
+.ib svg, #send svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.chip { background: var(--chip); color: var(--text2); border: 0; border-radius: 5px; padding: 3px 9px; font-size: 12px; white-space: nowrap; } .chip:hover { color: #fff; }
+.chip.mode { background: none; display: flex; gap: 5px; align-items: center; margin-left: auto; } .chip.mode.hot { color: var(--accent); }
+#send { width: 26px; height: 26px; border-radius: 6px; border: 0; background: var(--accent); color: var(--surface); display: grid; place-items: center; padding: 0; } #send:disabled { opacity: .35; cursor: default; } #send svg { stroke-width: 2.2; }
+#send.stop { background: var(--chip); color: var(--text); } #send.stop svg { fill: currentColor; stroke: none; }
+#pop { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); background: var(--surface); border: 1px solid var(--line2); border-radius: 8px; padding: 4px; max-height: 300px; overflow-y: auto; box-shadow: 0 10px 30px rgba(0, 0, 0, .45); z-index: 5; }
+#pop[hidden] { display: none; } #pop.small { right: auto; min-width: 250px; }
+#pop .it { display: flex; gap: 10px; align-items: baseline; padding: 5px 9px; border-radius: 5px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+#pop .it.on { background: var(--chip); } #pop .it .n { color: var(--text); overflow: hidden; text-overflow: ellipsis; } #pop .it .d { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; } #pop .it .ck { margin-left: auto; color: var(--accent); }
+#pop .hd { padding: 4px 9px 2px; font-size: 11px; color: var(--dim2); }
+
+/* A prompt waiting for you. */
+#ask:empty { display: none; }
+.card { background: var(--surface); border: 1px solid var(--accent); border-radius: 8px; padding: 12px 14px; }
+.card .ct { font-weight: 600; color: #e2e4e8; margin-bottom: 2px; } .card .cs { color: var(--dim); font-size: 12px; margin-bottom: 8px; }
+.card .cd { margin: 8px 0 10px; max-height: 34vh; overflow: auto; }
+.card .q + .q { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line2); }
+.card .qh { display: inline-block; background: var(--chip); color: var(--text2); border-radius: 4px; padding: 0 7px; font-size: 11px; margin-bottom: 4px; }
+.card .qt { color: #e2e4e8; font-weight: 600; margin-bottom: 6px; }
+.opt { display: flex; gap: 0 9px; align-items: baseline; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 5px 8px; color: var(--text); }
+.opt:hover, .opt.on { background: var(--chip); } .opt.on { border-color: var(--accent); }
+.opt .k { color: var(--dim2); font: 11px var(--mono); flex: none; width: 12px; } .opt.on .k { color: var(--accent); }
+.opt .l { font-weight: 600; flex: none; max-width: 100%; } .opt .ds { color: var(--dim); font-size: 12px; min-width: 0; }
+.opt.col { flex-wrap: wrap; } .opt.col .ds { flex-basis: 100%; padding-left: 21px; }
+.card input[type=text] { width: 100%; background: var(--bg); border: 1px solid var(--line2); border-radius: 6px; color: var(--text); font: 13px var(--sans); padding: 6px 9px; outline: 0; margin-top: 6px; }
+.card input[type=text]:focus { border-color: var(--accent); }
+.card .pv { margin-top: 8px; border: 1px solid var(--line2); border-radius: 6px; padding: 8px 10px; background: var(--bg); max-height: 30vh; overflow: auto; } .card .pv:empty { display: none; }
+.card .act { display: flex; gap: 8px; align-items: center; margin-top: 12px; } .card .act .hint { color: var(--dim2); font-size: 12px; margin-left: auto; }
+.btn { background: var(--chip); border: 0; border-radius: 6px; padding: 5px 14px; color: var(--text); } .btn:hover { color: #fff; } .btn.go { background: var(--accent); color: var(--surface); font-weight: 600; } .btn:disabled { opacity: .4; cursor: default; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+<div id="log"><div id="inner">
+  <div id="hello"><div class="mark">✻</div><div class="t">Claude Code</div><div id="hello-s">Starting…</div></div>
+  <div id="live"></div>
+  <div id="spin"><span class="g">✻</span><span class="v">Thinking…</span><span class="s"></span></div>
+</div></div>
+<div id="dock"><div id="dock-in">
+  <button id="jump" hidden title="To the latest">↓</button>
+  <div id="pop" hidden></div>
+  <div id="banner" hidden><span id="banner-t"></span><button id="banner-x" title="Hide">×</button></div>
+  <div id="ask"></div>
+  <div id="composer">
+    <div id="strip"></div>
+    <textarea id="input" rows="1" placeholder="Starting…" spellcheck="false"></textarea>
+    <div class="bar">
+      <button class="ib" id="b-add" title="Add an image"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg></button>
+      <button class="ib" id="b-slash" title="Commands"><svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M9.3 5.2 6.7 10.8"/></svg></button>
+      <button class="chip" id="c-model" title="Model">Model</button>
+      <button class="chip mode" id="c-mode" title="Permission mode"></button>
+      <button id="send" title="Send (Enter)" disabled><svg viewBox="0 0 16 16"><path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2"/></svg></button>
+    </div>
+  </div>
+  <input type="file" id="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+</div></div>
+<script>
+(() => {
+'use strict';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
+const post = (o) => { try { window.webkit.messageHandlers.mewo.postMessage(JSON.stringify(o)); } catch (e) { /* no window behind the page */ } };
+const MAX_SHOWN = 30000;
+
+const S = {
+  cwd: '', model: '', mode: '', slash: [], models: [], turns: 0, startedAt: 0, state: 'starting', ended: false,
+  tools: new Map(), asks: new Map(), queued: [], attach: [], liveKind: '', liveText: '', runningTool: '', status: '', thinkTokens: 0,
+};
+const log = $('log'), inner = $('inner'), live = $('live'), spin = $('spin'), input = $('input'), pop = $('pop'), askBox = $('ask'), composer = $('composer');
+
+// ---------- text ----------
+const rel = (p) => { p = String(p || ''); return S.cwd && p.startsWith(S.cwd + '/') ? p.slice(S.cwd.length + 1) : p; };
+const looksLikePath = (c) => /^[\w.@~\-\/]+\.[A-Za-z0-9]{1,8}(:\d+(-\d+)?)?$/.test(c) || /^[\w.@~\-]+(\/[\w.@~\-\[\]]+)+\/?(:\d+)?$/.test(c);
+function pathAttr(p) { const m = String(p).match(/^(.*?)(?::(\d+)(?:-\d+)?|#L(\d+)(?:-L?\d+)?)?$/); return `data-path="${esc(m[1])}"${m[2] || m[3] ? ` data-line="${m[2] || m[3]}"` : ''}`; }
+const pathLink = (p) => `<code class="path" ${pathAttr(p)} title="${esc(p)}">${esc(rel(p))}</code>`;
+function inline(s) {
+  const codes = [];
+  s = String(s).replace(/`([^`\n]+)`/g, (m, c) => { codes.push(c); return `\u0001${codes.length - 1}\u0001`; });
+  s = esc(s);
+  s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (m, t, u) => /^https?:\/\//.test(u) ? `<a href="#" data-url="${u}">${t}</a>` : /^[a-z][a-z0-9+.-]*:/i.test(u) ? t : `<a href="#" ${pathAttr(u.replace(/&amp;/g, '&'))}>${t}</a>`);
+  s = s.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>').replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+  s = s.replace(/(^|[\s(>])\*([^*\s][^*\n]*?)\*(?=[\s).,;:!?<]|$)/g, '$1<em>$2</em>').replace(/(^|[\s(>])_([^_\s][^_\n]*?)_(?=[\s).,;:!?<]|$)/g, '$1<em>$2</em>');
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, (m, p, u) => `${p}<a href="#" data-url="${u}">${u}</a>`);
+  return s.replace(/\u0001(\d+)\u0001/g, (m, i) => { const c = codes[+i]; return looksLikePath(c) ? `<code class="path" ${pathAttr(c)}>${esc(c)}</code>` : `<code>${esc(c)}</code>`; });
+}
+const codeBlock = (text, lang) => `<div class="code"><div class="ch"><span>${esc(lang || 'text')}</span><button data-copy>Copy</button></div><pre><code>${esc(text)}</code></pre></div>`;
+const LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+function list(block) {
+  let html = ''; const stack = [];
+  for (const line of block) {
+    const m = line.match(LIST);
+    if (!m) { html += ' ' + inline(line.trim()); continue; }
+    const indent = m[1].replace(/\t/g, '    ').length, type = /\d/.test(m[2]) ? 'ol' : 'ul';
+    while (stack.length && indent < stack[stack.length - 1].indent) html += `</li></${stack.pop().type}>`;
+    if (!stack.length || indent > stack[stack.length - 1].indent) { stack.push({ indent, type }); html += `<${type}>`; } else html += '</li>';
+    const task = m[3].match(/^\[([ xX])\]\s+(.*)$/);
+    html += '<li>' + (task ? `<input type="checkbox" disabled ${task[1] === ' ' ? '' : 'checked'}>${inline(task[2])}` : inline(m[3]));
+  }
+  while (stack.length) html += `</li></${stack.pop().type}>`;
+  return html;
+}
+const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+const isSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l || '');
+function md(src) {
+  const lines = String(src).replace(/\r/g, '').split('\n'), out = []; let i = 0, m;
+  const blockStart = (l) => /^\s*```/.test(l) || /^#{1,6}\s/.test(l) || /^\s*>/.test(l) || LIST.test(l) || /^\s*(---+|\*\*\*+)\s*$/.test(l);
+  while (i < lines.length) {
+    const l = lines[i];
+    if ((m = l.match(/^\s*```+\s*([^\s`]*)[^`]*$/))) { const buf = []; i++; while (i < lines.length && !/^\s*```+\s*$/.test(lines[i])) buf.push(lines[i++]); i++; out.push(codeBlock(buf.join('\n'), m[1])); continue; }
+    if (/^\s*$/.test(l)) { i++; continue; }
+    if ((m = l.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/))) { const n = Math.min(4, m[1].length); out.push(`<h${n}>${inline(m[2])}</h${n}>`); i++; continue; }
+    if (/^\s*(---+|\*\*\*+)\s*$/.test(l)) { out.push('<hr>'); i++; continue; }
+    if (/^\s*>/.test(l)) { const buf = []; while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, '')); out.push(`<blockquote>${md(buf.join('\n'))}</blockquote>`); continue; }
+    if (l.includes('|') && isSep(lines[i + 1])) {
+      const head = cells(l); i += 2; const rows = [];
+      while (i < lines.length && lines[i].includes('|') && !/^\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
+      out.push(`<table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${head.map((_, k) => `<td>${inline(r[k] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      continue;
+    }
+    if (LIST.test(l)) {
+      const buf = [];
+      while (i < lines.length && (LIST.test(lines[i]) || (/^\s+\S/.test(lines[i]) && buf.length) || (/^\s*$/.test(lines[i]) && (LIST.test(lines[i + 1] || '') || /^\s+\S/.test(lines[i + 1] || ''))))) { if (!/^\s*$/.test(lines[i])) buf.push(lines[i]); i++; }
+      out.push(list(buf)); continue;
+    }
+    const buf = [l]; i++;
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !blockStart(lines[i]) && !(lines[i].includes('|') && isSep(lines[i + 1]))) buf.push(lines[i++]);
+    out.push(`<p>${buf.map(inline).join('<br>')}</p>`);
+  }
+  return out.join('');
+}
+const clip = (s) => { s = String(s == null ? '' : s); return s.length > MAX_SHOWN ? s.slice(0, MAX_SHOWN) + `\n… ${s.length - MAX_SHOWN} more characters` : s; };
+function resultText(c) {
+  if (typeof c === 'string') return c;
+  if (!Array.isArray(c)) return c == null ? '' : JSON.stringify(c, null, 2);
+  return c.map((b) => b.type === 'text' ? b.text : b.type === 'image' ? '[image]' : b.type === 'tool_reference' ? `[tool ${b.tool_name || ''}]` : '').filter(Boolean).join('\n');
+}
+const cleanResult = (t) => String(t).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<\/?tool_use_error>/g, '').replace(/\s+$/, '');
+const firstString = (o) => { for (const v of Object.values(o || {})) if (typeof v === 'string' && v.trim()) return v; return ''; };
+const prettyModel = (m) => { const x = String(m || '').match(/claude-([a-z]+)-(\d+)(?:-(\d+))?/); return x ? `${x[1][0].toUpperCase()}${x[1].slice(1)} ${x[2]}${x[3] && x[3].length < 3 ? '.' + x[3] : ''}` : (m ? m[0].toUpperCase() + m.slice(1) : 'Model'); };
+const TERMINAL_ONLY = new Set(['doctor', 'color', 'focus', 'reload-plugins', 'heapdump']);
+const PHONE = 'The user sent this message from their phone (via Mewo on Fire). Treat it exactly as if they had typed it in this session:';
+const MODES = [['default', 'Ask before edits'], ['acceptEdits', 'Edit automatically'], ['plan', 'Plan mode'], ['auto', 'Auto mode'], ['bypassPermissions', 'Bypass permissions']];
+const modeLabel = (m) => (MODES.find((x) => x[0] === m) || [m, m === 'manual' ? 'Ask before edits' : m || 'Mode'])[1];
+const hm = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const dur = (s) => s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+
+// ---------- the log ----------
+let stick = true;
+log.addEventListener('scroll', () => { stick = log.scrollHeight - log.scrollTop - log.clientHeight < 80; $('jump').hidden = stick; });
+const toEnd = () => { log.scrollTop = log.scrollHeight; };
+$('jump').onclick = () => { stick = true; toEnd(); $('jump').hidden = true; };
+function put(node, parent) {
+  $('hello').style.display = 'none';
+  const t = parent && S.tools.get(parent);
+  if (t) { let nest = t.el.querySelector(':scope > .nest'); if (!nest) { nest = el('div', 'nest'); t.el.appendChild(nest); } nest.appendChild(node); } else inner.insertBefore(node, live);
+  return node;
+}
+function addUser(text, images, queued) {
+  const n = el('div', 'u');
+  n.innerHTML = `<div class="time">${queued ? '<span class="q">QUEUED</span>' : ''}${hm(Date.now())}</div><div class="bub"></div>`;
+  const bub = n.querySelector('.bub');
+  if (images && images.length) { const g = el('div', 'imgs'); for (const a of images) { const im = el('img'); im.src = `data:${a.type};base64,${a.data}`; g.appendChild(im); } bub.appendChild(g); }
+  bub.appendChild(document.createTextNode(text));
+  put(n);
+  if (text.split('\n').length > 7 || text.length > 700) {
+    bub.classList.add('clamp'); const b = el('button', 'more', 'Show more'); n.appendChild(b);
+    b.onclick = () => { const open = bub.classList.toggle('clamp'); b.textContent = open ? 'Show more' : 'Show less'; };
+  }
+  if (queued) S.queued.push(n);
+  stick = true;
+}
+const addAssistant = (text, parent, bad) => { const n = put(el('div', 'row a md', md(text)), parent); if (bad) n.style.color = 'var(--err)'; };
+function addThinking(text, parent) { const n = el('div', 'row think'); n.innerHTML = '<details><summary>Thought for a moment ›</summary><div class="tx"></div></details>'; n.querySelector('.tx').textContent = text; put(n, parent); }
+const addNote = (text, cls) => { const n = el('div', 'note' + (cls ? ' ' + cls : '')); n.textContent = text; put(n); };
+
+function diffLines(a, b) {
+  const n = a.length, m = b.length, out = [];
+  if (n * m > 60000) return a.map((x) => ['-', x]).concat(b.map((x) => ['+', x]));
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  let i = 0, j = 0;
+  while (i < n && j < m) { if (a[i] === b[j]) { out.push([' ', a[i]]); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) out.push(['-', a[i++]]); else out.push(['+', b[j++]]); }
+  while (i < n) out.push(['-', a[i++]]); while (j < m) out.push(['+', b[j++]]);
+  return out;
+}
+function diffBox(path, pairs) {
+  let plus = 0, minus = 0, html = '';
+  pairs.forEach(([oldS, newS], k) => {
+    const rows = oldS == null ? String(newS).split('\n').map((x) => ['+', x]) : diffLines(String(oldS).split('\n'), String(newS).split('\n'));
+    if (k) html += '<div class="ln gap" data-s="⋯"> </div>';
+    for (const [s, t] of rows) { if (s === '+') plus++; if (s === '-') minus++; html += `<div class="ln ${s === '+' ? 'add' : s === '-' ? 'del' : ''}" data-s="${s === ' ' ? '' : s}">${esc(t) || ' '}</div>`; }
+  });
+  return `<div class="diff"><div class="fn">${pathLink(path)}<span class="st"><span class="p">+${plus}</span> <span class="m">−${minus}</span></span></div><div class="ls clampy">${html}</div></div>`;
+}
+const ioBox = (cmd) => `<div class="io"><div class="r"><div class="k">IN</div><pre class="v">${esc(cmd)}</pre></div><div class="r out" hidden><div class="k">OUT</div><pre class="v res clampy"></pre></div></div>`;
+// What a tool call shows: its name, a one-line summary, a body, and whether the body starts open.
+function describe(name, input) {
+  const i = input || {};
+  switch (name) {
+    case 'Bash': return { label: 'Bash', sum: esc(i.description || ''), body: ioBox(i.command || ''), open: true, kind: 'io' };
+    case 'Read': return { label: 'Read', sum: pathLink(i.file_path || '') + (i.offset ? ` <span class="meta">from line ${+i.offset}</span>` : ''), kind: 'read' };
+    case 'Edit': return { label: 'Edit', sum: '', body: diffBox(i.file_path || '', [[i.old_string || '', i.new_string || '']]), open: true, kind: 'edit' };
+    case 'MultiEdit': return { label: 'Edit', sum: '', body: diffBox(i.file_path || '', (i.edits || []).map((e) => [e.old_string || '', e.new_string || ''])), open: true, kind: 'edit' };
+    case 'Write': return { label: 'Write', sum: '', body: diffBox(i.file_path || '', [[null, i.content || '']]), open: true, kind: 'edit' };
+    case 'NotebookEdit': return { label: 'Edit notebook', sum: '', body: diffBox(i.notebook_path || '', [[null, i.new_source || '']]), open: true, kind: 'edit' };
+    case 'Glob': return { label: 'Glob', sum: `<code>${esc(i.pattern || '')}</code>${i.path ? ' in ' + pathLink(i.path) : ''}` };
+    case 'Grep': return { label: 'Grep', sum: `<code>${esc(i.pattern || '')}</code>${i.path ? ' in ' + pathLink(i.path) : ''}${i.glob ? ` <span class="meta">${esc(i.glob)}</span>` : ''}` };
+    case 'WebSearch': return { label: 'Web search', sum: esc(i.query || '') };
+    case 'WebFetch': return { label: 'Fetch', sum: `<a href="#" data-url="${esc(i.url || '')}">${esc(i.url || '')}</a>` };
+    case 'Task': case 'Agent': return { label: 'Agent', sum: esc(i.description || '') + (i.subagent_type ? ` <span class="meta">${esc(i.subagent_type)}</span>` : ''), body: i.prompt ? `<pre class="clampy" style="color:var(--dim)">${esc(i.prompt)}</pre>` : '' };
+    case 'TodoWrite': return { label: 'Update todos', sum: '', body: `<ul class="todos">${(i.todos || []).map((t) => `<li class="${esc(t.status)}">${esc(t.status === 'in_progress' && t.activeForm ? t.activeForm : t.content)}</li>`).join('')}</ul>`, open: true, kind: 'quiet' };
+    case 'AskUserQuestion': return { label: 'Asked you', sum: esc(((i.questions || [])[0] || {}).question || ''), kind: 'ask' };
+    case 'ExitPlanMode': return { label: 'Plan', sum: '', body: `<div class="md">${md(i.plan || '')}</div>`, open: true, kind: 'quiet' };
+    case 'Skill': return { label: 'Skill', sum: esc(i.skill || i.command || '') };
+    default: {
+      const m = name.match(/^mcp__(.+?)__(.+)$/);
+      return { label: m ? m[2].replace(/_/g, ' ') : name, sum: (m ? `<span class="meta">${esc(m[1])}</span> ` : '') + esc(firstString(i).slice(0, 200)), body: Object.keys(i).length ? `<pre class="clampy" style="color:var(--dim)">${esc(JSON.stringify(i, null, 2))}</pre>` : '' };
+    }
+  }
+}
+function addTool(b, parent) {
+  if (S.tools.has(b.id)) return;
+  const d = describe(b.name, b.input), n = el('div', 'row tool'); n.dataset.state = 'run';
+  n.innerHTML = `<div class="th"><b>${esc(d.label)}</b><span class="sum">${d.sum || ''}</span><span class="meta"></span>${d.open ? '' : '<button class="tog" title="Details">›</button>'}</div><div class="tb"${d.open ? '' : ' hidden'}>${d.body || ''}<pre class="res clampy" hidden></pre></div>`;
+  put(n, parent);
+  const tb = n.querySelector('.tb'), tog = n.querySelector('.tog');
+  if (tog) tog.onclick = () => { tb.hidden = !tb.hidden; tog.textContent = tb.hidden ? '›' : '⌄'; if (!tb.hidden) { for (const c of tb.querySelectorAll('.clampy')) delete c.dataset.c; addClamps(tb); } };
+  S.tools.set(b.id, { el: n, name: b.name, kind: d.kind || '' });
+  addClamps(n);
+}
+// A long block is cut with "Show more" under it.
+function addClamps(root) {
+  for (const c of root.querySelectorAll('.clampy:not([data-c])')) {
+    c.dataset.c = '1';
+    requestAnimationFrame(() => {
+      if (c._more || c.scrollHeight <= c.clientHeight + 4) return;
+      const b = c._more = el('button', 'more', 'Show more'); (c.closest('.io, .diff') || c).after(b);
+      b.onclick = () => { const open = c.classList.toggle('open'); b.textContent = open ? 'Show less' : 'Show more'; };
+    });
+  }
+}
+function setResult(id, text, isErr) {
+  const t = S.tools.get(id); if (!t) return;
+  text = clip(cleanResult(text)); t.el.dataset.state = isErr ? 'err' : 'ok';
+  const meta = t.el.querySelector('.th .meta'), lines = text ? text.split('\n').length : 0;
+  let res = null;
+  if (t.kind === 'io') {
+    const out = t.el.querySelector('.r.out'); res = out.querySelector('.res'); out.hidden = false; res.classList.toggle('err', isErr);
+    if (text) res.textContent = text; else res.innerHTML = '<span class="none">(no output)</span>';
+  } else if (t.kind === 'quiet' || (t.kind === 'edit' && !isErr)) {
+    /* its body already says it */
+  } else {
+    res = t.el.querySelector(':scope > .tb > .res'); res.hidden = false; res.textContent = text || '(no output)'; res.style.color = isErr ? 'var(--err)' : 'var(--text2)';
+    const pairs = t.kind === 'ask' && !isErr ? [...text.matchAll(/"([^"]+)"="([^"]*)"/g)] : [];
+    if (pairs.length) { res.textContent = pairs.map((m) => (pairs.length > 1 ? m[1] + '\n' : '') + '→ ' + m[2]).join('\n'); res.style.font = '13px/1.5 var(--sans)'; res.style.color = 'var(--text)'; }
+    if (isErr || t.kind === 'ask') { t.el.querySelector('.tb').hidden = false; const tog = t.el.querySelector('.tog'); if (tog) tog.textContent = '⌄'; }
+    else if (t.kind === 'read') meta.textContent = `${lines} line${lines === 1 ? '' : 's'}`;
+    else if (lines > 1 && !meta.textContent) meta.textContent = `${lines} lines`;
+  }
+  if (res) { delete res.dataset.c; addClamps(t.el); }
+  if (S.runningTool === t.name) S.runningTool = '';
+}
+
+// ---------- what is being written right now ----------
+let liveTimer = 0;
+const clearLive = () => { S.liveKind = ''; S.liveText = ''; live.innerHTML = ''; };
+function paintLive() {
+  liveTimer = 0;
+  if (S.liveKind === 'text' && S.liveText) live.innerHTML = `<div class="row a md">${md(S.liveText)}</div>`;
+  else if (S.liveKind === 'thinking' && S.liveText) { live.innerHTML = '<div class="row think"><div class="tx"></div></div>'; live.querySelector('.tx').textContent = S.liveText.split('\n').slice(-4).join('\n'); }
+  else live.innerHTML = '';
+  if (stick) toEnd();
+}
+function onStream(ev) {
+  if (ev.parent_tool_use_id) return;
+  const e = ev.event || {};
+  if (e.type === 'content_block_start') { const b = e.content_block || {}; S.liveKind = b.type; S.liveText = ''; if (b.type === 'tool_use') S.runningTool = b.name; paintLive(); paintSpin(); }
+  else if (e.type === 'content_block_delta') { const d = e.delta || {}; const t = d.type === 'text_delta' ? d.text : d.type === 'thinking_delta' ? d.thinking : ''; if (t) { S.liveText += t; if (!liveTimer) liveTimer = setTimeout(paintLive, 70); } }
+}
+
+// ---------- the turn ----------
+const GLYPHS = ['·', '✢', '✳', '∗', '✻', '✽'];
+const verbFor = (n) => n === 'Bash' ? 'Running a command…' : n === 'Read' ? 'Reading…' : /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(n) ? 'Editing…' : /^(Grep|Glob|ToolSearch)$/.test(n) ? 'Searching…' : /^(Task|Agent)$/.test(n) ? 'Running an agent…' : /^Web/.test(n) ? 'Browsing…' : n === 'TodoWrite' ? 'Planning…' : 'Working…';
+function setState(s) { if (S.state === s) return; S.state = s; post({ t: 'state', state: s }); }
+function begin() {
+  if (!S.turns) { S.turns = 1; }
+  if (S.state !== 'working' && !S.asks.size) { if (S.state !== 'waiting') S.startedAt = S.startedAt || Date.now(); setState('working'); }
+  paintSpin(); paintSend();
+}
+function paintSpin() {
+  const on = S.turns > 0 && !S.asks.size && !S.ended; spin.classList.toggle('on', on); if (!on) return;
+  const verb = S.runningTool ? verbFor(S.runningTool) : S.status === 'compacting' ? 'Compacting the conversation…' : S.liveKind === 'text' ? 'Writing…' : 'Thinking…';
+  spin.querySelector('.v').textContent = verb;
+  spin.querySelector('.s').textContent = `${dur(Math.max(0, Math.round((Date.now() - S.startedAt) / 1000)))} · esc to stop${S.turns > 1 ? ` · ${S.turns - 1} queued` : ''}`;
+}
+setInterval(() => { if (!spin.classList.contains('on')) return; spin.querySelector('.g').textContent = GLYPHS[Math.floor(Date.now() / 160) % GLYPHS.length]; paintSpin(); }, 160);
+function endTurn(ev) {
+  S.turns = Math.max(0, S.turns - 1); S.runningTool = ''; S.status = ''; clearLive();
+  for (const t of S.tools.values()) if (t.el.dataset.state === 'run') t.el.dataset.state = 'stop';
+  if (ev.is_error && ev.subtype !== 'error_during_execution') addNote(ev.result || (ev.errors || []).join('\n') || `The turn ended: ${ev.subtype}`, 'err');
+  if (!S.turns) { S.startedAt = 0; if (!S.asks.size) setState('finished'); } else S.startedAt = Date.now();
+  paintSpin(); paintSend();
+}
+
+// ---------- events from Claude Code ----------
+function handle(ev) {
+  switch (ev.type) {
+    case 'system':
+      if (ev.subtype === 'init') {
+        S.cwd = ev.cwd || S.cwd; S.model = ev.model || S.model; S.mode = ev.permissionMode || S.mode;
+        const term = new Set(ev.terminal_slash_commands || []), known = new Map(S.slash.map((c) => [c.name, c]));
+        S.slash = (ev.slash_commands || []).filter((c) => !term.has(c) && !c.startsWith('__')).map((c) => known.get(c) || { name: c, description: '' });
+        const q = S.queued.shift(); if (q) { const tag = q.querySelector('.q'); if (tag) tag.remove(); }
+        paintChips(); ready();
+      } else if (ev.subtype === 'status') { if (ev.permissionMode) { S.mode = ev.permissionMode; paintChips(); } S.status = ev.status || ''; paintSpin(); }
+      else if (ev.subtype === 'compact_boundary') addNote('Conversation compacted', 'sep');
+      else if (ev.subtype === 'api_retry') addNote(`The request failed; trying again${ev.attempt ? ` (attempt ${ev.attempt})` : ''}…`);
+      break;
+    case 'stream_event': begin(); onStream(ev); break;
+    case 'assistant': {
+      begin(); const parent = ev.parent_tool_use_id || null; if (!parent) clearLive();
+      for (const b of (ev.message || {}).content || []) {
+        if (b.type === 'text') { if ((b.text || '').trim()) addAssistant(b.text, parent, !!(ev.error || ev.isApiErrorMessage)); }
+        else if (b.type === 'thinking') { if ((b.thinking || '').trim()) addThinking(b.thinking, parent); }
+        else if (b.type === 'tool_use') { addTool(b, parent); if (!parent) S.runningTool = b.name; }
+      }
+      paintSpin(); break;
+    }
+    case 'user': {
+      const c = (ev.message || {}).content;
+      const phone = (t) => { const i = String(t || '').indexOf(PHONE); if (i < 0) return false; begin(); addUser(String(t).slice(i + PHONE.length).replace(/\n\n\([^()]*\)\s*$/, '').trim(), [], false); const tm = inner.querySelector('.u:last-of-type .time'); if (tm) tm.insertAdjacentHTML('afterbegin', '<span class="q">FROM YOUR PHONE</span>'); return true; };
+      if (typeof c === 'string') { if (phone(c)) break; const m = c.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/); if (m && m[1].trim()) addNote(m[1].trim().replace(/[`*]/g, '')); break; }
+      for (const b of c || []) {
+        if (b.type === 'tool_result') setResult(b.tool_use_id, resultText(b.content), !!b.is_error);
+        else if (b.type === 'text' && /^\[Request interrupted/.test(b.text || '') && !ev.parent_tool_use_id) addNote('Interrupted');
+        else if (b.type === 'text' && !ev.parent_tool_use_id) phone(b.text);
+      }
+      paintSpin(); break;
+    }
+    case 'result': endTurn(ev); break;
+    case 'control_request': if ((ev.request || {}).subtype === 'can_use_tool') { S.asks.set(ev.request_id, ev.request); paintAsk(); } break;
+    case 'control_cancel_request': closeAsk(ev.request_id); break;
+    case 'control_response': { const r = ev.response || {}; if (r.subtype === 'error') addNote(r.error || 'Claude Code refused that', 'err'); break; }
+    case 'rate_limit_event': limit(ev.rate_limit_info || {}); break;
+    case 'mewo': fromWindow(ev); break;
+  }
+}
+function fromWindow(ev) {
+  if (ev.kind === 'prompt') { addUser(ev.text || '', [], false); S.turns++; S.startedAt = Date.now(); begin(); }
+  else if (ev.kind === 'info') { S.cwd = ev.cwd || S.cwd; if (ev.model) S.model = ev.model; if (ev.mode) S.mode = ev.mode; paintChips(); $('hello-s').textContent = (ev.cwd || '').split('/').pop() || ''; ready(); if (!S.turns) setState('ready'); }
+  else if (ev.kind === 'hello') {
+    S.slash = (ev.commands || []).filter((c) => c.name && !c.name.startsWith('__') && !TERMINAL_ONLY.has(c.name)); S.models = ev.models || []; if (ev.mode) S.mode = ev.mode;
+    const mine = S.models.find((m) => m.value === (S.model || 'default')); if (mine && mine.resolved) S.model = mine.resolved;
+    paintChips();
+  }
+  else if (ev.kind === 'resolved') { closeAsk(ev.request_id); addNote(ev.by === 'phone' ? 'Answered from your phone' : 'Answered'); }
+  else if (ev.kind === 'files') { if (ev.q === mentionQ) showPop(ev.files.map((f) => ({ n: f, pick: () => insertMention(f) })), { head: ev.files.length ? '' : 'No file matches' }); }
+  else if (ev.kind === 'note') addNote(ev.text || '', ev.err ? 'err' : '');
+  else if (ev.kind === 'exit') {
+    S.ended = true; S.turns = 0; clearLive(); S.asks.clear(); paintAsk(); paintSpin();
+    addNote(ev.text || 'The session ended.', ev.code ? 'err' : ''); addNote('You can close this window', 'sep');
+    composer.classList.add('off'); input.placeholder = 'The session ended'; input.disabled = true;
+  }
+}
+function limit(i) {
+  const w = (i.unifiedWindows || {})[i.rateLimitType] || {}, used = w.utilization != null ? Math.round(w.utilization * 100) : null;
+  if (i.status === 'allowed' && !(used >= 90)) return;
+  const left = (i.resetsAt || w.resetsAt || 0) * 1000 - Date.now(), name = { five_hour: '5-hour', seven_day: 'weekly' }[i.rateLimitType] || 'usage';
+  $('banner-t').textContent = (i.status === 'rejected' ? `You have reached your ${name} limit` : used != null ? `You've used ${used}% of your ${name} limit` : `You are close to your ${name} limit`) + (left > 0 ? ` · resets in ${left > 5400000 ? Math.round(left / 3600000) + 'h' : Math.max(1, Math.round(left / 60000)) + 'm'}` : '');
+  $('banner').hidden = false;
+}
+$('banner-x').onclick = () => { $('banner').hidden = true; };
+
+// ---------- a prompt waiting for you ----------
+function closeAsk(id) { if (S.asks.delete(id)) paintAsk(); }
+function answer(id, response) { post({ t: 'respond', request_id: id, response }); S.asks.delete(id); paintAsk(); }
+function paintAsk() {
+  const first = S.asks.entries().next().value;
+  hidePop();
+  if (!first) { askBox.innerHTML = ''; composer.hidden = false; if (S.turns && !S.ended) { setState('working'); } paintSpin(); if (!S.ended) input.focus(); return; }
+  composer.hidden = true; setState('waiting'); paintSpin();
+  const [id, r] = first; if (askBox.dataset.id === id && askBox.firstChild) return;
+  askBox.dataset.id = id; askBox.innerHTML = '';
+  askBox.appendChild(r.tool_name === 'AskUserQuestion' ? questionCard(id, r) : permissionCard(id, r));
+  stick = true; requestAnimationFrame(toEnd);
+}
+function ruleLabel(sugg) {
+  for (const s of sugg || []) {
+    if (s.type === 'addRules' && (s.rules || []).length) { const r = s.rules[0]; return `don't ask again for <code>${esc(r.ruleContent ? `${r.toolName}(${r.ruleContent})` : r.toolName)}</code>`; }
+    if (s.type === 'setMode') return `${esc(modeLabel(s.mode).toLowerCase())} for this session`;
+  }
+  for (const s of sugg || []) if (s.type === 'addDirectories' && (s.directories || []).length) return `allow <code>${esc(rel(s.directories[0]))}</code> this session`;
+  return "don't ask again";
+}
+function permissionCard(id, r) {
+  const plan = r.tool_name === 'ExitPlanMode', d = describe(r.tool_name, r.input), sugg = r.permission_suggestions || [];
+  const card = el('div', 'card');
+  const opts = plan ? [['Yes, start building', 'allow'], ['No, keep planning', 'deny']] : [['Yes', 'allow'], ...(sugg.length ? [[`Yes, and ${ruleLabel(sugg)}`, 'always']] : []), ['No', 'deny']];
+  card.innerHTML = `<div class="ct">${plan ? 'Ready to build this plan?' : `Allow ${esc(d.label)}${r.tool_name === 'Bash' ? ' to run this command' : ''}?`}</div>
+    ${r.description && !plan ? `<div class="cs">${esc(r.description)}</div>` : ''}
+    <div class="cd">${d.body || (d.sum ? `<div>${d.sum}</div>` : '')}</div>
+    ${opts.map(([label], k) => `<button class="opt" data-k="${k}"><span class="k">${k + 1}</span><span class="l" style="font-weight:400">${label}</span></button>`).join('')}
+    <input type="text" placeholder="${plan ? 'Tell Claude what to change' : 'Tell Claude what to do instead'}">`;
+  const out = card.querySelector('.r.out'); if (out) out.remove();
+  const text = card.querySelector('input');
+  const pick = (k) => {
+    const kind = opts[k][1];
+    if (kind === 'deny') answer(id, { behavior: 'deny', message: text.value.trim() || (plan ? 'The user wants to keep planning. Ask what to change.' : 'The user does not want this. Stop and ask what to do instead.') });
+    else answer(id, { behavior: 'allow', updatedInput: r.input || {}, ...(kind === 'always' ? { updatedPermissions: sugg } : {}) });
+  };
+  card.querySelectorAll('.opt').forEach((b) => { b.onclick = () => pick(+b.dataset.k); });
+  text.onkeydown = (e) => { if (e.key === 'Enter' && text.value.trim()) { e.preventDefault(); answer(id, { behavior: 'deny', message: text.value.trim() }); } e.stopPropagation(); };
+  card.pick = pick; card.count = opts.length; card.deny = () => pick(opts.length - 1);
+  addClamps(card);
+  return card;
+}
+function questionCard(id, r) {
+  const qs = (r.input || {}).questions || [], card = el('div', 'card'), picked = qs.map(() => new Set()), other = qs.map(() => '');
+  const quick = qs.length === 1 && !qs[0].multiSelect;
+  card.innerHTML = qs.map((q, qi) => `<div class="q" data-q="${qi}">${q.header ? `<span class="qh">${esc(q.header)}</span>` : ''}<div class="qt">${esc(q.question)}</div>
+    ${(q.options || []).map((o, oi) => `<button class="opt col" data-o="${oi}"><span class="k">${quick ? oi + 1 : q.multiSelect ? '☐' : '○'}</span><span class="l">${esc(o.label)}</span>${o.description ? `<span class="ds">${esc(o.description)}</span>` : ''}</button>`).join('')}
+    <input type="text" placeholder="Something else…"><div class="pv"></div></div>`).join('') +
+    `<div class="act"><button class="btn go" disabled>${quick ? 'Send' : 'Send answers'}</button><button class="btn skip">Skip</button><span class="hint">${quick ? 'Press a number, or type your own answer' : ''}</span></div>`;
+  const go = card.querySelector('.go');
+  const value = (qi) => other[qi].trim() ? [...[...picked[qi]].map((oi) => qs[qi].options[oi].label), ...(qs[qi].multiSelect || !picked[qi].size ? [other[qi].trim()] : [])].join(', ') : [...picked[qi]].map((oi) => qs[qi].options[oi].label).join(', ');
+  const paint = () => {
+    card.querySelectorAll('.q').forEach((box) => {
+      const qi = +box.dataset.q, q = qs[qi];
+      box.querySelectorAll('.opt').forEach((b) => { const on = picked[qi].has(+b.dataset.o); b.classList.toggle('on', on); if (!quick) b.querySelector('.k').textContent = q.multiSelect ? (on ? '☑' : '☐') : (on ? '●' : '○'); });
+      const one = [...picked[qi]][0], pv = one != null && !q.multiSelect ? (q.options[one] || {}).preview : '';
+      box.querySelector('.pv').innerHTML = pv ? `<div class="md">${md(pv)}</div>` : '';
+    });
+    go.disabled = !qs.every((_, qi) => value(qi));
+  };
+  const submit = () => { const answers = {}; qs.forEach((q, qi) => { answers[q.question] = value(qi); }); answer(id, { behavior: 'allow', updatedInput: { ...(r.input || {}), answers } }); };
+  card.querySelectorAll('.q').forEach((box) => {
+    const qi = +box.dataset.q, q = qs[qi], text = box.querySelector('input');
+    box.querySelectorAll('.opt').forEach((b) => { b.onclick = () => {
+      const oi = +b.dataset.o;
+      if (q.multiSelect) { picked[qi].has(oi) ? picked[qi].delete(oi) : picked[qi].add(oi); } else { picked[qi].clear(); picked[qi].add(oi); other[qi] = ''; text.value = ''; }
+      paint(); if (quick && !(q.options[oi] || {}).preview) submit();
+    }; });
+    text.oninput = () => { other[qi] = text.value; if (!q.multiSelect && text.value.trim()) picked[qi].clear(); paint(); };
+    text.onkeydown = (e) => { if (e.key === 'Enter' && !go.disabled) { e.preventDefault(); submit(); } e.stopPropagation(); };
+  });
+  go.onclick = submit;
+  card.querySelector('.skip').onclick = () => answer(id, { behavior: 'deny', message: 'The user skipped the question. Take the most reasonable reading, say which one you took, and continue.' });
+  card.pick = (k) => { if (quick) { const b = card.querySelectorAll('.opt')[k]; if (b) b.click(); } }; card.count = quick ? (qs[0].options || []).length : 0; card.deny = () => {};
+  return card;
+}
+document.addEventListener('keydown', (e) => {
+  const card = askBox.firstChild;
+  if (e.key === 'Escape') { if (!pop.hidden) { hidePop(); return; } if (card) { card.deny(); return; } if (S.turns && !S.ended) { e.preventDefault(); post({ t: 'interrupt' }); } return; }
+  if (!card || e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA)$/.test((document.activeElement || {}).tagName || '')) return;
+  if (/^[1-9]$/.test(e.key) && +e.key <= card.count) { e.preventDefault(); card.pick(+e.key - 1); }
+});
+
+// ---------- the composer ----------
+function ready() { if (S.ended) return; input.placeholder = S.turns ? 'Queue another message…' : 'Message Claude: @ for a file, / for a command'; }
+function paintChips() {
+  $('c-model').textContent = prettyModel(S.model);
+  const m = $('c-mode'); m.textContent = modeLabel(S.mode); m.classList.toggle('hot', S.mode === 'bypassPermissions' || S.mode === 'auto');
+}
+function paintSend() {
+  const b = $('send'), has = input.value.trim() || S.attach.length, stop = S.turns > 0 && !has && !S.ended;
+  b.classList.toggle('stop', stop); b.disabled = S.ended || (!has && !stop); b.title = stop ? 'Stop (Esc)' : 'Send (Enter)';
+  b.innerHTML = stop ? '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>' : '<svg viewBox="0 0 16 16"><path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2"/></svg>';
+  ready();
+}
+const autosize = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, innerHeight * 0.38) + 'px'; };
+function send() {
+  const text = input.value.trim(); if ((!text && !S.attach.length) || S.ended) return;
+  const queued = S.turns > 0;
+  addUser(text, S.attach, queued); post({ t: 'send', text, images: S.attach.map((a) => ({ media_type: a.type, data: a.data })) });
+  S.attach = []; paintStrip(); input.value = ''; autosize(); hidePop();
+  S.turns++; if (!queued) S.startedAt = Date.now(); begin(); toEnd();
+}
+$('send').onclick = () => { if ($('send').classList.contains('stop')) post({ t: 'interrupt' }); else send(); };
+// A list above the composer: files for "@", commands for "/", the model and the mode.
+let popItems = [], popAt = 0, mentionQ = null;
+function showPop(items, o) {
+  popItems = items; popAt = 0; pop.classList.toggle('small', !!(o && o.small));
+  pop.innerHTML = (o && o.head ? `<div class="hd">${esc(o.head)}</div>` : '') + items.map((it, k) => `<div class="it" data-k="${k}"><span class="n">${esc(it.n)}</span>${it.d ? `<span class="d">${esc(it.d)}</span>` : ''}${it.on ? '<span class="ck">✓</span>' : ''}</div>`).join('');
+  pop.hidden = !items.length && !(o && o.head); paintPop();
+  pop.querySelectorAll('.it').forEach((n) => { n.onmousedown = (e) => { e.preventDefault(); popItems[+n.dataset.k].pick(); }; n.onmousemove = () => { popAt = +n.dataset.k; paintPop(); }; });
+}
+function paintPop() { pop.querySelectorAll('.it').forEach((n, k) => { n.classList.toggle('on', k === popAt); if (k === popAt) n.scrollIntoView({ block: 'nearest' }); }); }
+function hidePop() { pop.hidden = true; popItems = []; mentionQ = null; }
+function insertMention(f) { const at = input.selectionStart, head = input.value.slice(0, at).replace(/(^|\s)@[^\s@]*$/, `$1@${f} `); input.value = head + input.value.slice(at); input.selectionStart = input.selectionEnd = head.length; hidePop(); autosize(); paintSend(); input.focus(); }
+function suggest() {
+  const head = input.value.slice(0, input.selectionStart);
+  let m = input.value.match(/^\/(\S*)$/);
+  if (m) { const q = m[1].toLowerCase(); mentionQ = null; showPop(S.slash.filter((c) => c.name.toLowerCase().includes(q)).sort((a, b) => a.name.toLowerCase().indexOf(q) - b.name.toLowerCase().indexOf(q)).slice(0, 40).map((c) => ({ n: '/' + c.name, d: c.description, pick: () => { input.value = `/${c.name} `; hidePop(); autosize(); paintSend(); input.focus(); } })), { head: 'Commands' }); return; }
+  m = head.match(/(^|\s)@([^\s@]*)$/);
+  if (m) { mentionQ = m[2]; post({ t: 'files', q: m[2] }); return; }
+  hidePop();
+}
+input.addEventListener('input', () => { autosize(); paintSend(); suggest(); });
+input.addEventListener('keydown', (e) => {
+  if (!pop.hidden && popItems.length) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); popAt = (popAt + (e.key === 'ArrowDown' ? 1 : popItems.length - 1)) % popItems.length; paintPop(); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); popItems[popAt].pick(); return; }
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+});
+input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) hidePop(); }, 150));
+$('b-slash').onclick = () => { input.value = '/'; input.focus(); autosize(); suggest(); paintSend(); };
+$('c-model').onclick = () => { if (!pop.hidden && pop.classList.contains('small')) return hidePop(); const list = S.models.length ? S.models : [['default', 'Default'], ['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku']].map(([value, name]) => ({ value, name, description: '', resolved: '' })); showPop(list.map((m) => ({ n: m.name || m.value, d: m.description, on: m.value !== 'default' && (m.resolved ? m.resolved === S.model : prettyModel(S.model).toLowerCase().startsWith(m.value)), pick: () => { post({ t: 'set_model', model: m.value }); S.model = m.resolved || m.value; paintChips(); hidePop(); input.focus(); } })), { head: 'Model for the next message', small: true }); };
+$('c-mode').onclick = () => { if (!pop.hidden && pop.classList.contains('small')) return hidePop(); showPop(MODES.map(([id, n]) => ({ n, on: S.mode === id, pick: () => { post({ t: 'set_mode', mode: id }); hidePop(); input.focus(); } })), { head: 'Permission mode', small: true }); };
+// Images: the + button, a paste, or a drop.
+function paintStrip() {
+  const s = $('strip'); s.innerHTML = '';
+  S.attach.forEach((a, k) => { const n = el('div', 'at', `<img src="data:${a.type};base64,${a.data}"><button title="Remove">×</button>`); n.querySelector('button').onclick = () => { S.attach.splice(k, 1); paintStrip(); paintSend(); }; s.appendChild(n); });
+}
+function addImages(files) {
+  for (const f of files) {
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type) || f.size > 5 * 1024 * 1024) continue;
+    const rd = new FileReader(); rd.onload = () => { S.attach.push({ type: f.type, data: String(rd.result).split(',')[1] }); paintStrip(); paintSend(); }; rd.readAsDataURL(f);
+  }
+}
+$('b-add').onclick = () => $('file').click();
+$('file').onchange = () => { addImages($('file').files); $('file').value = ''; input.focus(); };
+input.addEventListener('paste', (e) => { const fs = [...(e.clipboardData || {}).files || []].filter((f) => f.type.startsWith('image/')); if (fs.length) { e.preventDefault(); addImages(fs); } });
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('drop', (e) => { e.preventDefault(); addImages([...(e.dataTransfer || {}).files || []]); });
+
+// ---------- clicks in the log ----------
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-url], [data-path], [data-copy]'); if (!t) return;
+  if (t.dataset.copy !== undefined) { post({ t: 'copy', text: t.closest('.code').querySelector('code').textContent }); t.textContent = 'Copied'; setTimeout(() => { t.textContent = 'Copy'; }, 1200); return; }
+  e.preventDefault();
+  if (t.dataset.url) post({ t: 'url', url: t.dataset.url }); else post({ t: 'open', path: t.dataset.path, line: +t.dataset.line || 0 });
+});
+new MutationObserver(() => { if (stick) toEnd(); }).observe(inner, { childList: true, subtree: true });
+
+window.mewo = { recv(list) { for (const ev of list) { try { handle(ev); } catch (err) { console.error(err, ev); } } if (stick) toEnd(); } };
+paintChips(); paintSend(); input.focus();
+post({ t: 'ready' });
+})();
+</script>
+</body>
+</html>
