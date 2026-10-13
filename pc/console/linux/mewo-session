@@ -461,7 +461,9 @@ class Chat:
         elif t == "state":
             self.win.set_state(msg.get("state", ""))
         elif t == "copy":
-            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(msg.get("text", ""), -1)
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_text(msg.get("text", ""), -1)
+            clipboard.store()  # it outlives this window
         elif t == "url":
             self.open_uri(msg.get("url", ""))
         elif t == "open":
