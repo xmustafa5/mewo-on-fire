@@ -211,7 +211,7 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 
 /* ---------- center ---------- */
 #center { position: relative; min-width: 0; overflow: hidden; background: var(--bg-canvas); }
-#net { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; }
+#net { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; -webkit-user-select: none; user-select: none; }
 /* The graph and its controls belong to the Graph view only (setView sets data-view). */
 #center:not([data-view="net"]) #net { visibility: hidden; }
 #center:not([data-view="net"]) #graphbar, #center:not([data-view="net"]) #zoom, #center:not([data-view="net"]) #gempty,
@@ -240,7 +240,7 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 #tip { position: absolute; z-index: 4; display: none; max-width: 300px; padding: 8px 10px; border-radius: 8px; background: var(--bg-raised); box-shadow: var(--shadow); font-size: 12px; pointer-events: none; }
 #tip .t { font-weight: 600; }
 #tip .m { margin-top: 1px; font-size: 11.5px; color: var(--text-2); }
-#tip .x { margin-top: 4px; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+#tip .tx { margin-top: 4px; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 #legacy { position: absolute; z-index: 3; left: 12px; bottom: 12px; display: none; max-width: calc(100% - 140px); padding: 5px 12px; border-radius: 999px; background: var(--ready-bg); font-size: 12px; }
 #offline { position: absolute; z-index: 8; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 40px; text-align: center; background: var(--bg-canvas); }
 #offline .big { font-size: 17px; font-weight: 600; }
@@ -850,6 +850,9 @@ function buildGraph(sessions, pcs, selfId, featureLabel) {
 // and velocity damping act on velocity, collision moves positions directly.
 const ALPHA_MIN = 0.001, ALPHA_DECAY = 1 - Math.pow(ALPHA_MIN, 1 / 300);
 const DAMP = 0.6, GRAVITY = 0.04, LINK_K = 0.5, RANGE2 = 420 * 420, PAD = 6;
+// Computers keep this much more room between them, so their always-on labels don't run together
+// when every project is on every computer (all of them would sit at the same centre otherwise).
+const PC_GAP = 90;
 const charge = (n) => 60 + n.r * 18;
 // FNV-1a: placement and jitter come from ids, so the same data always lays out the same.
 function hash(str) {
@@ -941,7 +944,7 @@ function createSim() {
     for (let i = 0; i < N.length; i++) {
       const A = N[i], pa = A.p;
       for (let j = i + 1; j < N.length; j++) {
-        const B = N[j], pb = B.p, min = A.r + B.r + PAD;
+        const B = N[j], pb = B.p, min = A.r + B.r + PAD + (A.kind === 'pc' && B.kind === 'pc' ? PC_GAP : 0);
         let dx = pb.x - pa.x, dy = pb.y - pa.y, d = Math.hypot(dx, dy);
         if (d >= min) continue;
         const pA = pinned(pa), pB = pinned(pb);
@@ -1014,8 +1017,324 @@ let model = { sessions: [], all: [], daemon: null, legacy: false, peers: [], eve
 let version = '';
 const renderers = [];
 function render() { for (const f of renderers) f(); }
-// The swarm on #net replaces this stub.
-const graph = { wake() {}, setData() {} };
+
+// ---------- the swarm: computers, projects, sessions and features on #net ----------
+// The selected node's id ('pc:…', 'p:…', 's:…', 'f:…'); the inspector shows its details.
+let selection = null;
+function setSelection(id) { selection = id; if (id) document.body.classList.add('ins-open'); graph.wake(); render(); }
+// A rounded rectangle path of its own: older WebKitGTK has no ctx.roundRect.
+function roundRectPath(ctx, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+// MewoCore.createSim moves the nodes; this draws them, keeps the camera and follows the pointer.
+// The loop sleeps once the layout is cold and the camera still; working and waiting rings keep a 30 fps redraw.
+const graph = (() => {
+  const cv = $('net'), ctx = cv.getContext('2d'), tip = $('tip');
+  const SANS = getComputedStyle(document.documentElement).getPropertyValue('--sans').trim() || 'system-ui, sans-serif';
+  // Fit padding (the range bar sits at the top), zoom limits, camera easing, hover dimming, hidden sessions.
+  const PAD = 70, TOP = 46, K_MIN = 0.3, K_MAX = 3, K_FIT = 1.6, EASE = 0.15, DIM = 0.15, FADED = 0.35;
+  const sim = MewoCore.createSim();
+  const cam = { x: 0, y: 0, k: 1 };
+  let W = 0, H = 0, dpr = 1;
+  let nodes = [], links = [], byId = new Map(), adj = new Map(), counts = new Map();
+  // press: the pointer that is down (on a node: drag; on empty space: pan). goal: where the camera eases to.
+  let hoverId = null, press = null, userCam = false, goal = null, rings = false, dirty = true, raf = 0, lastDraw = 0;
+  let tipHtml = '', tipW = 0, tipH = 0, gesture = 0;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const toScreen = (x, y) => [(x - cam.x) * cam.k + W / 2, (y - cam.y) * cam.k + H / 2];
+  const toWorld = (x, y) => [(x - W / 2) / cam.k + cam.x, (y - H / 2) / cam.k + cam.y];
+  const local = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const active = () => view === 'net' && !document.hidden;
+  const when = (ts) => new Date(ts).toDateString() === new Date().toDateString() ? hm(ts) : new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+  function measure() {
+    const r = cv.getBoundingClientRect(), d = Math.min(2, devicePixelRatio || 1);
+    if (r.width === W && r.height === H && d === dpr) return;
+    W = r.width; H = r.height; dpr = d;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    dirty = true;
+  }
+  const resized = () => { measure(); wake(); };
+  addEventListener('resize', resized);
+  if (window.ResizeObserver) new ResizeObserver(resized).observe($('center'));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
+
+  function wake() { dirty = true; if (!raf && active()) raf = requestAnimationFrame(frame); }
+  function frame(now) {
+    raf = 0;
+    if (!active()) return;
+    if (!W || !H) measure();
+    let busy = false;
+    if (sim.alpha >= MewoCore.ALPHA_MIN) {
+      // Reduced motion: no animated layout, the graph settles at once and is drawn once.
+      if (!reduced) { sim.tick(); busy = true; } else if (!press) { sim.settle(300); dirty = true; }
+    }
+    // The camera holds still while a node is dragged, so the node stays under the pointer.
+    if (!(press && press.id)) busy = moveCam() || busy;
+    const pulse = rings && !reduced;
+    if (busy || dirty || (pulse && now - lastDraw >= FRAME_MS)) { draw(now); lastDraw = now; dirty = false; }
+    if (busy || pulse) raf = requestAnimationFrame(frame);
+  }
+
+  // ---- camera: fits the graph until the user pans or zooms; fit() goes back to fitting ----
+  function fitGoal() {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const n of nodes) {
+      if (!n.p) continue;
+      x0 = Math.min(x0, n.p.x - n.r); y0 = Math.min(y0, n.p.y - n.r); x1 = Math.max(x1, n.p.x + n.r); y1 = Math.max(y1, n.p.y + n.r);
+    }
+    if (x0 > x1) return { x: 0, y: 0, k: 1 };
+    const w = Math.max(1, W - 2 * PAD), h = Math.max(1, H - 2 * PAD - TOP);
+    const k = clamp(Math.min(w / Math.max(1, x1 - x0), h / Math.max(1, y1 - y0)), K_MIN, K_FIT);
+    // Centred in the room under the range bar.
+    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 - TOP / 2 / k, k };
+  }
+  // Returns whether the camera moved this frame.
+  function moveCam() {
+    const g = userCam ? goal : fitGoal();
+    if (!g) return false;
+    const near = Math.abs(g.x - cam.x) * cam.k < 0.25 && Math.abs(g.y - cam.y) * cam.k < 0.25 && Math.abs(g.k - cam.k) < 0.001;
+    if (near || reduced) {
+      const moved = cam.x !== g.x || cam.y !== g.y || cam.k !== g.k;
+      cam.x = g.x; cam.y = g.y; cam.k = g.k;
+      if (userCam) goal = null;
+      return moved;
+    }
+    cam.x += (g.x - cam.x) * EASE; cam.y += (g.y - cam.y) * EASE; cam.k += (g.k - cam.k) * EASE;
+    return true;
+  }
+  function zoomAt(x, y, k) {
+    const [wx, wy] = toWorld(x, y);
+    cam.k = clamp(k, K_MIN, K_MAX);
+    cam.x = wx - (x - W / 2) / cam.k; cam.y = wy - (y - H / 2) / cam.k;
+    userCam = true; goal = null; wake();
+  }
+  function zoomBy(f) {
+    const b = goal || cam;
+    goal = { x: b.x, y: b.y, k: clamp(b.k * f, K_MIN, K_MAX) }; userCam = true; wake();
+  }
+  function fit() { userCam = false; goal = null; wake(); }
+
+  // ---- data ----
+  function setData(g) {
+    nodes = g.nodes || []; links = g.links || [];
+    sim.setGraph(nodes, links);
+    byId = new Map(nodes.map((n) => [n.id, n]));
+    adj = new Map(nodes.map((n) => [n.id, new Set()]));
+    for (const l of links) if (adj.has(l.source) && adj.has(l.target)) { adj.get(l.source).add(l.target); adj.get(l.target).add(l.source); }
+    // Sessions per project, feature and computer, for the tooltip.
+    counts = new Map();
+    const bump = (id) => counts.set(id, (counts.get(id) || 0) + 1), self = nodes.find((n) => n.kind === 'pc');
+    for (const n of nodes) {
+      if (n.kind !== 'session') continue;
+      for (const id of adj.get(n.id)) bump(id);
+      bump(n.ref.pc_id ? 'pc:' + n.ref.pc_id : self && self.id);
+    }
+    // Hover and drag follow the node by id across rebuilds.
+    if (hoverId && !byId.has(hoverId)) hoverId = null;
+    if (press && press.id && !byId.has(press.id)) { press = null; cv.style.cursor = ''; }
+    rings = nodes.some((n) => n.kind === 'session' && (n.ref.state === 'working' || n.ref.state === 'waiting'));
+    wake();
+  }
+
+  // ---- drawing ----
+  function disc(x, y, r, color) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); }
+  function ring(x, y, r, color, w) { ctx.beginPath(); ctx.arc(x, y, Math.max(0.5, r), 0, Math.PI * 2); ctx.strokeStyle = color; ctx.lineWidth = w; ctx.stroke(); }
+  // A small badge on a session, outlined in the canvas colour so it reads against the node.
+  function badge(x, y, m, color, diamond) {
+    ctx.beginPath();
+    if (diamond) { ctx.moveTo(x, y - m); ctx.lineTo(x + m, y); ctx.lineTo(x, y + m); ctx.lineTo(x - m, y); ctx.closePath(); }
+    else ctx.arc(x, y, m, 0, Math.PI * 2);
+    ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = T.bgCanvas; ctx.lineWidth = 1; ctx.stroke();
+  }
+  function drawSession(s, x, y, r, now) {
+    // Rings and badges shrink with the node when zoomed out, so they don't swamp a small graph.
+    const a = ctx.globalAlpha, g = clamp(r / 5, 0.4, 1);
+    if (s.state === 'working') {
+      // A soft ring breathing in and out every 2 s.
+      const b = reduced ? 0.5 : 0.5 - 0.5 * Math.cos(now / 2000 * 2 * Math.PI);
+      ctx.globalAlpha = a * (0.55 - 0.3 * b); ring(x, y, r + (2 + 3 * b) * g, T.working, 1.5); ctx.globalAlpha = a;
+      disc(x, y, r, T.working);
+    } else if (s.state === 'waiting') {
+      // A ring pulsing outwards.
+      const p = reduced ? 0.3 : (now % 1600) / 1600;
+      ctx.globalAlpha = a * 0.7 * (1 - p); ring(x, y, r + (2 + 9 * p) * g, T.waiting, 1.5); ctx.globalAlpha = a;
+      disc(x, y, r, T.waiting);
+    } else if (s.state === 'ended') ring(x, y, r - 0.75, T.closed, 1.5);
+    else disc(x, y, r, T.done);
+    const m = Math.max(1.2, r * 0.42), o = r * 0.8;
+    if ((s.queued || 0) > 0) badge(x + o, y - o, m, T.phone, false);
+    if ((s.artifacts || []).length) badge(x + o, y + o, m * 1.25, T.ready, true);
+  }
+  function draw(now) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const k = cam.k, hov = byId.get(hoverId), near = hov ? adj.get(hov.id) : null;
+    const lit = (n) => !hov || n === hov || near.has(n.id);
+    const pt = new Map();
+    for (const n of nodes) if (n.p) pt.set(n.id, toScreen(n.p.x, n.p.y));
+    const rad = (n) => Math.max(1.5, n.r * k);
+    // Links: the hovered node's in accent, the others dimmed.
+    for (const l of links) {
+      const a = pt.get(l.source), b = pt.get(l.target);
+      if (!a || !b) continue;
+      const on = !!hov && (l.source === hov.id || l.target === hov.id);
+      const faded = byId.get(l.source).faded || byId.get(l.target).faded;
+      ctx.globalAlpha = (hov && !on ? DIM : 1) * (faded ? FADED : 1);
+      ctx.strokeStyle = on ? T.accent : T.sep2; ctx.lineWidth = on ? 1.5 : 1;
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    }
+    for (const n of nodes) {
+      const q = pt.get(n.id);
+      if (!q) continue;
+      const [x, y] = q, r = rad(n);
+      ctx.globalAlpha = (lit(n) ? 1 : DIM) * (n.faded ? FADED : 1);
+      // An offline computer is a hollow ring, like a closed session: --closed and --text-2 are too close to tell apart filled.
+      if (n.kind === 'pc') {
+        if (n.ref && n.ref.connected === false) { disc(x, y, r, T.bgCanvas); ring(x, y, r - 1, T.closed, 2); } else disc(x, y, r, T.text2);
+      }
+      else if (n.kind === 'project') disc(x, y, r, T.text3);
+      else if (n.kind === 'feature') {
+        roundRectPath(ctx, x - r, y - r, 2 * r, 2 * r, r * 0.4);
+        ctx.fillStyle = T.bgCanvas; ctx.fill(); ctx.strokeStyle = T.accent; ctx.lineWidth = 1.5; ctx.stroke();
+      } else drawSession(n.ref, x, y, r, now);
+      if (n.id === selection) ring(x, y, r + 3.5, T.accent, 2);
+    }
+    // Labels by zoom, each fading in over a 0.2 band: projects and features from 0.6, sessions from 1.1.
+    // Computers always; the hovered node, its neighbours and the selection too.
+    const band = (k0) => clamp((k - k0) / 0.2, 0, 1), fadeP = band(0.6), fadeS = band(1.1);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.lineJoin = 'round';
+    for (const n of nodes) {
+      const q = pt.get(n.id);
+      if (!q) continue;
+      const always = n.kind === 'pc' || (hov && lit(n)) || n.id === selection;
+      let a = always ? 1 : n.kind === 'session' ? fadeS : fadeP;
+      if (a <= 0) continue;
+      a *= (lit(n) ? 1 : DIM) * (n.faded ? FADED : 1);
+      const pc = n.kind === 'pc', text = trunc(n.label, n.kind === 'session' ? 34 : 40), ty = q[1] + rad(n) + (n.id === selection ? 7 : 4);
+      ctx.font = pc ? `600 12px ${SANS}` : `${n.kind === 'session' ? 400 : 500} 11px ${SANS}`;
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = T.bgCanvas; ctx.lineWidth = 3; ctx.strokeText(text, q[0], ty);
+      ctx.fillStyle = pc ? T.text : T.text2; ctx.fillText(text, q[0], ty);
+    }
+    ctx.globalAlpha = 1;
+    placeTip(hov, pt);
+  }
+
+  // ---- tooltip ----
+  function tipFor(n) {
+    const c = counts.get(n.id) || 0;
+    if (n.kind === 'session') {
+      const s = n.ref;
+      return `<div class="t">${esc(trunc(s.title || s.id, 90))}</div><div class="m">${esc(MewoCore.projectOf(s))} · ${stateLabel(s.state)}${s.last_ts ? ' · ' + when(s.last_ts) : ''}${s.peer && s.pc_name ? ' · on ' + esc(s.pc_name) : ''}</div>${s.last_text ? `<div class="tx">${esc(trunc(s.last_text, 400))}</div>` : ''}`;
+    }
+    if (n.kind === 'pc') return `<div class="t">${esc(n.label)}</div><div class="m">${n.ref && n.ref.connected === false ? 'Offline' : 'Online'} · ${plural(c, 'session')}</div>`;
+    if (n.kind === 'project') return `<div class="t">${esc(n.label)}</div><div class="m">${plural(c, 'session')}</div>`;
+    return `<div class="t">${esc(n.label)}</div><div class="m">Feature · ${plural(c, 'session')}</div>`;
+  }
+  function placeTip(hov, pt) {
+    const q = hov && pt.get(hov.id);
+    if (!q || (press && press.moved)) { if (tipHtml) { tip.style.display = 'none'; tipHtml = ''; } return; }
+    const html = tipFor(hov);
+    if (html !== tipHtml) { tip.innerHTML = html; tipHtml = html; tip.style.display = 'block'; tipW = tip.offsetWidth; tipH = tip.offsetHeight; }
+    // Above and to the right of the node, clear of its label underneath; below the label when there is no room.
+    const r = Math.max(1.5, hov.r * cam.k), w = tipW, h = tipH;
+    let left = q[0] + r + 8, top = q[1] - r - 8 - h;
+    if (left + w > W - 8) left = q[0] - r - 8 - w;
+    if (top < 8) top = q[1] + r + 22;
+    tip.style.left = Math.max(8, left) + 'px'; tip.style.top = Math.max(8, top) + 'px';
+  }
+
+  // ---- pointer: drag a node, pan empty space, a press without movement is a click ----
+  function pick(x, y) {
+    let best = null, bd = Infinity;
+    for (const n of nodes) {
+      if (!n.p) continue;
+      const [sx, sy] = toScreen(n.p.x, n.p.y), d = Math.hypot(sx - x, sy - y);
+      if (d <= n.r * cam.k + 6 && d < bd) { best = n; bd = d; }
+    }
+    return best;
+  }
+  function setHover(id) {
+    if (id === hoverId) return;
+    hoverId = id; cv.style.cursor = id ? 'pointer' : ''; wake();
+  }
+  cv.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || press) return;
+    const [x, y] = local(e), n = pick(x, y);
+    press = { pid: e.pointerId, x, y, id: n ? n.id : null, cx: cam.x, cy: cam.y, dx: 0, dy: 0, moved: false };
+    if (n) { const [wx, wy] = toWorld(x, y); press.dx = n.p.x - wx; press.dy = n.p.y - wy; setHover(n.id); }
+    cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener('pointermove', (e) => {
+    const [x, y] = local(e);
+    if (!press) { const n = pick(x, y); setHover(n ? n.id : null); return; }
+    if (e.pointerId !== press.pid || (!press.moved && Math.hypot(x - press.x, y - press.y) < 4)) return;
+    press.moved = true; cv.style.cursor = 'grabbing';
+    if (press.id) {
+      const [wx, wy] = toWorld(x, y);
+      sim.pin(press.id, wx + press.dx, wy + press.dy);
+      if (!reduced) sim.reheat(0.3);
+    } else {
+      cam.x = press.cx - (x - press.x) / cam.k; cam.y = press.cy - (y - press.y) / cam.k;
+      userCam = true; goal = null; hoverId = null;
+    }
+    wake();
+  });
+  function release(e, click) {
+    if (!press || e.pointerId !== press.pid) return;
+    const p = press; press = null;
+    if (p.id) { sim.unpin(p.id); if (p.moved) sim.reheat(0.3); }
+    cv.style.cursor = hoverId ? 'pointer' : '';
+    wake();
+    if (click && !p.moved) setSelection(p.id);
+  }
+  cv.addEventListener('pointerup', (e) => release(e, true));
+  cv.addEventListener('pointercancel', (e) => release(e, false));
+  cv.addEventListener('lostpointercapture', (e) => release(e, false));
+  cv.addEventListener('pointerleave', () => { if (!press) setHover(null); });
+  // Scroll zooms around the pointer; a trackpad pinch comes as ctrl + wheel (Safari sends gesture events instead).
+  cv.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (gesture && e.ctrlKey) return;
+    const [x, y] = local(e), unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? H : 1;
+    zoomAt(x, y, cam.k * Math.exp(-e.deltaY * unit * (e.ctrlKey ? 0.01 : 0.0015)));
+  }, { passive: false });
+  cv.addEventListener('gesturestart', (e) => { e.preventDefault(); gesture = cam.k; });
+  cv.addEventListener('gesturechange', (e) => { e.preventDefault(); const [x, y] = local(e); zoomAt(x, y, gesture * e.scale); });
+  cv.addEventListener('gestureend', (e) => { e.preventDefault(); gesture = 0; });
+  cv.addEventListener('dblclick', (e) => { const [x, y] = local(e); if (!pick(x, y)) fit(); });
+  // Right-click a session: its menu (Show window, Open in Claude, Hide).
+  cv.addEventListener('contextmenu', (e) => {
+    const [x, y] = local(e), n = pick(x, y);
+    if (!n || n.kind !== 'session') return;
+    e.preventDefault();
+    if (typeof openCtxMenu === 'function') openCtxMenu(n.ref, e.clientX, e.clientY);
+  });
+  $('z-in').addEventListener('click', () => zoomBy(1.3));
+  $('z-out').addEventListener('click', () => zoomBy(1 / 1.3));
+  $('z-fit').addEventListener('click', fit);
+
+  return { setData, wake, fit };
+})();
+// The sessions the graph shows. Step 10 (filters) replaces this body.
+function visibleSessions() { return model.all || []; }
+const featureLabel = (key) => { const f = features.find((x) => x.key === key); return f ? `${f.app} / ${f.slug}` : key; };
+function renderGraph() {
+  const d = model.daemon;
+  if (!d) { graph.setData({ nodes: [], links: [] }); return; }
+  const pcs = [{ pc_id: d.pc_id, name: d.name, connected: true }, ...(model.peers || []).map((p) => ({ pc_id: p.pc_id, name: p.name, connected: !!p.connected }))];
+  graph.setData(MewoCore.buildGraph(visibleSessions(), pcs, d.pc_id, featureLabel));
+}
+renderers.push(renderGraph);
 
 // Links leave the page: the Mac app hands them to macOS, a browser opens them.
 function openUrl(url) {
