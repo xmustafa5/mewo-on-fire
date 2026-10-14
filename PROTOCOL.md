@@ -1101,3 +1101,15 @@ defaults when the file is missing or unreadable; `console_set` replaces
 the whole document with any JSON object up to 256 KB, else `{ok: false,
 error}`. Hiding a session there touches neither the daemon's sessions
 and events nor Claude Code.
+
+The plan's Status cell is read by its status word, the text before the
+first ":" ("Merged: <link>" is merged, "In review: <link>" in review,
+"Blocked: <reason>" blocked). The daemon corrects a status only when that
+word disagrees with GitHub, and writes "Merged: <link>" or "In review:
+<link>", leaving a "**Pull request:**" line that already holds a link as
+it is. Every status the daemon writes (a correction, In progress when a
+session starts, Blocked after three attempts, a change from the console, a
+rollback) is a commit pushed to the feature branch, made from origin's
+copy of the plan with git's plumbing (`records(<app>): Session N …`): the
+workspace's working copy, index and branch are never written. Until the
+working copy is pulled, the daemon shows what it committed.
