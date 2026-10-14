@@ -670,6 +670,268 @@ footer .seg { display: flex; gap: 22px; }
   <div class="seg"><span id="f-relay"></span><span>POLL <b>2s</b></span><span id="f-ver"></span></div>
 </footer>
 
+<script id="mewo-core">
+// The console's pure logic, no DOM: filters, hiding, the graph's nodes and physics.
+// core.test.mjs runs this block under node (node --test pc/dashboard/core.test.mjs).
+(function (root) {
+'use strict';
+const STATES = ['working', 'waiting', 'idle', 'ended'];
+const RANGES = ['1h', 'today', '7d', 'all'];
+const H = 3600e3, DAY = 24 * H;
+const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const strs = (a) => Array.isArray(a) ? [...new Set(a.filter((x) => typeof x === 'string'))] : [];
+const within = (list, v) => !list || !list.length || list.includes(v);
+
+// ---------- prefs ----------
+const defaultFilters = () => ({ status: [], projects: [], pcs: [], range: 'all', q: '' });
+const defaultPrefs = () => ({ v: 1, hidden: {}, feed_cleared_at: 0, filters: { status: [], projects: [], pcs: [], range: 'all' } });
+// The daemon stores whatever the page sent, so anything read back is checked field by field.
+function normPrefs(p) {
+  const out = defaultPrefs();
+  if (!isObj(p)) return out;
+  if (isObj(p.hidden)) for (const k of Object.keys(p.hidden)) if (Number.isFinite(p.hidden[k])) out.hidden[k] = p.hidden[k];
+  if (Number.isFinite(p.feed_cleared_at) && p.feed_cleared_at > 0) out.feed_cleared_at = p.feed_cleared_at;
+  const f = isObj(p.filters) ? p.filters : {};
+  out.filters.status = strs(f.status).filter((s) => STATES.includes(s));
+  out.filters.projects = strs(f.projects);
+  out.filters.pcs = strs(f.pcs);
+  if (RANGES.includes(f.range)) out.filters.range = f.range;
+  return out;
+}
+
+// ---------- filters ----------
+function rangeStart(range, now) {
+  if (range === '1h') return now - H;
+  if (range === '7d') return now - 7 * DAY;
+  if (range === 'today') { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); }
+  return 0;
+}
+const projectOf = (x) => x.project || 'unknown';
+// Plain substring match: typed text is never a pattern.
+const has = (v, q) => !!v && String(v).toLowerCase().includes(q);
+const norm = (q) => String(q || '').trim().toLowerCase();
+function matchesQuery(s, q) {
+  const t = norm(q);
+  return !t || [s.title, s.project, s.branch, s.last_text, s.cwd].some((v) => has(v, t));
+}
+// ignoreFacets: sidebar counts skip status/project/computer so a row never counts itself out.
+function sessionPasses(s, f, now, ignoreFacets = false) {
+  if ((s.last_ts || 0) < rangeStart(f.range, now) || !matchesQuery(s, f.q)) return false;
+  return ignoreFacets || (within(f.status, s.state) && within(f.projects, projectOf(s)) && within(f.pcs, s.pc_id));
+}
+
+// ---------- hiding ----------
+// hidden[id] is the session's last_ts when it was hidden; any newer activity shows it again.
+const isHidden = (s, hidden) => !!hidden && own(hidden, s.id) && (s.last_ts || 0) <= hidden[s.id];
+// Both return a new map and leave the old one as it was, so Undo can put it back.
+function hideIds(hidden, sessions, ids) {
+  const out = { ...hidden }, byId = new Map((sessions || []).map((s) => [s.id, s]));
+  for (const id of ids) { const s = byId.get(id); if (s) out[id] = s.last_ts || 0; }
+  return out;
+}
+function unhideIds(hidden, ids) {
+  const out = { ...hidden };
+  for (const id of ids) delete out[id];
+  return out;
+}
+// A missing session may belong to a peer that is offline for now: keep it a while.
+function pruneHidden(hidden, sessions, now) {
+  const byId = new Map((sessions || []).map((s) => [s.id, s])), out = {};
+  for (const id of Object.keys(hidden || {})) {
+    const s = byId.get(id), at = hidden[id];
+    if (s ? (s.last_ts || 0) <= at : at >= now - 30 * DAY) out[id] = at;
+  }
+  return out;
+}
+function eventPasses(e, f, now, hiddenIdSet, clearedAt) {
+  const ts = e.ts || 0, t = norm(f.q);
+  if (ts <= (clearedAt || 0) || ts < rangeStart(f.range, now)) return false;
+  if (e.session_id && hiddenIdSet && hiddenIdSet.has(e.session_id)) return false;
+  if (!within(f.projects, projectOf(e)) || !within(f.pcs, e.pc_id)) return false;
+  return !t || [e.project, e.message, e.detail].some((v) => has(v, t));
+}
+function facetCounts(sessions, f, now, hidden) {
+  const c = { status: {}, projects: {}, pcs: {} };
+  const bump = (m, k) => { if (k) m[k] = (m[k] || 0) + 1; };
+  for (const s of sessions || []) {
+    if (isHidden(s, hidden) || !sessionPasses(s, f, now, true)) continue;
+    bump(c.status, s.state); bump(c.projects, projectOf(s)); bump(c.pcs, s.pc_id);
+  }
+  return c;
+}
+function cleanupTargets(kind, sessions, now) {
+  const done = (s) => s.state === 'idle' || s.state === 'ended';
+  const test = kind === 'finished' ? (s) => s.state === 'idle'
+    : kind === 'closed' ? (s) => s.state === 'ended'
+    : kind === 'stale' ? (s) => done(s) && (s.last_ts || 0) < now - DAY
+    : () => false;
+  return (sessions || []).filter(test);
+}
+
+// ---------- graph model ----------
+// Nodes come out as computers, projects, sessions, features: each new one then finds a
+// placed neighbour to start next to (see setGraph).
+function buildGraph(sessions, pcs, selfId, featureLabel) {
+  const list = sessions || [], info = new Map((pcs || []).map((p) => [p.pc_id, p]));
+  const pcOf = (s) => s.pc_id || selfId || 'unknown';
+  const pcIds = selfId ? [selfId] : [], projects = new Map(), features = [];
+  for (const s of list) {
+    if (!pcIds.includes(pcOf(s))) pcIds.push(pcOf(s));
+    projects.set(projectOf(s), (projects.get(projectOf(s)) || 0) + 1);
+    if (s.feature && !features.includes(s.feature)) features.push(s.feature);
+  }
+  const nodes = [], links = [], pairs = new Set();
+  for (const id of pcIds) {
+    const p = info.get(id), s = list.find((x) => pcOf(x) === id);
+    nodes.push({ id: 'pc:' + id, kind: 'pc', label: (p && (p.name || p.pc_name)) || (s && s.pc_name) || id, r: 12, ref: p || { pc_id: id, name: s && s.pc_name }, faded: false });
+  }
+  for (const [name, n] of projects) nodes.push({ id: 'p:' + name, kind: 'project', label: name, r: Math.min(14, 6 + 1.2 * Math.sqrt(n)), ref: name, faded: false });
+  for (const s of list) {
+    const pid = 'p:' + projectOf(s), pair = pid + '>pc:' + pcOf(s);
+    if (!pairs.has(pair)) { pairs.add(pair); links.push({ source: pid, target: 'pc:' + pcOf(s), len: 110 }); }
+  }
+  for (const s of list) {
+    nodes.push({ id: 's:' + s.id, kind: 'session', label: s.title || s.id, r: 5, ref: s, faded: !!s._hidden });
+    links.push({ source: 's:' + s.id, target: 'p:' + projectOf(s), len: 60 });
+    if (s.feature) links.push({ source: 's:' + s.id, target: 'f:' + s.feature, len: 70 });
+  }
+  for (const k of features) nodes.push({ id: 'f:' + k, kind: 'feature', label: featureLabel ? featureLabel(k) : k, r: 7, ref: k, faded: false });
+  return { nodes, links };
+}
+
+// ---------- graph physics ----------
+// d3-force style: alpha cools 1 → ALPHA_MIN over ~300 ticks; springs, repulsion, gravity
+// and velocity damping act on velocity, collision moves positions directly.
+const ALPHA_MIN = 0.001, ALPHA_DECAY = 1 - Math.pow(ALPHA_MIN, 1 / 300);
+const DAMP = 0.6, GRAVITY = 0.04, LINK_K = 0.5, RANGE2 = 420 * 420, PAD = 6;
+const charge = (n) => 60 + n.r * 18;
+// FNV-1a: placement and jitter come from ids, so the same data always lays out the same.
+function hash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return h >>> 0;
+}
+const angle = (str) => hash(str) / 4294967296 * 2 * Math.PI;
+// A unit vector for two nodes on the same spot, which have no direction to push along.
+const jitter = (a, b) => { const t = angle(a + '|' + b); return [Math.cos(t), Math.sin(t)]; };
+const pinned = (p) => p.fx != null || p.fy != null;
+
+function createSim() {
+  const pos = new Map();
+  let alpha = 0, N = [], L = [], ns = [], ls = [], key = null;
+
+  function place(n, near) {
+    const t = angle(n.id);
+    if (near) return { x: near.x + 24 * Math.cos(t), y: near.y + 24 * Math.sin(t) };
+    const r = 40 * (hash(n.id + '#') / 4294967296);
+    return { x: r * Math.cos(t), y: r * Math.sin(t) };
+  }
+  // Keeps every known position as it is; returns whether the topology changed.
+  function setGraph(nodes, links) {
+    ns = nodes || []; ls = links || [];
+    const ids = new Set(ns.map((n) => n.id));
+    // Sorted, so a different session order alone is not a change.
+    const k = [...ids].sort().join('\n') + '\n\n' + ls.map((l) => l.source + '>' + l.target).sort().join('\n');
+    const changed = k !== key, first = key === null || !pos.size;
+    key = k;
+    for (const id of [...pos.keys()]) if (!ids.has(id)) pos.delete(id);
+    const nbrs = new Map();
+    const link = (a, b) => { if (!nbrs.has(a)) nbrs.set(a, []); nbrs.get(a).push(b); };
+    for (const l of ls) { link(l.source, l.target); link(l.target, l.source); }
+    // New nodes start beside a placed neighbour; the passes let a chain (computer → project → session) unfold.
+    let pending = ns.filter((n) => !pos.has(n.id));
+    while (pending.length) {
+      const rest = [];
+      for (const n of pending) {
+        const near = (nbrs.get(n.id) || []).map((id) => pos.get(id)).find(Boolean);
+        if (near) pos.set(n.id, { ...place(n, near), vx: 0, vy: 0, fx: null, fy: null });
+        else rest.push(n);
+      }
+      if (rest.length === pending.length) { const n = rest.shift(); pos.set(n.id, { ...place(n, null), vx: 0, vy: 0, fx: null, fy: null }); }
+      pending = rest;
+    }
+    for (const n of ns) n.p = pos.get(n.id);
+    N = ns.filter((n) => n.p);
+    const byId = new Map(N.map((n) => [n.id, n]));
+    L = ls.map((l) => ({ s: byId.get(l.source), t: byId.get(l.target), len: l.len })).filter((l) => l.s && l.t && l.s !== l.t);
+    if (changed) alpha = Math.max(alpha, first ? 1 : 0.3);
+    return changed;
+  }
+
+  // One step; false once cold, so the draw loop can sleep.
+  function tick() {
+    if (alpha < ALPHA_MIN) return false;
+    alpha += -alpha * ALPHA_DECAY;
+    const a = alpha;
+    // Springs on predicted positions, split evenly between both ends.
+    for (const l of L) {
+      const s = l.s.p, t = l.t.p;
+      let dx = t.x + t.vx - s.x - s.vx, dy = t.y + t.vy - s.y - s.vy;
+      if (!dx && !dy) [dx, dy] = jitter(l.s.id, l.t.id);
+      const d = Math.hypot(dx, dy), k = (d - l.len) / d * a * LINK_K;
+      dx *= k; dy *= k;
+      t.vx -= dx * 0.5; t.vy -= dy * 0.5; s.vx += dx * 0.5; s.vy += dy * 0.5;
+    }
+    // All-pairs repulsion (a few hundred nodes at most); bigger nodes push harder.
+    for (let i = 0; i < N.length; i++) {
+      const A = N[i], pa = A.p, ca = charge(A);
+      for (let j = i + 1; j < N.length; j++) {
+        const B = N[j], pb = B.p;
+        let dx = pb.x - pa.x, dy = pb.y - pa.y, d2 = dx * dx + dy * dy;
+        if (d2 > RANGE2) continue;
+        if (!d2) { [dx, dy] = jitter(A.id, B.id); d2 = 1; }
+        if (d2 < 1) d2 = Math.sqrt(d2); // like d3's distanceMin: no huge kick at tiny distances
+        const ka = charge(B) * a / d2, kb = ca * a / d2;
+        pa.vx -= dx * ka; pa.vy -= dy * ka; pb.vx += dx * kb; pb.vy += dy * kb;
+      }
+    }
+    for (const n of N) {
+      const p = n.p;
+      p.vx -= p.x * GRAVITY * a; p.vy -= p.y * GRAVITY * a;
+      if (p.fx != null) { p.x = p.fx; p.vx = 0; } else { p.vx *= DAMP; p.x += p.vx; }
+      if (p.fy != null) { p.y = p.fy; p.vy = 0; } else { p.vy *= DAMP; p.y += p.vy; }
+    }
+    // Collision last, on positions, so a settled graph has no overlaps whatever alpha is.
+    for (let i = 0; i < N.length; i++) {
+      const A = N[i], pa = A.p;
+      for (let j = i + 1; j < N.length; j++) {
+        const B = N[j], pb = B.p, min = A.r + B.r + PAD;
+        let dx = pb.x - pa.x, dy = pb.y - pa.y, d = Math.hypot(dx, dy);
+        if (d >= min) continue;
+        const pA = pinned(pa), pB = pinned(pb);
+        if (pA && pB) continue;
+        // On the same spot: a unit jitter vector and the whole gap to open.
+        let gap = min - d;
+        if (!d) { [dx, dy] = jitter(A.id, B.id); d = 1; gap = min; }
+        // Each moves half the overlap; against a pinned node the free one moves all of it.
+        const k = gap / d, fa = pA ? 0 : pB ? 1 : 0.5, fb = pB ? 0 : pA ? 1 : 0.5;
+        pa.x -= dx * k * fa; pa.y -= dy * k * fa; pb.x += dx * k * fb; pb.y += dy * k * fb;
+      }
+    }
+    return alpha >= ALPHA_MIN;
+  }
+
+  return {
+    pos, setGraph, tick,
+    reheat(a) { alpha = Math.max(alpha, a); },
+    pin(id, x, y) { const p = pos.get(id); if (p) { p.fx = p.x = x; p.fy = p.y = y; p.vx = p.vy = 0; } },
+    unpin(id) { const p = pos.get(id); if (p) p.fx = p.fy = null; },
+    // Runs until cold or max ticks; returns the ticks run. Used for reduced motion.
+    settle(max = 300) { let n = 0; while (n < max && alpha >= ALPHA_MIN) { tick(); n++; } return n; },
+    get alpha() { return alpha; },
+    nodes: () => ns,
+    links: () => ls,
+  };
+}
+
+root.MewoCore = {
+  STATES, ALPHA_MIN, defaultFilters, defaultPrefs, normPrefs, rangeStart, projectOf, matchesQuery, sessionPasses,
+  isHidden, hideIds, unhideIds, pruneHidden, eventPasses, facetCounts, cleanupTargets, buildGraph, createSim,
+};
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+
 <script>
 (() => {
 'use strict';
