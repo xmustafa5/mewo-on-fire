@@ -232,7 +232,9 @@ Claude names opens in VS Code at its line. Every session is a tab of one
 window (Ctrl+W closes a tab, Ctrl+Page Up / Page Down move between them),
 and each runs on its own: if the window freezes or is closed with **Keep
 them running**, the sessions go on, and the window shows them again, whole
-conversation included, the next time it opens. On the console, a session
+conversation included, the next time it opens. A session that is merged
+closes its tab by itself a minute after it has finished (write in its
+message box in that minute to keep it). On the console, a session
 that has a window or tab gets **Show the session**, which brings it
 forward (and opens the window when it is closed).
 It needs GTK 3 and WebKitGTK for

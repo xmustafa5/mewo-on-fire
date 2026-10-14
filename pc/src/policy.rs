@@ -1620,7 +1620,7 @@ pub fn enrich(f: &mut Feature, sessions: &[Session], prs: &[Value]) {
             "merged".to_string()
         } else if ps.pr_state == "open" || status == "in review" {
             "review".to_string()
-        } else if status == "blocked" {
+        } else if status == "blocked" || status.starts_with("blocked:") {
             "blocked".to_string()
         } else if ps.running || status == "in progress" {
             "progress".to_string()

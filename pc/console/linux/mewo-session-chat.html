@@ -646,6 +646,8 @@ function paintChips() {
 }
 function paintSend() {
   const b = $('send'), has = input.value.trim() || S.attach.length, stop = S.turns > 0 && !has && !S.ended;
+  // The window keeps a tab open while you are writing in it.
+  if (!!has !== !!S.draft) { S.draft = !!has; post({ t: 'draft', on: S.draft }); }
   b.classList.toggle('stop', stop); b.disabled = S.ended || (!has && !stop); b.title = stop ? 'Stop (Esc)' : 'Send (Enter)';
   b.innerHTML = stop ? '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>' : '<svg viewBox="0 0 16 16"><path d="M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2"/></svg>';
   ready();

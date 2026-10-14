@@ -1071,9 +1071,23 @@ conversation. Closing a tab, or the window with "Stop them", ends the
 session (`stop`): the build sees the run end as before. A new session
 takes a tab without taking the one in front; a tab's dot follows its
 session (working, needs you, finished, closed) and the header shows the
-tab in front. Every tab's page runs in one WebKit web process, and
+tab in front. A tab whose plan session is merged (`effective` in
+`session_detail`) closes by itself a minute after Claude has finished,
+ending its session, unless Claude works again or something is written in
+its message box in that minute; a tab kept open that way stays open.
+Every tab's page runs in one WebKit web process, and
 WebKit draws without the GPU (`WEBKIT_DISABLE_DMABUF_RENDERER`,
 `WEBKIT_DISABLE_COMPOSITING_MODE`): with a few sessions open, WebKitGTK
 drawing through an NVIDIA GPU under Wayland hung the windows. A
 terminal session (`session_terminal`, or no WebKitGTK) still opens a
 window of its own, with Claude Code ending with it.
+
+`build_set` also takes a run's own instructions, each kept until changed:
+`note` (text every session the build starts gets after its plan prompt,
+re-runs included; empty clears it), `hold` (session numbers the build
+never starts), `order` (the order sessions start in when more are ready
+than "at a time" allows, the rest following the plan's order) and `fresh`
+(sessions resumed on purpose: their attempts count again from the next
+tick, so earlier attempts neither block them nor move them a tier up).
+The answer carries them as `run`. A plan status that starts with
+"Blocked:" counts as blocked, as "Blocked" did.

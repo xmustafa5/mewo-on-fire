@@ -1209,6 +1209,21 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
     let now = now_ms();
     let min = 60 * 1000u64;
     let parallel = if st.build_parallel == 0 { 2 } else { st.build_parallel } as usize;
+    // v3.3: sessions resumed on purpose count their attempts from here.
+    if !st.attempts_reset.is_empty() {
+        let bases: Vec<(u32, u32)> = plan.sessions.iter().filter(|s| st.attempts_reset.contains(&s.n)).map(|s| (s.n, s.attempts)).collect();
+        flow::update(ws, &f.key, |x| {
+            for (n, a) in &bases {
+                x.attempts_base.insert(*n, *a);
+            }
+            x.attempts_reset.clear();
+        });
+    }
+    let tries = |s: &policy::PlanSession| s.attempts.saturating_sub(if st.attempts_reset.contains(&s.n) { s.attempts } else { st.attempts_base.get(&s.n).copied().unwrap_or(0) });
+    // v3.3: held sessions never start; the run's order comes first, then the plan's.
+    let held = |n: u32| st.build_hold.contains(&n);
+    let mut ordered: Vec<&policy::PlanSession> = plan.sessions.iter().collect();
+    ordered.sort_by_key(|s| st.build_order.iter().position(|n| *n == s.n).unwrap_or(usize::MAX));
     // Work hours: outside them, statuses still follow GitHub, but nothing starts.
     let (hours, days) = config::work_hours();
     let working_hours = crate::clock::within(&hours, &days);
@@ -1384,7 +1399,7 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
         }
     }
     // Sessions that ran and have no pull request: remind, run again, then a person.
-    for s in plan.sessions.iter().filter(|s| s.effective == "progress" && s.pr_url.is_empty() && s.pr.is_empty()) {
+    for s in ordered.iter().copied().filter(|s| s.effective == "progress" && s.pr_url.is_empty() && s.pr.is_empty() && !held(s.n)) {
         let lives: Vec<&Session> = sessions.iter().filter(|x| x.feature == f.key && x.plan_session == s.n).collect();
         let last = st.runs.iter().rev().find(|r| r.step == 9 && r.note == s.n.to_string());
         let last_run = last.map(|r| r.started).unwrap_or(0);
@@ -1422,8 +1437,8 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
         if !(gone || reminded_in_vain) {
             continue;
         }
-        if s.attempts < 3 {
-            let attempt = s.attempts + 1;
+        if tries(s) < 3 {
+            let attempt = tries(s) + 1;
             let prompt = format!("{}\n\n(Attempt {attempt} of this session: the earlier one stopped without a pull request. Continue from the branch as it is, do not redo what is done{}.)", s.prompt, if attempt >= 3 { "; policy 9.1: run this attempt one tier up" } else { "" });
             let tier = if attempt >= 3 { s.tier.saturating_sub(1).max(1) } else { s.tier };
             if let Err(e) = start_build_session(&state, ws, f, s, &prompt, tier, &format!("Start session {} again", s.n), st.build_attended).await {
@@ -1457,7 +1472,7 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
         return;
     }
     // Every session runs in its own worktree, so the only limit is `parallel`.
-    if let Some(s) = plan.sessions.iter().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n) && !live(s.n)) {
+    if let Some(s) = ordered.iter().copied().find(|s| s.effective == "ready" && !s.prompt.is_empty() && !fresh(s.n) && !live(s.n) && !held(s.n)) {
         if let Err(e) = start_build_session(&state, ws, f, s, &s.prompt, s.tier, &format!("Start session {}", s.n), st.build_attended).await {
             flow::update(ws, &f.key, |x| x.note(format!("Could not start session {}: {e}", s.n)));
         }
@@ -1493,6 +1508,11 @@ async fn start_build_session(state: &Arc<AppState>, ws: &Path, f: &policy::Featu
         };
         prompt = format!("This session runs in its own git worktree of {} at {} , on branch {branch} made from {}; other sessions work in other worktrees of the same repository at the same time. The workspace root (torch-main, with context/, app-notebooks/ and code/) is {}; paths in the brief that start with code/{}/ mean this worktree. Commit on {branch} and open the pull request into {}. {who}\n\n{prompt}", s.repo, wt.display(), f.branch, ws.display(), s.repo.trim_start_matches("code/"), f.branch);
         folder = wt.to_string_lossy().into_owned();
+    }
+    // v3.3: what this run of the build tells every session after its prompt.
+    let note = flow::get(ws, &f.key).build_note;
+    if !note.trim().is_empty() {
+        prompt = format!("{prompt}\n\n{}", note.trim());
     }
     let tag = format!("{}-S{}", f.slug, s.n);
     let pid = if attended {

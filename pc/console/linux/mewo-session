@@ -242,6 +242,7 @@ def plan_detail(info):
             ps = d.get("session") or {}
             out["status"] = ps.get("status", "")
             out["pr"] = ps.get("pr_url", "")
+            out["effective"] = ps.get("effective", "")
         except (OSError, ValueError):
             pass
     return out
@@ -484,6 +485,8 @@ class Chat:
             self.write({"t": "set_mode", "mode": msg.get("mode") or "default"})
         elif t == "state":
             self.tab.set_state(msg.get("state", ""))
+        elif t == "draft":
+            self.tab.set_draft(bool(msg.get("on")))
         elif t == "copy":
             clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
             clipboard.set_text(msg.get("text", ""), -1)
@@ -590,6 +593,11 @@ class Tab:
         self.pr_url = ""
         self.ended = bool(info.get("ended"))
         self.alive = not self.ended
+        # A merged session closes its tab by itself once Claude is done (a minute's notice).
+        self.merged = False
+        self.draft = False
+        self.kept = False
+        self.close_timer = 0
 
         n, goal = info.get("n", ""), info.get("goal", "")
         box = Gtk.Box(spacing=7)
@@ -628,6 +636,30 @@ class Tab:
         ctx.add_class(state)
         self.state = state
         self.win.tab_changed(self)
+        self.maybe_close()
+
+    def set_draft(self, on):
+        self.draft = on
+        self.maybe_close()
+
+    def maybe_close(self):
+        """Merged and done: the tab closes in a minute, unless Claude works again or you write in it."""
+        quiet = self.merged and not self.kept and self.state in ("finished", "ended") and not self.draft
+        if quiet and not self.close_timer:
+            n = self.info.get("n", "")
+            self.chat.push({"type": "mewo", "kind": "note", "text": f"Session {n} is merged: this tab closes in a minute. Write a message to keep it open."})
+            self.close_timer = GLib.timeout_add_seconds(60, self.auto_close)
+        elif not quiet and self.close_timer:
+            GLib.source_remove(self.close_timer)
+            self.close_timer = 0
+            self.kept = True
+            self.chat.push({"type": "mewo", "kind": "note", "text": "Kept open."})
+
+    def auto_close(self):
+        self.close_timer = 0
+        if self.merged and not self.kept and self.state in ("finished", "ended") and not self.draft:
+            self.win.close_tab(self, ask=False)
+        return False
 
     def session_ended(self):
         self.alive = False
@@ -650,10 +682,16 @@ class Tab:
             self.pr_url, changed = out["pr"], True
         if changed:
             self.win.tab_changed(self)
+        if out.get("effective") == "merged" and not self.merged:
+            self.merged = True
+            self.maybe_close()
         return False
 
     def close(self, stop):
         GLib.source_remove(self.poller)
+        if self.close_timer:
+            GLib.source_remove(self.close_timer)
+            self.close_timer = 0
         if stop and self.alive:
             self.chat.stop()
         else:
@@ -837,8 +875,10 @@ class SessionsWindow(Gtk.Window):
         else:
             self.present()
 
-    def close_tab(self, tab):
-        if tab.alive and not self.ask(
+    def close_tab(self, tab, ask=True):
+        if tab not in self.tabs:
+            return
+        if ask and tab.alive and not self.ask(
             f"Close session {tab.info.get('n', '')}?",
             "Claude stops. If the session has not opened its pull request yet, the build starts it again.",
             [("Keep it open", Gtk.ResponseType.CANCEL), ("Close", Gtk.ResponseType.OK)],

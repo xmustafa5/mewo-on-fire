@@ -713,6 +713,12 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                     }
                     v["stopped"] = json!(pids.len());
                 }
+                // v3.3: the run's own instructions, when given.
+                let nums = |k: &str| req.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|n| n as u32).collect::<Vec<u32>>());
+                let note = req.get("note").and_then(Value::as_str).map(str::to_string);
+                if note.is_some() || ["hold", "order", "fresh"].iter().any(|k| req.get(*k).is_some()) {
+                    v["run"] = flow::set_build_run(&ws, &f, note, nums("hold"), nums("order"), nums("fresh"));
+                }
                 v
             }
             None => json!({"ok": false, "error": "unknown feature"}),

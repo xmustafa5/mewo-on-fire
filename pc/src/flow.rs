@@ -109,6 +109,20 @@ pub struct FlowState {
     /// watch, and asks you where the plan says to ask, instead of running
     /// headless and deciding by itself.
     pub build_attended: bool,
+    /// v3.3: what every session the build starts is told after its plan
+    /// prompt: the instructions of this run of the plan.
+    pub build_note: String,
+    /// v3.3: sessions the build never starts.
+    pub build_hold: Vec<u32>,
+    /// v3.3: the order sessions start in when more are ready than "at a
+    /// time" allows; the rest follow in the plan's order.
+    pub build_order: Vec<u32>,
+    /// v3.3: attempts that no longer count, by session: a session resumed
+    /// on purpose counts its attempts again from there.
+    pub attempts_base: HashMap<u32, u32>,
+    /// Sessions whose count starts again at the next tick, which knows
+    /// their attempts.
+    pub attempts_reset: Vec<u32>,
 }
 
 impl FlowState {
@@ -356,6 +370,35 @@ pub fn prompt_for(step: u8, ws: &Path, f: &Feature, flow: &FlowState) -> String 
         ),
         _ => String::new(),
     }
+}
+
+/// v3.3: the run's own instructions for the build: a note every session is
+/// given, sessions held back, the order sessions start in, and sessions
+/// whose attempts count again. Each is left as it is when not given.
+pub fn set_build_run(ws: &Path, f: &Feature, note: Option<String>, hold: Option<Vec<u32>>, order: Option<Vec<u32>>, fresh: Option<Vec<u32>>) -> Value {
+    let st = update(ws, &f.key, |st| {
+        if let Some(n) = &note {
+            st.build_note = n.trim().to_string();
+            st.note(if n.trim().is_empty() { "Build note cleared".to_string() } else { format!("Build note set ({} characters): every session the build starts gets it after its prompt", n.trim().chars().count()) });
+        }
+        if let Some(h) = &hold {
+            st.build_hold = h.clone();
+            st.note(format!("Held back from the build: {}", if h.is_empty() { "none".to_string() } else { h.iter().map(u32::to_string).collect::<Vec<_>>().join(", ") }));
+        }
+        if let Some(o) = &order {
+            st.build_order = o.clone();
+            st.note(format!("Start order: {}", o.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")));
+        }
+        if let Some(r) = &fresh {
+            for n in r {
+                if !st.attempts_reset.contains(n) {
+                    st.attempts_reset.push(*n);
+                }
+            }
+            st.note(format!("Attempts count again from now for session {}", r.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")));
+        }
+    });
+    json!({"ok": true, "note": st.build_note, "hold": st.build_hold, "order": st.build_order, "attempts_reset": st.attempts_reset, "attempts_base": st.attempts_base})
 }
 
 /// v2.6: the build autopilot on or off, with how many sessions run at a
