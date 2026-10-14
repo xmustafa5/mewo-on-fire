@@ -575,6 +575,15 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 .lab { font: 600 10.5px/1.6 var(--sans); letter-spacing: .02em; color: var(--text-2); }
 
 /* ---------- narrow windows ---------- */
+/* ---------- filters: sidebar rows ---------- */
+.frow > .dot, .frow > .ic { justify-self: center; }
+.frow > .ic { width: 14px; height: 14px; color: var(--text-2); }
+.frow[aria-pressed="true"] > .ic { color: var(--accent); }
+.frow .n .dot.off { width: 6px; height: 6px; margin-left: 6px; vertical-align: 1px; color: var(--text-3); }
+.fnone { padding: 4px 8px; font-size: 12px; color: var(--text-3); }
+#hiddenrow .link { white-space: nowrap; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
 @media (max-width: 1099px) {
   main { grid-template-columns: 220px minmax(0, 1fr); }
   #inspector {
@@ -2162,6 +2171,280 @@ async function scanPcs() {
 }
 function openAddPc() { $('addpc').classList.add('on'); $('ap-msg').textContent = ''; scanPcs(); }
 $('ap-close').addEventListener('click', () => $('addpc').classList.remove('on'));
+
+// ---------- filters and console settings ----------
+// One filters object drives the graph, the sidebar counts and the activity feed. Status, projects,
+// computers and range are kept in the console settings (console_get / console_set); the search is not.
+let prefs = MewoCore.defaultPrefs(), prefsLive = false, showHidden = false;
+const filters = MewoCore.defaultFilters();
+const DIMS = ['status', 'projects', 'pcs'];
+const RANGE_LABEL = { '1h': 'Last hour', today: 'Today', '7d': 'Last 7 days' };
+const STATE_COLOR = { working: 'var(--working)', waiting: 'var(--waiting)', idle: 'var(--done)', ended: 'var(--closed)' };
+const ICON_FOLDER = '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25c0-.83.67-1.5 1.5-1.5h2.6l1.5 1.5h5.4c.83 0 1.5.67 1.5 1.5v6c0 .83-.67 1.5-1.5 1.5h-9.5c-.83 0-1.5-.67-1.5-1.5z"/></svg>';
+const ICON_LAPTOP = '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3.25" width="10" height="7" rx="1"/><path d="M1.25 12.75h13.5"/></svg>';
+// The sidebar, chips and menus redraw on every poll: the DOM changes only when the html does,
+// so hover and keyboard focus survive.
+function setHtml(el, html) { if (el._sig !== html) { el._sig = html; el.innerHTML = html; } }
+
+// Once, after the first state. An older daemon answers ok:false: the settings then live in memory for this run.
+async function loadPrefs() {
+  const r = await daemon({ cmd: 'console_get' });
+  if (!r || !r.ok) return;
+  prefs = MewoCore.normPrefs(r.prefs);
+  for (const k of DIMS) filters[k] = [...prefs.filters[k]];
+  filters.range = prefs.filters.range;
+  prefsLive = true;
+  graph.wake(); render();
+}
+let prefsTimer = 0;
+function savePrefs() {
+  prefs.filters = { status: [...filters.status], projects: [...filters.projects], pcs: [...filters.pcs], range: filters.range };
+  prefs.hidden = MewoCore.pruneHidden(prefs.hidden, model.all, Date.now());
+  clearTimeout(prefsTimer);
+  // Never write before the saved settings were read: that would replace them with the defaults.
+  if (!prefsLive) return;
+  prefsTimer = setTimeout(() => { daemon({ cmd: 'console_set', prefs }); }, 500);
+}
+const isHiddenSession = (s) => MewoCore.isHidden(s, prefs.hidden);
+// The sessions the graph draws: those that pass the filters; hidden ones only with "Show", marked _hidden.
+function visibleSessions() {
+  const now = model.now || Date.now(), out = [];
+  for (const s of model.all || []) {
+    if (!MewoCore.sessionPasses(s, filters, now)) continue;
+    if (!isHiddenSession(s)) out.push(s); else if (showHidden) out.push({ ...s, _hidden: true });
+  }
+  return out;
+}
+function hiddenNow() { return (model.all || []).filter(isHiddenSession); }
+function filtersActive() { return DIMS.some((k) => filters[k].length > 0) || filters.range !== 'all' || !!filters.q.trim(); }
+function filtersChanged(save = true) { if (save) savePrefs(); graph.wake(); render(); }
+function toggleFilter(dim, v) {
+  if (!DIMS.includes(dim)) return;
+  const list = filters[dim], i = list.indexOf(v);
+  if (i >= 0) list.splice(i, 1); else list.push(v);
+  filtersChanged();
+}
+function setRange(r) { if (r === 'all' || r in RANGE_LABEL) { filters.range = r; filtersChanged(); } }
+let qTimer = 0;
+function setQuery(q) { clearTimeout(qTimer); filters.q = q; if ($('q').value !== q) $('q').value = q; filtersChanged(false); }
+function clearFilters() {
+  for (const k of DIMS) filters[k] = [];
+  filters.range = 'all';
+  setQuery('');
+  savePrefs();
+}
+function pcList() {
+  const d = model.daemon, out = [];
+  if (d && d.pc_id) out.push({ pc_id: d.pc_id, name: d.name || 'This computer', online: true });
+  for (const p of model.peers || []) out.push({ pc_id: p.pc_id, name: p.name || p.pc_id, online: !!p.connected });
+  return out;
+}
+const pcName = (id) => (pcList().find((p) => p.pc_id === id) || {}).name || id;
+
+function frow(dim, v, lead, name, count, extra = '') {
+  return `<button class="frow" type="button" data-dim="${dim}" data-v="${esc(v)}" aria-pressed="${filters[dim].includes(v)}">${lead}<span class="n">${esc(name)}${extra}</span><span class="c">${count}</span></button>`;
+}
+function renderSidebar() {
+  const c = MewoCore.facetCounts(model.all, filters, model.now || Date.now(), prefs.hidden);
+  setHtml($('f-status'), MewoCore.STATES.map((st) =>
+    frow('status', st, `<span class="dot${st === 'ended' ? ' ring' : ''}" style="color:${STATE_COLOR[st]}"></span>`, stateLabel(st), c.status[st] || 0)).join(''));
+  const projects = [...new Set([...(model.all || []).map(MewoCore.projectOf), ...filters.projects])].sort((a, b) => a.localeCompare(b));
+  setHtml($('f-projects'), projects.map((p) => frow('projects', p, ICON_FOLDER, p, c.projects[p] || 0)).join('')
+    || '<div class="fnone">No sessions yet</div>');
+  const pcs = pcList();
+  for (const id of filters.pcs) if (!pcs.some((p) => p.pc_id === id)) pcs.push({ pc_id: id, name: id, online: false });
+  setHtml($('f-pcs'), pcs.map((p) => frow('pcs', p.pc_id, ICON_LAPTOP, p.name, c.pcs[p.pc_id] || 0,
+    p.online ? '' : '<span class="dot ring off" title="Offline"></span><span class="vh">, offline</span>')).join(''));
+  const d = model.daemon;
+  if (!d) { setHtml($('this-pc'), ''); return; }
+  const live = d.connected || 0, paired = d.devices || 0;
+  const day = new Date(); day.setHours(0, 0, 0, 0);
+  const today = (model.ownEvents || []).filter((e) => (e.ts || 0) >= day.getTime()).length;
+  setHtml($('this-pc'), [
+    `<div class="line"><span class="dot" style="color:${live ? 'var(--done)' : 'var(--closed)'}"></span><span><b>${live}</b> phone${live === 1 ? '' : 's'} live · ${paired} paired</span></div>`,
+    `<div class="line"><span class="dot" style="color:${!d.relay ? 'var(--closed)' : d.relay_up ? 'var(--done)' : 'var(--waiting)'}"></span><span>Relay ${!d.relay ? 'off' : d.relay_up ? 'connected' : 'down'}</span></div>`,
+    model.legacy ? '' : `<div class="line"><span class="dot" style="color:var(--accent)"></span><span><b>${today}</b> event${today === 1 ? '' : 's'} today</span></div>`,
+  ].join(''));
+}
+function renderFilterBar() {
+  for (const b of $('range').querySelectorAll('button[data-r]')) b.setAttribute('aria-pressed', String(b.dataset.r === filters.range));
+  const chip = (key, label) => `<span class="chip">${esc(label)}<button type="button" data-chip="${esc(key)}" aria-label="Remove the filter ${esc(label)}" title="Remove">×</button></span>`;
+  const out = [
+    ...filters.status.map((v) => chip('status|' + v, stateLabel(v))),
+    ...filters.projects.map((v) => chip('projects|' + v, v)),
+    ...filters.pcs.map((v) => chip('pcs|' + v, pcName(v))),
+  ];
+  if (filters.range !== 'all') out.push(chip('range|', RANGE_LABEL[filters.range]));
+  if (filters.q.trim()) out.push(chip('q|', `Search “${filters.q.trim()}”`));
+  if (out.length) out.push('<button class="link" type="button" data-act="clear-filters">Clear filters</button>');
+  setHtml($('chips'), out.join(''));
+}
+function renderEmptyState() {
+  const none = (model.all || []).length > 0 && visibleSessions().length === 0;
+  const [t, b, a] = !none ? ['', '', ''] : filtersActive() ? ['No sessions match these filters', 'Clear filters', 'clear-filters']
+    : hiddenNow().length ? ['All sessions are hidden', 'Show hidden', 'show-hidden'] : ['', '', ''];
+  $('gempty').classList.toggle('on', !!t);
+  if ($('gempty-t').textContent !== t) $('gempty-t').textContent = t;
+  if ($('gempty-clear').textContent !== b) $('gempty-clear').textContent = b;
+  $('gempty-clear').dataset.act = a;
+}
+function renderHiddenRow() {
+  const n = hiddenNow().length;
+  if (!n) showHidden = false;
+  setHtml($('hiddenrow'), n ? `<div class="line"><span>${n} hidden · <button class="link" type="button" data-act="toggle-hidden" aria-pressed="${showHidden}">${showHidden ? 'Hide them' : 'Show'}</button> · <button class="link" type="button" data-act="unhide-all">Unhide all</button></span></div>` : '');
+}
+function setShowHidden(on) { showHidden = !!on; graph.wake(); render(); }
+function act(name) {
+  if (name === 'clear-filters') clearFilters();
+  else if (name === 'show-hidden') setShowHidden(true);
+  else if (name === 'toggle-hidden') setShowHidden(!showHidden);
+  else if (name === 'unhide-all') unhideSessions(hiddenNow().map((s) => s.id));
+}
+$('side').addEventListener('click', (e) => {
+  const r = e.target.closest('.frow[data-dim]'); if (r) { toggleFilter(r.dataset.dim, r.dataset.v); return; }
+  const a = e.target.closest('[data-act]'); if (a) act(a.dataset.act);
+});
+$('graphbar').addEventListener('click', (e) => {
+  const r = e.target.closest('button[data-r]'); if (r) { setRange(r.dataset.r); return; }
+  const c = e.target.closest('[data-chip]');
+  if (c) {
+    const i = c.dataset.chip.indexOf('|'), dim = c.dataset.chip.slice(0, i), v = c.dataset.chip.slice(i + 1);
+    if (dim === 'range') setRange('all'); else if (dim === 'q') setQuery(''); else toggleFilter(dim, v);
+    return;
+  }
+  const a = e.target.closest('[data-act]'); if (a) act(a.dataset.act);
+});
+$('gempty-clear').addEventListener('click', (e) => act(e.currentTarget.dataset.act));
+// Search: plain text on title, project, branch, last message and folder (MewoCore.matchesQuery).
+$('q').addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(() => setQuery($('q').value), 120); });
+$('q').addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  e.preventDefault(); e.stopPropagation();
+  if ($('q').value) setQuery(''); else $('q').blur();
+});
+addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); $('q').focus(); $('q').select(); }
+});
+renderers.push(renderHiddenRow, renderSidebar, renderFilterBar, renderEmptyState);
+
+// ---------- hiding: the console only, nothing is deleted ----------
+// hidden[id] is the session's last_ts when it was hidden: new activity shows it again (MewoCore.isHidden).
+// Every action here can be undone from the toast, so none asks first. Never session_forget.
+let toastTimer = 0, toastUndo = null;
+function toast(text, undo) {
+  $('toast-t').textContent = text;
+  toastUndo = typeof undo === 'function' ? undo : null;
+  $('toast-undo').hidden = !toastUndo;
+  $('toast').classList.add('on');
+  clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, 5000);
+}
+function hideToast() { clearTimeout(toastTimer); toastUndo = null; $('toast').classList.remove('on'); }
+$('toast-undo').addEventListener('click', () => { const u = toastUndo; hideToast(); if (u) u(); });
+// list: sessions or session ids. Returns how many were hidden.
+function hideSessions(list) {
+  const want = new Set((list || []).map((x) => typeof x === 'string' ? x : x && x.id));
+  const ids = (model.all || []).filter((s) => want.has(s.id) && !isHiddenSession(s)).map((s) => s.id);
+  if (!ids.length) return 0;
+  const before = prefs.hidden;
+  prefs.hidden = MewoCore.hideIds(before, model.all, ids);
+  // selection and setSelection belong to the graph section.
+  const sel = typeof selection !== 'undefined' ? selection : null;
+  if (!showHidden && typeof sel === 'string' && sel.startsWith('s:') && ids.includes(sel.slice(2)) && typeof setSelection === 'function') setSelection(null);
+  savePrefs(); graph.wake(); render();
+  toast(`Hid ${ids.length} session${ids.length === 1 ? '' : 's'}`, () => { prefs.hidden = before; savePrefs(); graph.wake(); render(); });
+  return ids.length;
+}
+function unhideSessions(ids) {
+  const list = (ids || []).filter((id) => Object.prototype.hasOwnProperty.call(prefs.hidden, id));
+  if (!list.length) return 0;
+  prefs.hidden = MewoCore.unhideIds(prefs.hidden, list);
+  savePrefs(); graph.wake(); render();
+  return list.length;
+}
+function clearFeed() {
+  const before = prefs.feed_cleared_at;
+  prefs.feed_cleared_at = Date.now();
+  savePrefs(); render();
+  toast('Cleared the activity feed', () => { prefs.feed_cleared_at = before; savePrefs(); render(); });
+}
+
+// Menus: Clean up in the toolbar, and a session's right-click menu (the graph calls openCtxMenu).
+const CLEAN = [['finished', 'Hide finished sessions'], ['closed', 'Hide closed sessions'], ['stale', 'Hide anything idle for over a day']];
+// Bulk actions take only what the filters show.
+const cleanTargets = (kind) => MewoCore.cleanupTargets(kind, visibleSessions().filter((s) => !s._hidden), Date.now());
+function renderCleanMenu() {
+  const feed = (model.events || []).some((e) => (e.ts || 0) > prefs.feed_cleared_at);
+  setHtml($('cleanmenu'), CLEAN.map(([k, label]) => {
+    const n = cleanTargets(k).length;
+    return `<button type="button" role="menuitem" data-clean="${k}" ${n ? '' : 'disabled'}>${label}<span class="c">${n}</span></button>`;
+  }).join('') + `<hr><button type="button" role="menuitem" data-clean="feed" ${feed ? '' : 'disabled'}>Clear activity feed</button>`);
+}
+let ctxSession = null;
+const menuOpen = () => $('cleanmenu').classList.contains('on') || $('ctxmenu').classList.contains('on');
+function closeMenus() {
+  $('cleanmenu').classList.remove('on'); $('cleanbtn').setAttribute('aria-expanded', 'false');
+  $('ctxmenu').classList.remove('on'); ctxSession = null;
+}
+$('cleanbtn').addEventListener('click', (e) => {
+  const open = !$('cleanmenu').classList.contains('on');
+  closeMenus();
+  if (!open) return;
+  renderCleanMenu();
+  $('cleanmenu').classList.add('on'); $('cleanbtn').setAttribute('aria-expanded', 'true');
+  // Opened from the keyboard: the first item takes the focus.
+  if (e.detail === 0) { const f = $('cleanmenu').querySelector('button:not(:disabled)'); if (f) f.focus(); }
+});
+$('cleanmenu').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-clean]'); if (!b || b.disabled) return;
+  const k = b.dataset.clean; closeMenus();
+  if (k === 'feed') clearFeed(); else hideSessions(cleanTargets(k));
+});
+function openCtxMenu(s, x, y) {
+  const cur = s && ((model.all || []).find((t) => t.id === s.id) || s);
+  if (!cur) return;
+  closeMenus(); ctxSession = cur;
+  const items = [], win = cur.peer ? 0 : windowOf(cur.id);
+  if (cur.peer) items.push(`<button type="button" role="menuitem" disabled>On ${esc(cur.pc_name || 'another PC')}</button>`);
+  if (win) items.push(`<button type="button" role="menuitem" data-win="${win}">Show window</button>`);
+  if (!cur.peer && cur.desktop) items.push(`<button type="button" role="menuitem" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(cur.desktop)}">Open in Claude</button>`);
+  const hide = isHiddenSession(cur) ? '<button type="button" role="menuitem" data-ctx="unhide">Unhide</button>'
+    : cur.state === 'idle' || cur.state === 'ended' ? '<button type="button" role="menuitem" data-ctx="hide">Hide</button>' : '';
+  if (hide) { if (items.length) items.push('<hr>'); items.push(hide); }
+  if (!items.length) items.push(`<button type="button" role="menuitem" disabled>${esc(stateLabel(cur.state))}</button>`);
+  const m = $('ctxmenu'); m.innerHTML = items.join('');
+  m.style.left = '0px'; m.style.top = '0px'; m.classList.add('on');
+  m.style.left = Math.max(8, Math.min(x, innerWidth - m.offsetWidth - 8)) + 'px';
+  m.style.top = Math.max(8, Math.min(y, innerHeight - m.offsetHeight - 8)) + 'px';
+}
+$('ctxmenu').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b || b.disabled) return;
+  const s = ctxSession;
+  closeMenus();
+  if (b.dataset.url) openUrl(b.dataset.url);
+  else if (b.dataset.ctx === 'hide' && s) hideSessions([s]);
+  else if (b.dataset.ctx === 'unhide' && s) unhideSessions([s.id]);
+  // A [data-win] click goes on to the page's own listener, which brings the window forward.
+});
+$('ctxmenu').addEventListener('contextmenu', (e) => e.preventDefault());
+document.addEventListener('pointerdown', (e) => {
+  if (menuOpen() && !e.target.closest('#cleanmenu, #cleanbtn, #ctxmenu')) closeMenus();
+}, true);
+addEventListener('keydown', (e) => {
+  if (!menuOpen()) return;
+  const m = $('cleanmenu').classList.contains('on') ? $('cleanmenu') : $('ctxmenu');
+  if (e.key === 'Escape') {
+    e.preventDefault(); e.stopPropagation();
+    const back = m.id === 'cleanmenu'; closeMenus(); if (back) $('cleanbtn').focus();
+  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const list = [...m.querySelectorAll('button:not(:disabled)')]; if (!list.length) return;
+    const i = list.indexOf(document.activeElement), step = e.key === 'ArrowDown' ? 1 : list.length - 1;
+    list[i < 0 ? (step === 1 ? 0 : list.length - 1) : (i + step) % list.length].focus();
+  }
+}, true);
+addEventListener('resize', closeMenus);
+addEventListener('blur', closeMenus);
+renderers.push(() => { if ($('cleanmenu').classList.contains('on')) renderCleanMenu(); });
 
 // v2.2: which PRD a feature follows.
 let ppFeature = null;
