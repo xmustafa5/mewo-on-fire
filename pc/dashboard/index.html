@@ -602,6 +602,18 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
   #plist { border-right: 0; border-bottom: .5px solid var(--sep); }
   #sdetail .grid { grid-template-columns: 1fr; }
 }
+/* ---------- inspector: rows that just arrived, pills, what a session made ---------- */
+@keyframes ev-in { from { opacity: 0; transform: translateY(-3px); } }
+.ev.new { animation: ev-in .4s ease-out; }
+.ev:not([data-sid]), .req:not([data-sid]) { cursor: default; }
+.ev:not([data-sid]):hover { background: none; }
+.ins-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.kv .link { font: 12.5px var(--sans); text-align: right; }
+.arts { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; }
+.arts .act { width: 100%; }
+.arts .act .k { flex: none; font: 600 11px var(--sans); }
+.arts .act .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart .l.ax { margin: 4px 0 0; font-weight: 500; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
@@ -1909,6 +1921,282 @@ $('ap-go').addEventListener('click', async () => {
   if (r.ok) { msg.textContent = `Paired with ${r.name || 'the PC'}`; $('ap-paste').value = ''; setTimeout(() => { $('addpc').classList.remove('on'); refreshFeatures(); }, 1200); }
   else { msg.className = 'msg bad'; msg.textContent = r.error || 'Pairing failed'; }
 });
+// ---------- the inspector: the activity, or the details of what is picked ----------
+// The right column shows the activity feed, or the details of what `selection` names: a session
+// ('s:<id>'), a project ('p:<name>'), a computer ('pc:<id>') or a feature ('f:<key>'). It is built as one
+// HTML string and the DOM is left alone when the string has not changed, so a state every 2 s costs
+// nothing, keeps the scroll and keeps a hovered row hovered.
+const insEl = $('inspector'), insBody = $('ins-body');
+const HOUR = 3600e3;
+let insSig = '', insKey = null, insKeys = null, insArts = [], insArtsPeer = false;
+const stateVar = (st) => st === 'working' ? 'var(--working)' : st === 'waiting' ? 'var(--waiting)' : st === 'ended' ? 'var(--closed)' : 'var(--done)';
+const stateDot = (st) => `<span class="dot${st === 'ended' ? ' ring' : ''}" style="color:${stateVar(st)}"></span>`;
+const statePill = (st) => `<span class="pillx" style="--c:${stateVar(st)}">${stateDot(st)}${esc(stateLabel(st))}</span>`;
+// Today's times as 14:05, older ones with their day.
+function when(ts, now) {
+  if (!ts) return '—';
+  if (ts >= MewoCore.rangeStart('today', now)) return hm(ts);
+  return `${new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${hm(ts)}`;
+}
+// v is HTML: callers escape what they put in it.
+const kv = (k, v) => `<div class="kv"><span>${esc(k)}</span><span>${v}</span></div>`;
+const pickLink = (id, text) => `<button class="link" type="button" data-sid="${esc(id)}">${esc(text)}</button>`;
+const insHead = (title) => `<div class="ins-h"><button class="back" type="button" data-back aria-label="Back to activity" title="Back to activity (Esc)"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.25 5.25 8 10 12.75"/></svg></button><div class="ins-t" title="${esc(title)}">${esc(title)}</div></div>`;
+const sessionOf = (id) => (model.all || []).find((s) => s.id === id);
+const sessRow = (s, now) => `<div class="ev" role="button" tabindex="0" data-sid="${esc('s:' + s.id)}">${stateDot(s.state)}<span class="p">${esc(s.title || s.id)}</span><span class="tm">${when(s.last_ts, now)}</span><div class="tx">${s._hidden ? 'Hidden · ' : ''}${esc(stateLabel(s.state))}${s.peer ? ' · ' + esc(s.pc_name || '') : ''}${s.last_text ? ' · ' + esc(trunc(s.last_text, 200)) : ''}</div></div>`;
+const evKind = (k) => k === 'needs_input' ? ['Needs you', 'var(--waiting)'] : k === 'session_end' ? ['Closed', 'var(--closed)'] : k === 'warning' ? ['Policy', 'var(--ready)'] : k === 'signoff' ? ['Sign-off', 'var(--phone)'] : ['Finished', 'var(--done)'];
+const evKey = (e) => `${e.id}:${e.ts}`;
+
+function activityHtml(now) {
+  const d = model.daemon || {}, all = model.all || [], evs = model.events || [], h = [];
+  const cleared = prefs.feed_cleared_at || 0;
+  const list = evs.filter((e) => MewoCore.eventPasses(e, filters, now, hiddenNow(), cleared)).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 60);
+  h.push(`<div class="ins-h"><div class="ins-t">Activity</div>${list.length ? '<button class="link" id="feedclear" type="button" title="Clear the activity feed">Clear</button>' : ''}</div>`);
+  // Needs-you cards: what waits for an answer, whatever the filters say.
+  const reqs = [...(model.requests || [])].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  if (reqs.length) h.push('<div class="group">Needs you</div>');
+  for (const r of reqs) {
+    const pc = r.pc_id || d.pc_id, s = r.session ? all.find((x) => x.pc_id === pc && (x.short === r.session || String(x.id).startsWith(r.session))) : null;
+    const kind = r.kind === 'question' ? 'Question' : r.kind === 'plan' ? 'Plan approval' : 'Permission';
+    h.push(`<div class="req"${s ? ` role="button" tabindex="0" data-sid="${esc('s:' + s.id)}"` : ''}><div class="hd"><span>${kind} · ${esc(MewoCore.projectOf(r))}${r.pc_name ? ' · ' + esc(r.pc_name) : ''}</span><span>${when(r.ts, now)}</span></div><div class="t">${esc(r.title || kind)}</div>${r.summary || r.detail ? `<div class="s">${esc(r.summary || r.detail)}</div>` : ''}</div>`);
+  }
+  if (!list.length) {
+    const why = model.legacy ? 'The activity feed needs a newer daemon. Run <code>mewo install</code>.'
+      : evs.some((e) => (e.ts || 0) > cleared) ? 'No activity matches the filters'
+      : cleared ? `Feed cleared at ${esc(when(cleared, now))}. New activity shows up here.`
+      : 'No activity yet';
+    h.push(`<div class="empty">${why}</div>`);
+    return h.join('');
+  }
+  const day = MewoCore.rangeStart('today', now);
+  let group = '';
+  for (const e of list) {
+    const g = (e.ts || 0) >= day ? 'Today' : 'Earlier';
+    if (g !== group) { group = g; h.push(`<div class="group">${g}</div>`); }
+    const [label, c] = evKind(e.kind), s = e.session_id ? sessionOf(e.session_id) : null;
+    const peer = e.pc_id && e.pc_id !== d.pc_id && e.pc_name;
+    h.push(`<div class="ev"${s ? ` role="button" tabindex="0" data-sid="${esc('s:' + s.id)}"` : ''} data-ek="${esc(evKey(e))}" title="${esc(label)}"><span class="dot" style="color:${c}"></span><span class="p">${esc(MewoCore.projectOf(e))}${peer ? ' · ' + esc(e.pc_name) : ''}</span><span class="tm">${when(e.ts, now)}</span><div class="tx">${esc(e.message || e.detail || label)}</div></div>`);
+  }
+  return h.join('');
+}
+
+function sessionHtml(id, now) {
+  const s = sessionOf(id); if (!s) return null;
+  const d = model.daemon || {}, hidden = hiddenNow().has(s.id), win = s.peer ? 0 : windowOf(s.id);
+  insArts = [...(s.artifacts || [])].reverse(); insArtsPeer = !!s.peer;
+  const pills = [statePill(s.state)];
+  if (hidden) pills.push('<span class="pillx">Hidden</span>');
+  if (s.queued) pills.push(`<span class="pillx" style="--c:var(--phone)">${s.queued} queued from phone</span>`);
+  const acts = [];
+  if (win) acts.push(`<button class="act primary" type="button" data-win="${win}">Show window</button>`);
+  if (!s.peer && s.desktop) acts.push(`<button class="act${win ? '' : ' primary'}" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(s.desktop)}">Open in Claude</button>`);
+  if (hidden) acts.push(`<button class="act" type="button" data-unhide="${esc(s.id)}">Unhide</button>`);
+  else if (s.state === 'idle' || s.state === 'ended') acts.push(`<button class="act" type="button" data-hide="${esc(s.id)}">Hide</button>`);
+  const note = s.peer ? `On ${esc(s.pc_name || 'another PC')}${s.desktop ? ': open it there' : ''}` : !win && !s.desktop ? 'Not a Claude Desktop session' : '';
+  const h = [insHead(s.title || s.project || s.id), '<div class="ins-pad">', `<div class="ins-pills">${pills.join('')}</div>`];
+  if (s.last_text) h.push(`<div class="lastmsg">${esc(s.last_text)}</div>`);
+  if (note) h.push(`<div class="note-s">${note}</div>`);
+  if (acts.length) h.push(`<div class="acts">${acts.join('')}</div>`);
+  h.push(kv('Project', pickLink('p:' + MewoCore.projectOf(s), MewoCore.projectOf(s))));
+  h.push(kv('Computer', pickLink('pc:' + (s.pc_id || d.pc_id), s.pc_name || d.name || 'This computer')));
+  if (s.branch) h.push(kv('Branch', `<code>${esc(s.branch)}</code>`));
+  if (s.model) h.push(kv('Model', esc(s.model)));
+  if (s.feature) h.push(kv('Feature', pickLink('f:' + s.feature, featureLabel(s.feature) + (s.plan_session ? ` · S${s.plan_session}` : ''))));
+  h.push(kv('Last activity', esc(when(s.last_ts, now))));
+  h.push(kv('Listening', s.listening ? 'Yes' : 'No'));
+  h.push('</div>');
+  if (insArts.length) {
+    h.push('<div class="group">Made by Claude</div><div class="ins-pad arts">');
+    insArts.forEach((a, i) => h.push(`<button class="act" type="button" data-art="${i}" title="${esc(a.url || '')}"><span class="k" style="color:${a.kind === 'design' ? 'var(--ready)' : 'var(--accent)'}">${esc(kindLabel(a.kind))}</span><span class="n">${esc(a.title || 'Untitled ' + (a.kind || 'artifact'))}</span></button>`));
+    h.push('</div>');
+  }
+  return h.join('');
+}
+
+function projectHtml(name, now) {
+  const all = (model.all || []).filter((s) => MewoCore.projectOf(s) === name); if (!all.length) return null;
+  const vis = visibleSessions().filter((s) => MewoCore.projectOf(s) === name).sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
+  const on = (filters.projects || []).includes(name), pcs = [...new Set(all.map((s) => s.pc_name).filter(Boolean))];
+  const count = (st) => all.filter((s) => s.state === st).length;
+  const h = [insHead(name), '<div class="ins-pad">'];
+  h.push(`<div class="acts"><button class="act${on ? '' : ' primary'}" type="button" data-filter-project="${esc(name)}" aria-pressed="${on}">${on ? 'Stop filtering to this project' : 'Filter to this project'}</button></div>`);
+  h.push(kv('Sessions', String(all.length)));
+  h.push(kv('Working', String(count('working'))));
+  if (count('waiting')) h.push(kv('Needs you', String(count('waiting'))));
+  if (pcs.length) h.push(kv(pcs.length > 1 ? 'Computers' : 'Computer', esc(pcs.join(', '))));
+  h.push('</div>');
+  h.push(`<div class="group">Sessions${vis.length < all.length ? ` · ${vis.length} of ${all.length} shown` : ''}</div>`);
+  h.push(vis.length ? vis.map((s) => sessRow(s, now)).join('') : '<div class="empty">No session of this project matches the filters</div>');
+  return h.join('');
+}
+
+// Events per clock hour over the last 24: the last bar is the hour now.
+function chartBins(evs, now) {
+  const b = new Array(24).fill(0), hs = new Date(now).setMinutes(0, 0, 0);
+  for (const e of evs) {
+    const ts = e.ts || 0; if (!ts || ts > now + 60e3) continue;
+    const i = ts >= hs ? 23 : 23 - Math.ceil((hs - ts) / HOUR);
+    if (i >= 0) b[i]++;
+  }
+  return b;
+}
+function chartHtml(evs, now) {
+  const bins = chartBins(evs, now), peak = Math.max(...bins), hs = new Date(now).setMinutes(0, 0, 0);
+  return `<div class="chart"><div class="l"><span>Activity, last 24 hours</span><span>Peak ${peak} an hour</span></div><canvas class="inschart" data-bins="${bins.join(',')}" role="img" aria-label="Events per hour over the last 24 hours, peak ${peak}"></canvas><div class="l ax"><span>${hm(hs - 23 * HOUR)}</span><span>Now</span></div></div>`;
+}
+function drawInsChart() {
+  const cv = insBody.querySelector('canvas.inschart'); if (!cv) return;
+  const w = cv.clientWidth, h = cv.clientHeight; if (!w || !h) return;
+  const dpr = Math.min(2, devicePixelRatio || 1), bins = cv.dataset.bins.split(',').map(Number), max = Math.max(1, ...bins);
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  const bw = w / 24, gap = Math.min(3, bw * 0.3);
+  for (let i = 0; i < 24; i++) {
+    const v = bins[i] || 0, bh = v ? Math.max(4, (v / max) * (h - 1)) : 2;
+    ctx.fillStyle = i === 23 ? T.accent : v ? T.text3 : T.sep2;
+    roundRectPath(ctx, i * bw + gap / 2, h - bh, bw - gap, bh, Math.min(2.5, (bw - gap) / 2));
+    ctx.fill();
+  }
+}
+
+function pcHtml(id, now) {
+  const d = model.daemon || {}, evs = (model.events || []).filter((e) => e.pc_id === id);
+  if (d.pc_id && id === d.pc_id) {
+    const own = model.sessions || [], day = MewoCore.rangeStart('today', now);
+    const hosts = (d.hosts || []).filter((x) => !String(x).includes('://'));
+    const reqs = (model.requests || []).filter((r) => !r.pc_id).length || d.pending || 0;
+    return [insHead(d.name || 'This computer'), '<div class="ins-pad">',
+      '<div class="ins-pills"><span class="pillx" style="--c:var(--done)"><span class="dot"></span>Online</span><span class="pillx">This computer</span></div>',
+      kv('Phones', `${d.connected || 0} live, ${d.devices || 0} paired`),
+      kv('Relay', d.relay ? `${d.relay_up ? 'Connected' : 'Down'} · ${esc(String(d.relay).replace(/^wss?:\/\//, ''))}` : 'Off'),
+      kv('Listening', `${d.listening || 0} of ${d.sessions != null ? d.sessions : own.length}`),
+      kv('Queued from phone', String(own.reduce((a, s) => a + (s.queued || 0), 0))),
+      kv('Requests waiting', String(reqs)),
+      kv('Events today', model.legacy ? '—' : String((model.ownEvents || []).filter((e) => (e.ts || 0) >= day).length)),
+      kv('Hosts', hosts.length ? hosts.map((x) => `<code>${esc(x)}</code>`).join(' ') : '—'),
+      kv('Port', d.port ? `<code>${esc(d.port)}</code>` : '—'),
+      kv('Version', version ? esc('v' + version) : '—'),
+      chartHtml(evs, now), '</div>'].join('');
+  }
+  const p = (model.peers || []).find((x) => x.pc_id === id); if (!p) return null;
+  const ss = p.sessions || [], working = p.working != null ? p.working : ss.filter((s) => s.state === 'working').length;
+  return [insHead(p.name || id), '<div class="ins-pad">',
+    `<div class="ins-pills">${p.connected ? '<span class="pillx" style="--c:var(--done)"><span class="dot"></span>Online</span>' : '<span class="pillx" style="--c:var(--closed)"><span class="dot ring"></span>Offline</span>'}</div>`,
+    kv('Status', p.connected ? `Connected · ${esc(p.latency_ms || 0)} ms` : esc(p.error || 'Not reachable')),
+    p.host ? kv('Host', `<code>${esc(p.host)}</code>`) : '',
+    p.account ? kv('Account', esc(p.account)) : '',
+    kv('Sessions', `${working} working of ${ss.length}`),
+    p.connected ? chartHtml(evs, now) : '',
+    `<div class="acts"><button class="act" type="button" data-remove-pc="${esc(p.pc_id)}" style="color:var(--waiting)">Remove this PC from the network</button></div>`,
+    '</div>'].join('');
+}
+
+function featureHtml(key, now) {
+  const d = model.daemon || {}, copies = features.filter((x) => x.key === key);
+  const f = copies.find((x) => x.pc_id === d.pc_id) || copies[0];
+  const live = (model.all || []).filter((s) => s.feature === key).sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
+  if (!f && !live.length) return null;
+  const h = [insHead(featureLabel(key)), '<div class="ins-pad">'];
+  if (f) {
+    const plan = (f.plan && f.plan.sessions) || [];
+    const total = f.sessions_total || plan.length, merged = f.sessions_merged != null ? f.sessions_merged : plan.filter((s) => s.effective === 'merged').length;
+    h.push(kv('Step', f.released ? 'Released' : f.light ? 'Light path' : `${esc(f.step)} of 12${f.step_label ? ' · ' + esc(f.step_label) : ''}`));
+    h.push(kv('Plan sessions merged', total ? `${esc(merged)} of ${esc(total)}` : '—'));
+  }
+  h.push(kv('Live sessions', live.length ? `${live.filter((s) => s.state === 'working').length} working of ${live.length}` : 'None'));
+  if (f && f.branch) h.push(kv('Branch', `<code>${esc(f.branch)}</code>`));
+  const pcs = [...new Set(copies.map((c) => c.pc_name).filter(Boolean))];
+  if (pcs.length) h.push(kv(pcs.length > 1 ? 'Computers' : 'Computer', esc(pcs.join(', '))));
+  if (f) h.push(`<div class="acts"><button class="act primary" type="button" data-open-feature="${esc(key)}">Open in Features</button><button class="act" type="button" data-open-pipeline="${esc(key)}">Open in Pipeline</button></div>`);
+  h.push('</div>');
+  if (live.length) h.push('<div class="group">Live sessions</div>' + live.map((s) => sessRow(s, now)).join(''));
+  return h.join('');
+}
+
+function renderInspector() {
+  const now = model.now || Date.now();
+  let html = null;
+  if (selection) {
+    const i = selection.indexOf(':'), kind = selection.slice(0, i), id = selection.slice(i + 1);
+    html = kind === 's' ? sessionHtml(id, now) : kind === 'p' ? projectHtml(id, now) : kind === 'pc' ? pcHtml(id, now) : kind === 'f' ? featureHtml(id, now) : null;
+    // What was picked is gone (a forgotten session, a removed PC): back to the activity.
+    if (html === null) { selection = null; graph.wake(); }
+  }
+  if (html === null) html = activityHtml(now);
+  // Events that were not in the previous state arrived just now: their rows fade in. The first state shows as it is.
+  const keys = new Set((model.events || []).map(evKey)), fresh = insKeys && model.daemon ? keys : null;
+  const prev = insKeys; if (model.daemon) insKeys = keys;
+  const key = selection || '';
+  if (html === insSig && key === insKey) return;
+  const top = key === insKey ? insEl.scrollTop : 0;
+  insSig = html; insBody.innerHTML = html; insEl.scrollTop = top; insKey = key;
+  if (fresh) for (const el of insBody.querySelectorAll('.ev[data-ek]')) if (!prev.has(el.dataset.ek)) el.classList.add('new');
+  drawInsChart();
+}
+renderers.push(renderInspector);
+
+async function removePc(id) {
+  const p = (model.peers || []).find((x) => x.pc_id === id);
+  if (!confirm(`Remove ${p && p.name ? p.name : 'this PC'} from the network? Pair it again to bring it back.`)) return;
+  const r = await daemon({ cmd: 'peer_remove', pc_id: id });
+  if (r && r.ok === false) { alert(r.error || 'Could not remove the PC'); return; }
+  setSelection(null); setTimeout(refreshFeatures, 300);
+}
+// One listener for everything in the inspector; [data-win] buttons go to the page-wide listener.
+insBody.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-back], #feedclear, [data-sid], [data-hide], [data-unhide], [data-filter-project], [data-remove-pc], [data-open-feature], [data-open-pipeline], [data-art], [data-url]');
+  if (!t) return;
+  const ds = t.dataset;
+  if ('back' in ds) setSelection(null);
+  else if (t.id === 'feedclear') clearFeed();
+  else if (ds.sid) setSelection(ds.sid);
+  else if (ds.hide) { const s = sessionOf(ds.hide); if (s) hideSessions([s]); }
+  else if (ds.unhide) unhideSessions([ds.unhide]);
+  else if (ds.filterProject) toggleFilter('projects', ds.filterProject);
+  else if (ds.removePc) removePc(ds.removePc);
+  else if (ds.openFeature) { fpicked = ds.openFeature; fdSig = ''; setView('feat'); }
+  else if (ds.openPipeline) { picked = ds.openPipeline; setView('pipe'); }
+  else if (ds.art !== undefined) { const a = insArts[+ds.art]; if (a) { if (a.local && a.id && !insArtsPeer) preview(a); else if (a.url) openUrl(a.url); } }
+  else if (ds.url) openUrl(ds.url);
+});
+// Rows are role=button: Enter and Space open them too.
+insBody.addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-sid]')) { e.preventDefault(); e.target.click(); }
+});
+// The computer's name in the toolbar picks this computer.
+function pickThisPc() { const id = (model.daemon || {}).pc_id; if (!id) return; setView('net'); setSelection('pc:' + id); }
+$('tb-pc').addEventListener('click', pickThisPc);
+$('tb-pc').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickThisPc(); } });
+// Esc goes back to the activity, unless a sheet or a menu is open or a field has the focus. Capture
+// runs before the sheets' own Esc handlers, so a sheet closing on this Esc keeps the selection.
+addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented || !selection) return;
+  if (['preview', 'sdetail', 'bigmap', 'addpc', 'pickprd', 'dsys'].some((id) => $(id).classList.contains('on')) || ns.box.style.display === 'block') return;
+  if (document.querySelector('.menu.on')) return;
+  const a = document.activeElement;
+  if (a && (a.matches('input, textarea, select') || a.isContentEditable)) return;
+  e.preventDefault(); setSelection(null);
+}, true);
+// The chart follows the theme and the column's width.
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawInsChart);
+let insResize = 0;
+addEventListener('resize', () => { if (!insResize) insResize = requestAnimationFrame(() => { insResize = 0; drawInsChart(); }); });
+
+// The Mac app drags the window from the toolbar: it needs the toolbar's rect and every control's in it.
+if (window.mewoHost === 'mac' && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo) {
+  const tb = $('toolbar'), rect = (r) => [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+  let dragQ = 0;
+  const postDrag = () => {
+    dragQ = 0;
+    const controls = [...tb.querySelectorAll('button, input, label, select, .seg, [role=button]')]
+      .map((el) => el.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0).map(rect);
+    window.webkit.messageHandlers.mewo.postMessage({ cmd: 'drag_regions', toolbar: rect(tb.getBoundingClientRect()), controls });
+  };
+  const queueDrag = () => { if (!dragQ) dragQ = requestAnimationFrame(postDrag); };
+  addEventListener('load', queueDrag); addEventListener('resize', queueDrag);
+  if (window.ResizeObserver) { const ro = new ResizeObserver(queueDrag); ro.observe(tb); ro.observe($('tb-pc')); }
+  queueDrag();
+}
 // ---------- state ----------
 function setPcState(color, text) { $('pcstate').innerHTML = `<span class="dot" style="color:${color}"></span>${esc(text)}`; }
 let firstState = true;
