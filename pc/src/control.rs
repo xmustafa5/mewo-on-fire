@@ -225,6 +225,15 @@ The design is the Design artifact{}: open it and apply the notes to its boards."
                         Err(e) => json!({"ok": false, "error": e}),
                     }
                 }
+                // v3.3: the operations console's own settings (what it hides, its filters).
+                "console_get" => json!({"ok": true, "prefs": crate::console_prefs::load()}),
+                "console_set" => match req.get("prefs") {
+                    Some(p) => match crate::console_prefs::save(p) {
+                        Ok(()) => json!({"ok": true}),
+                        Err(e) => json!({"ok": false, "error": e}),
+                    },
+                    None => json!({"ok": false, "error": "prefs missing"}),
+                },
                 "chat" => handle_chat(&state, &req).await,
                 // v2.0: a command for another PC of the network goes through this hub.
                 cmd if is_for_peer(&state, &req) => {

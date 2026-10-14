@@ -6,6 +6,7 @@ mod ask;
 mod cli;
 mod clock;
 mod config;
+mod console_prefs;
 mod control;
 mod daemon;
 mod dashboard;

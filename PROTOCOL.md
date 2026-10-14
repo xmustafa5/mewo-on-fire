@@ -1091,3 +1091,13 @@ than "at a time" allows, the rest following the plan's order) and `fresh`
 tick, so earlier attempts neither block them nor move them a tier up).
 The answer carries them as `run`. A plan status that starts with
 "Blocked:" counts as blocked, as "Blocked" did.
+
+`console_get` and `console_set {prefs}` (control socket, this daemon
+only, also through the console's allowlist) keep the operations
+console's own settings in `<state>/console.json` (mode 600): `{v: 1,
+hidden: {<session id>: <ms>}, feed_cleared_at, filters: {status,
+projects, pcs, range}}`. `console_get` answers `{ok, prefs}`, the
+defaults when the file is missing or unreadable; `console_set` replaces
+the whole document with any JSON object up to 256 KB, else `{ok: false,
+error}`. Hiding a session there touches neither the daemon's sessions
+and events nor Claude Code.

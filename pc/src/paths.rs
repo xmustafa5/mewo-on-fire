@@ -64,6 +64,10 @@ pub fn sessions_file() -> PathBuf {
     state_dir().join("sessions.json")
 }
 
+pub fn console_file() -> PathBuf {
+    state_dir().join("console.json")
+}
+
 /// `/tmp/mewo-on-fire-$USER.sock`
 fn tmp_socket_path() -> PathBuf {
     let user = std::env::var("USER")
