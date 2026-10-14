@@ -1,8 +1,10 @@
 //! v3.2: the Mewo Session windows open on this computer. Each keeps
 //! `<state>/windows/<pid>.json` (`pid`, `folder`, `session_id`) while it is
 //! open and comes forward on SIGUSR1, so the console can offer "Show the
-//! session" on a session that has one. Linux only: there is no such window
-//! on a Mac.
+//! session" on a session that has one. Since v3.3 a chat session's entry is
+//! its host's (mewo-session-host, `socket` added): the host brings its tab
+//! forward in the chat window, opening the window again when none is open.
+//! Linux only: there is no such window on a Mac.
 
 use std::fs;
 use std::path::PathBuf;

@@ -1027,3 +1027,53 @@ window is ever signalled. A window told to quit closes as on its close
 button, and Claude Code ends with its window whatever ends it
 (`setpriv --pdeathsig`), so the build sees the run end and starts it
 again.
+
+# v3.3 — one window, a tab per session
+
+On Linux every "Build with me" chat now opens as a tab of one Mewo
+Session window, the way the Claude Code extension shows its
+conversations, and the session no longer belongs to the window. The
+daemon starts a host for it (`pc/console/linux/mewo-session-host`, built
+into the binary and written to `<state>/mewo-session-host`) with the
+session's info file, in a scope of its own as before. The host runs the
+run script's `chat` (Claude Code in its stream mode, `setpriv
+--pdeathsig` tying it to the host), sends the first prompt, asks for the
+commands and models (`initialize`), answers the host requests nothing
+supports, hands each `can_use_tool` request to `mewo ask` for the phones,
+and keeps what a window draws in `<base>.events.jsonl` beside the info
+file (not the streamed text, which the finished message repeats). It
+serves the session on `$XDG_RUNTIME_DIR/mewo-sessions/<pid>.sock`: a
+window that connects gets `{"type": "mewo", "kind": "host", "info": …}`,
+the session so far, `{"kind": "live"}`, then each event as it comes; it
+sends `{"t": "send", "text", "images"}`, `respond`, `interrupt`,
+`set_model`, `set_mode`, `cancel_retry` and `stop`. What reaches Claude
+is echoed as `{"kind": "said", "text", "images", "quiet"}` before the
+reply, so every window, and one that connects later, draws it in its
+place; an answer is `{"kind": "resolved", "by": "window" | "phone"}`.
+A turn that failed because another Claude Code was renewing the sign-in
+("Failed to refresh OAuth token: another Claude Code process is
+refreshing it") is tried again by the host after 30, 60, 120 and 240
+seconds (`{"kind": "retrying", "in"}` comes just before the failed
+result, so the session does not show as finished; `retry_cancelled` when
+Esc stops it; a message you send takes its place).
+
+The host keeps `<state>/windows/<pid>.json` (with `socket`), so SHOW THE
+SESSION signals the host, which brings its tab forward with the click's
+token (`{"kind": "show", "token"}`) or opens the window again when none
+is open. The window (`mewo-session --attach [<host socket>]`) listens on
+`$XDG_RUNTIME_DIR/mewo-session-window.sock`: a host hands it the session
+(`{"attach": <host socket>, "token"}`) or, when nothing answers, starts
+it, with its output in `<state>/mewo-session-window.log`. A window that
+opens takes every live host in `<state>/windows/` as a tab, so a window
+that froze, was force quit or was closed with "Keep them running" leaves
+the sessions working, and the next one shows them again with their whole
+conversation. Closing a tab, or the window with "Stop them", ends the
+session (`stop`): the build sees the run end as before. A new session
+takes a tab without taking the one in front; a tab's dot follows its
+session (working, needs you, finished, closed) and the header shows the
+tab in front. Every tab's page runs in one WebKit web process, and
+WebKit draws without the GPU (`WEBKIT_DISABLE_DMABUF_RENDERER`,
+`WEBKIT_DISABLE_COMPOSITING_MODE`): with a few sessions open, WebKitGTK
+drawing through an NVIDIA GPU under Wayland hung the windows. A
+terminal session (`session_terminal`, or no WebKitGTK) still opens a
+window of its own, with Claude Code ending with it.

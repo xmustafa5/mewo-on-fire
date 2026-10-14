@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+"""Mewo Session host: one "Build with me" session, kept apart from the window
+that shows it (v3.3).
+
+The daemon starts it with the session's info file. It runs Claude Code in its
+stream mode through the session's script, keeps what Claude Code says in
+<base>.events.jsonl beside the info file, and serves it on a Unix socket: a
+window that connects gets the session so far, then each event as it comes,
+and sends what you type, answer or ask for. The session lives as long as
+Claude Code does, whatever happens to the window: a window that freezes, is
+force quit or is closed with "Keep them running" leaves it working, and the
+next window shows it again, its whole conversation included.
+
+It also does what must go on without a window: the first prompt, a question
+handed to the phones (`mewo ask`; the first answer wins), an answer to the
+requests nothing here supports, a turn that failed because another Claude
+Code was renewing the sign-in tried again, and the entry in <state>/windows/
+that lets the console bring the session forward (SIGUSR1, with the click's
+activation token in <pid>.token).
+"""
+
+import json
+import os
+import queue
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+import traceback
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+WINDOW = os.path.join(HERE, "mewo-session")
+WINDOWS = os.path.expanduser("~/.local/state/mewo-on-fire/windows")
+# What the window says on its way: its errors, and every thread's stack if it hangs and is sent SIGABRT.
+WINDOW_LOG = os.path.expanduser("~/.local/state/mewo-on-fire/mewo-session-window.log")
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.local/state/mewo-on-fire")
+SOCKETS = os.path.join(RUNTIME, "mewo-sessions")
+WINDOW_SOCKET = os.path.join(RUNTIME, "mewo-session-window.sock")
+
+# Claude Code processes that renew the sign-in at the same moment (a build
+# starts several): the one that loses fails its turn at once. It passes
+# within a minute or two, so the turn is tried again by then.
+SIGN_IN_RACE = ("Failed to refresh OAuth token", "another Claude Code process is refreshing")
+RETRY_IN = (30, 60, 120, 240)
+RETRY_TEXT = "The last request failed before it reached you: another Claude Code process was renewing the sign-in. Carry on where you left off."
+
+# What a window draws, so what a window that comes later must see: not the
+# text as it streams (the finished message follows) nor the hooks' chatter.
+KEPT = ("assistant", "user", "result", "control_request", "control_cancel_request", "control_response", "rate_limit_event", "mewo")
+KEPT_SYSTEM = ("init", "status", "compact_boundary", "api_retry")
+
+
+def find_tool(name):
+    """A command the daemon's short PATH may not have."""
+    home = os.path.expanduser("~")
+    for p in (shutil.which(name), f"{home}/.local/bin/{name}", f"/usr/local/bin/{name}", f"/usr/bin/{name}", f"/snap/bin/{name}", f"/opt/homebrew/bin/{name}"):
+        if p and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def ask_daemon(sock, request, timeout=4):
+    """One JSON line to the daemon's control socket, one JSON line back."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        s.connect(sock)
+        s.sendall(json.dumps(request).encode() + b"\n")
+        buf = b""
+        while not buf.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    return json.loads(buf or b"{}")
+
+
+def kept(ev):
+    t = ev.get("type")
+    if t == "system":
+        return ev.get("subtype") in KEPT_SYSTEM
+    return t in KEPT
+
+
+class Client:
+    """A window connected to the session. What goes to it waits in a queue of
+    its own, so a window that stops reading never holds Claude Code up."""
+
+    LIMIT = 50000
+
+    def __init__(self, host, conn):
+        self.host, self.conn = host, conn
+        self.out = queue.Queue()
+        self.open = True
+
+    def run(self):
+        threading.Thread(target=self.writer, daemon=True).start()
+        threading.Thread(target=self.reader, daemon=True).start()
+
+    def send(self, line):
+        if not self.open:
+            return
+        if self.out.qsize() > self.LIMIT:
+            self.close()  # it has not read for a long while: it is gone in all but name
+            return
+        self.out.put(line)
+
+    def writer(self):
+        while True:
+            line = self.out.get()
+            if line is None:
+                break
+            try:
+                self.conn.sendall(line.encode())
+            except OSError:
+                break
+        self.close()
+
+    def reader(self):
+        try:
+            for raw in self.conn.makefile("rb"):
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                self.host.command(msg)
+        except OSError:
+            pass
+        self.close()
+
+    def close(self):
+        if not self.open:
+            return
+        self.open = False
+        self.out.put(None)
+        try:
+            self.conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.conn.close()
+        self.host.dropped(self)
+
+
+class Host:
+    def __init__(self, info_path):
+        with open(info_path, encoding="utf-8") as f:
+            self.info = json.load(f)
+        self.folder = os.path.realpath(self.info["folder"])
+        base = info_path[:-5] if info_path.endswith(".json") else info_path
+        self.log_path = base + ".events.jsonl"
+        self.sock_path = os.path.join(SOCKETS, f"{os.getpid()}.sock")
+        self.entry_path = os.path.join(WINDOWS, f"{os.getpid()}.json")
+        self.lock = threading.RLock()       # the log and the windows: an event is in both or in neither
+        self.stdin_lock = threading.Lock()
+        self.ask_lock = threading.Lock()
+        self.clients = []
+        self.log = open(self.log_path, "w", encoding="utf-8")  # this Claude Code's session only
+        self.proc = None
+        self.server = None
+        self.session_id = ""
+        self.asks = {}           # request id → {"request": ..., "proc": the `mewo ask` that holds it for the phones}
+        self.err_tail = []
+        self.pending = 0         # messages sent whose turn has not ended
+        self.retries = 0
+        self.retry_timer = None
+        self.serial = 0
+        self.ended = False
+        self.stopping = False
+
+    # ---------- the windows ----------
+
+    def serve(self):
+        os.makedirs(SOCKETS, mode=0o700, exist_ok=True)
+        try:
+            os.unlink(self.sock_path)
+        except OSError:
+            pass
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(self.sock_path)
+        os.chmod(self.sock_path, 0o600)
+        self.server.listen(4)
+        self.server.settimeout(1.0)
+
+    def accept_loop(self):
+        """Until Claude Code has ended and no window is left to see it."""
+        while True:
+            with self.lock:
+                if self.ended and not self.clients:
+                    return
+            try:
+                conn, _ = self.server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            self.attach(conn)
+
+    def attach(self, conn):
+        conn.settimeout(None)
+        c = Client(self, conn)
+        with self.lock:
+            # Who the session is, then the session so far, then the live end.
+            c.send(json.dumps({"type": "mewo", "kind": "host", "info": self.window_info()}) + "\n")
+            try:
+                self.log.flush()
+                with open(self.log_path, encoding="utf-8") as f:
+                    for line in f:
+                        c.send(line if line.endswith("\n") else line + "\n")
+            except OSError:
+                pass
+            c.send(json.dumps({"type": "mewo", "kind": "live"}) + "\n")
+            self.clients.append(c)
+        c.run()
+
+    def dropped(self, client):
+        with self.lock:
+            if client in self.clients:
+                self.clients.remove(client)
+
+    def window_info(self):
+        info = dict(self.info)
+        info.update({"folder": self.folder, "host_socket": self.sock_path, "host_pid": os.getpid(), "session_id": self.session_id, "ended": self.ended})
+        return info
+
+    def emit(self, ev, keep=True):
+        line = json.dumps(ev) + "\n"
+        with self.lock:
+            if keep:
+                try:
+                    self.log.write(line)
+                    self.log.flush()
+                except OSError:
+                    pass
+            for c in list(self.clients):
+                c.send(line)
+
+    def note(self, text, err=False):
+        self.emit({"type": "mewo", "kind": "note", "text": text, "err": err})
+
+    def show_window(self, token=""):
+        """Hands the session to the Mewo Session window, starting one when none is open."""
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(3)
+                s.connect(WINDOW_SOCKET)
+                s.sendall(json.dumps({"attach": self.sock_path, "token": token}).encode() + b"\n")
+            return
+        except OSError:
+            pass
+        env = dict(os.environ)
+        env.setdefault("PYTHONFAULTHANDLER", "1")
+        if token:
+            # The console's click: with it the shell lets the new window come forward.
+            env["XDG_ACTIVATION_TOKEN"] = token
+            env["DESKTOP_STARTUP_ID"] = token
+        command = [sys.executable, WINDOW, "--attach", self.sock_path]
+        run = find_tool("systemd-run")
+        if run and os.environ.get("INVOCATION_ID"):
+            # A scope of its own, as the daemon gives a session: the window outlives this host.
+            command = [run, "--user", "--scope", "--quiet", "--collect", "--"] + command
+        try:
+            with open(WINDOW_LOG, "w", encoding="utf-8") as log:
+                subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+        except OSError:
+            pass
+
+    def on_show(self, *_):
+        """SIGUSR1 from the console's "Show the session"."""
+        token, path = "", os.path.join(WINDOWS, f"{os.getpid()}.token")
+        try:
+            if time.time() - os.path.getmtime(path) < 15:
+                with open(path, encoding="utf-8") as f:
+                    token = f.read().strip()
+            os.remove(path)
+        except OSError:
+            pass
+        with self.lock:
+            clients = list(self.clients)
+        if clients:
+            for c in clients:
+                c.send(json.dumps({"type": "mewo", "kind": "show", "token": token}) + "\n")
+        else:
+            threading.Thread(target=self.show_window, args=(token,), daemon=True).start()
+
+    # ---------- "Show the session" on the console ----------
+
+    def register(self):
+        entry = {"pid": os.getpid(), "folder": self.folder, "session_id": self.session_id, "n": self.info.get("n", ""), "feature": self.info.get("feature", ""), "socket": self.sock_path}
+        try:
+            os.makedirs(WINDOWS, exist_ok=True)
+            with open(self.entry_path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(entry, f)
+            os.replace(self.entry_path + ".tmp", self.entry_path)
+        except OSError:
+            pass
+
+    def unregister(self):
+        for path in (self.entry_path, os.path.join(WINDOWS, f"{os.getpid()}.token")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    # ---------- Claude Code ----------
+
+    def start(self):
+        command = ["/bin/sh", self.info["script"], "chat"]
+        # Claude Code never outlives its host: nothing else could reach it.
+        setpriv = find_tool("setpriv")
+        if setpriv:
+            command = [setpriv, "--pdeathsig", "TERM", "--"] + command
+        self.emit({"type": "mewo", "kind": "info", "cwd": self.folder, "model": self.info.get("model", ""), "mode": self.info.get("permission_mode", "bypassPermissions")})
+        try:
+            self.proc = subprocess.Popen(command, cwd=self.folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError as e:
+            self.finish(None, f"Could not start Claude Code: {e}")
+            return
+        threading.Thread(target=self.read_out, daemon=True).start()
+        threading.Thread(target=self.read_err, daemon=True).start()
+        # Its commands and models, for the "/" list and the model list, before the first message.
+        self.write({"type": "control_request", "request_id": "mewo-hello", "request": {"subtype": "initialize"}})
+        prompt = ""
+        try:
+            with open(self.info.get("prompt_file") or "", encoding="utf-8") as f:
+                prompt = f.read().strip()
+        except OSError:
+            pass
+        if prompt:
+            self.say(prompt, [])
+
+    def write(self, obj):
+        if not self.proc or self.proc.poll() is not None:
+            return False
+        try:
+            with self.stdin_lock:
+                self.proc.stdin.write(json.dumps(obj).encode() + b"\n")
+                self.proc.stdin.flush()
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def say(self, text, images, quiet=False):
+        """A message to Claude. `said` goes out first, so every window draws it before the reply."""
+        if self.ended or not self.proc:
+            self.emit({"type": "mewo", "kind": "note", "text": "The session has ended: the message was not sent.", "err": True}, keep=False)
+            return
+        self.emit({"type": "mewo", "kind": "said", "text": text, "quiet": quiet, "images": [{"type": i.get("media_type", "image/png"), "data": i.get("data", "")} for i in images or []]})
+        content = [{"type": "image", "source": {"type": "base64", "media_type": i.get("media_type", "image/png"), "data": i.get("data", "")}} for i in images or []]
+        if text:
+            content.append({"type": "text", "text": text})
+        self.pending += 1
+        if not self.write({"type": "user", "message": {"role": "user", "content": content}}):
+            self.note("Claude Code did not take the message.", err=True)
+
+    def control(self, request):
+        self.serial += 1
+        self.write({"type": "control_request", "request_id": f"mewo-{self.serial}", "request": request})
+
+    def read_out(self):
+        for raw in self.proc.stdout:
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                continue
+            try:
+                self.handle(ev)
+            except Exception:  # one odd event must not end the session
+                self.trace()
+        code = self.proc.wait()
+        self.finish(code)
+
+    def read_err(self):
+        for raw in self.proc.stderr:
+            line = raw.decode("utf-8", "replace").rstrip()
+            if line:
+                self.err_tail = (self.err_tail + [line])[-6:]
+
+    def handle(self, ev):
+        t = ev.get("type")
+        if t == "system" and ev.get("subtype") == "init":
+            if ev.get("session_id") and ev["session_id"] != self.session_id:
+                self.session_id = ev["session_id"]
+                self.register()
+        elif t == "control_request":
+            r = ev.get("request") or {}
+            if r.get("subtype") == "can_use_tool":
+                self.ask_opened(ev.get("request_id", ""), r)
+            else:
+                # Nothing here answers the other host requests (hook callbacks, MCP).
+                self.write({"type": "control_response", "response": {"subtype": "error", "request_id": ev.get("request_id", ""), "error": "not supported by the Mewo Session window"}})
+                return
+        elif t == "control_cancel_request":
+            with self.ask_lock:
+                ask = self.asks.pop(ev.get("request_id", ""), None)
+            self.drop_phone(ask)
+        elif t == "result":
+            self.pending = max(0, self.pending - 1)
+            if not ev.get("is_error"):
+                self.retries = 0
+            elif self.sign_in_race(ev):
+                self.retry_later()  # said before the result, so a window does not call the session finished
+        self.emit(ev, keep=kept(ev))
+
+    def finish(self, code, text=""):
+        with self.lock:
+            if self.ended:
+                return
+        self.cancel_retry()
+        with self.ask_lock:
+            asks, self.asks = list(self.asks.values()), {}
+        for ask in asks:
+            self.drop_phone(ask)
+        failed = code is None or (code > 0 and not self.stopping)
+        if not text:
+            text = "The session ended."
+            if failed:
+                text = f"Claude Code stopped (exit {code})." + ("\n" + "\n".join(self.err_tail) if self.err_tail else "")
+            elif code not in (0, None) and not self.stopping:
+                text = "The session was stopped."  # a signal: Stop now on the console, or the build ending it
+        self.emit({"type": "mewo", "kind": "exit", "code": (code or 1) if failed else 0, "text": text})
+        with self.lock:
+            self.ended = True
+        self.unregister()
+
+    def stop(self):
+        """The tab was closed: Claude Code ends."""
+        if self.stopping:
+            return
+        self.stopping = True
+        self.cancel_retry()
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                self.proc.wait(1.5)
+            except subprocess.TimeoutExpired:
+                self.proc.terminate()
+        elif not self.proc:
+            self.finish(0)
+
+    # ---------- a turn the sign-in race failed ----------
+
+    def sign_in_race(self, ev):
+        text = str(ev.get("result") or "") + "\n" + "\n".join(str(e) for e in ev.get("errors") or [])
+        return any(s in text for s in SIGN_IN_RACE) and not self.pending and not self.stopping and self.retries < len(RETRY_IN)
+
+    def retry_later(self):
+        wait = RETRY_IN[self.retries]
+        self.retries += 1
+        self.cancel_retry()
+        timer = threading.Timer(wait, self.retry_now)
+        timer.daemon = True
+        self.retry_timer = timer
+        timer.start()
+        self.emit({"type": "mewo", "kind": "retrying", "in": wait})
+
+    def retry_now(self):
+        self.retry_timer = None
+        if not self.ended and not self.stopping:
+            self.say(RETRY_TEXT, [], quiet=True)
+
+    def cancel_retry(self):
+        timer, self.retry_timer = self.retry_timer, None
+        if timer:
+            timer.cancel()
+        return timer is not None
+
+    # ---------- a prompt that waits: in the windows, and on the phones ----------
+
+    def ask_opened(self, rid, r):
+        ask = {"request": r, "proc": None}
+        with self.ask_lock:
+            self.asks[rid] = ask
+        mewo = find_tool("mewo")
+        if not mewo:
+            return
+        payload = {
+            "hook_event_name": "PermissionRequest", "tool_name": r.get("tool_name", ""), "tool_input": r.get("input") or {},
+            "session_id": self.session_id, "cwd": self.folder, "transcript_path": "",
+            "permission_suggestions": r.get("permission_suggestions") or [],
+        }
+        try:
+            ask["proc"] = subprocess.Popen([mewo, "ask"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            threading.Thread(target=self.wait_phone, args=(rid, ask["proc"], json.dumps(payload).encode()), daemon=True).start()
+        except OSError:
+            ask["proc"] = None
+
+    def wait_phone(self, rid, proc, payload):
+        try:
+            out, _ = proc.communicate(payload)
+            decision = json.loads(out)["hookSpecificOutput"]["decision"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+        self.answer(rid, decision, "phone")
+
+    def drop_phone(self, ask):
+        proc = (ask or {}).get("proc")
+        if proc and proc.poll() is None:
+            proc.terminate()  # its socket closes, so the daemon takes the request off the phones
+
+    def answer(self, rid, decision, by):
+        """`decision` is a permission result: {"behavior": "allow"|"deny", ...}."""
+        with self.ask_lock:
+            ask = self.asks.pop(rid, None)
+        if ask is None:
+            return
+        r = ask["request"]
+        if decision.get("behavior") == "allow":
+            response = {"behavior": "allow", "updatedInput": decision.get("updatedInput") or r.get("input") or {}}
+            if decision.get("updatedPermissions"):
+                response["updatedPermissions"] = decision["updatedPermissions"]
+        else:
+            response = {"behavior": "deny", "message": decision.get("message") or "The user said no."}
+        self.write({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": response}})
+        if by != "phone":
+            self.drop_phone(ask)
+        self.emit({"type": "mewo", "kind": "resolved", "request_id": rid, "by": by})
+        if self.session_id:
+            sock = self.info.get("socket", "")
+            request = {"cmd": "session_state", "session_id": self.session_id, "cwd": self.folder, "state": "working"}
+            threading.Thread(target=lambda: self.quietly(ask_daemon, sock, request), daemon=True).start()
+
+    # ---------- what a window asks for ----------
+
+    def command(self, msg):
+        t = msg.get("t")
+        if t == "send":
+            self.cancel_retry()  # what you send goes in its place
+            self.say(msg.get("text", ""), msg.get("images") or [])
+        elif t == "respond":
+            self.answer(msg.get("request_id", ""), msg.get("response") or {}, "window")
+        elif t == "interrupt":
+            self.control({"subtype": "interrupt"})
+        elif t == "set_model":
+            self.control({"subtype": "set_model", "model": msg.get("model") or "default"})
+        elif t == "set_mode":
+            self.control({"subtype": "set_permission_mode", "mode": msg.get("mode") or "default"})
+        elif t == "cancel_retry":
+            if self.cancel_retry():
+                self.emit({"type": "mewo", "kind": "retry_cancelled"})
+        elif t == "stop":
+            threading.Thread(target=self.stop, daemon=True).start()
+
+    # ---------- odds and ends ----------
+
+    @staticmethod
+    def quietly(fn, *args):
+        try:
+            fn(*args)
+        except (OSError, ValueError):
+            pass
+
+    def trace(self):
+        try:
+            with open(self.log_path[: -len(".events.jsonl")] + ".host.log", "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + traceback.format_exc() + "\n")
+        except OSError:
+            pass
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: mewo-session-host <info.json>", file=sys.stderr)
+        sys.exit(2)
+    host = Host(sys.argv[1])
+    try:
+        host.serve()
+        host.register()
+        signal.signal(signal.SIGUSR1, host.on_show)
+        # Told to go (a logout, a kill): the session ends with its host, as it would with its window.
+        signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=host.stop, daemon=True).start())
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        host.start()
+        threading.Thread(target=host.show_window, daemon=True).start()
+        host.accept_loop()
+    except Exception:
+        host.trace()
+        raise
+    finally:
+        host.unregister()
+        try:
+            os.unlink(host.sock_path)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()

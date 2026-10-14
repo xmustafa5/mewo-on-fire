@@ -128,27 +128,32 @@ pub fn spawn(folder: &str, prompt: &str, model: Option<&str>, tag: &str) -> Resu
     Ok(pid)
 }
 
-/// v3.0: the Mewo Session window (console/linux/mewo-session) and, v3.1,
-/// the page of its chat, written next to the state when a session opens,
-/// so they always match the daemon.
+/// v3.0: the Mewo Session window (console/linux/mewo-session), v3.1 the
+/// page of its chat and v3.3 the host that runs a chat's session apart
+/// from the window, written next to the state when a session opens, so
+/// they always match the daemon.
 const SESSION_WINDOW: &str = include_str!("../console/linux/mewo-session");
 const SESSION_CHAT: &str = include_str!("../console/linux/mewo-session-chat.html");
+const SESSION_HOST: &str = include_str!("../console/linux/mewo-session-host");
 
 /// The console's colours, for a terminal that is not the Mewo Session
 /// window: foreground, background, cursor, then the sixteen ANSI colours.
 const COLOURS: &str = "printf '\\033]10;#dbeafe\\007\\033]11;#04070c\\007\\033]12;#4fd1ff\\007\\033]4;0;#0b1220;1;#ff3d1f;2;#3dd68c;3;#ffb347;4;#2f6bff;5;#b98cff;6;#4fd1ff;7;#dbeafe;8;#3a4a5e;9;#ff6b35;10;#6ee7a8;11;#ffd08a;12;#6b93ff;13;#d4b0ff;14;#8fe3ff;15;#ffffff\\007'";
 
-/// v3.0: a session you watch ("Build with me"): Claude Code in a window of
-/// its own, in `folder`, with `prompt` as its first message. On Linux it is
-/// the Mewo Session window, its header following the session: since v3.1 a
+/// v3.0: a session you watch ("Build with me"): Claude Code where you see
+/// it, in `folder`, with `prompt` as its first message. On Linux it is the
+/// Mewo Session window, its header following the session: since v3.1 a
 /// chat drawn the way the Claude Code extension draws it, over Claude Code
-/// in its stream mode (the script's `chat` argument); without WebKitGTK,
-/// or with `session_terminal` in config.json, Claude Code in a terminal in
-/// that window; elsewhere a terminal app in the console's colours.
+/// in its stream mode (the script's `chat` argument), and since v3.3 a tab
+/// of the one chat window, its session run by a host of its own that
+/// outlives the window; without WebKitGTK, or with `session_terminal` in
+/// config.json, Claude Code in a terminal in a window of its own;
+/// elsewhere a terminal app in the console's colours.
 /// Permissions are skipped as for a headless run, but a question waits for
 /// you, in the window and on the phones. A small script under
 /// `<state>/runs/` records its pid and then becomes Claude Code, so the
-/// returned pid is the session's own: alive while the window is open.
+/// returned pid is the session's own: alive while its tab (its host) or
+/// its terminal window is open.
 /// `info` carries what the header shows (n, goal, feature, workspace,
 /// branch, model_label, title).
 pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str, info: serde_json::Value) -> Result<u32, String> {
@@ -220,20 +225,23 @@ pub fn spawn_visible(folder: &str, prompt: &str, model: Option<&str>, tag: &str,
 
 /// The Mewo Session window, when this computer can show it (Linux with
 /// GTK 3 for Python and WebKitGTK for the chat or VTE for the terminal),
-/// started so a restart of the daemon leaves it open. False: use a
-/// terminal app.
+/// started so a restart of the daemon leaves it open. A chat starts its
+/// host, which hands the session to the chat window (opening it when none
+/// is); a terminal opens a window of its own. False: use a terminal app.
 fn open_session_window(folder: &str, script: &str, info_file: &std::path::Path, mut info: serde_json::Value) -> bool {
     if cfg!(target_os = "macos") {
         return false;
     }
     let Some(python) = find_tool("python3") else { return false };
-    let check = "import gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk\ntry:\n    gi.require_version('WebKit2', '4.1')\n    from gi.repository import WebKit2\nexcept (ValueError, ImportError):\n    gi.require_version('Vte', '2.91')\n    from gi.repository import Vte";
-    if !Command::new(&python).args(["-c", check]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false) {
+    let check = "import gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk\ntry:\n    gi.require_version('WebKit2', '4.1')\n    from gi.repository import WebKit2\n    print('chat')\nexcept (ValueError, ImportError):\n    gi.require_version('Vte', '2.91')\n    from gi.repository import Vte\n    print('terminal')";
+    let Some(body) = Command::new(&python).args(["-c", check]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()) else {
         return false;
-    }
+    };
+    let chat_mode = body == "chat" && info.get("mode").and_then(serde_json::Value::as_str) == Some("chat");
     let window = paths::state_dir().join("mewo-session");
     let chat = paths::state_dir().join("mewo-session-chat.html");
-    for (path, text) in [(&window, SESSION_WINDOW), (&chat, SESSION_CHAT)] {
+    let host = paths::state_dir().join("mewo-session-host");
+    for (path, text) in [(&window, SESSION_WINDOW), (&chat, SESSION_CHAT), (&host, SESSION_HOST)] {
         if fs::read_to_string(path).ok().as_deref() != Some(text) && fs::write(path, text).is_err() {
             return false;
         }
@@ -246,12 +254,15 @@ fn open_session_window(folder: &str, script: &str, info_file: &std::path::Path, 
         o.insert("icon".into(), data.join("mewo-on-fire/console/mewo-console.png").to_string_lossy().into_owned().into());
         // Grouped with Mewo Console in the dock.
         o.insert("app_id".into(), "com.torchcorp.mewo-on-fire.console".into());
+        if !chat_mode {
+            o.insert("mode".into(), "terminal".into());
+        }
     }
     if fs::write(info_file, info.to_string()).is_err() {
         return false;
     }
     let mut cmd = outliving(&python);
-    cmd.arg(&window).arg(info_file);
+    cmd.arg(if chat_mode { &host } else { &window }).arg(info_file);
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
     match cmd.spawn() {
         Ok(mut child) => {

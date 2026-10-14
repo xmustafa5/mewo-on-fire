@@ -200,12 +200,14 @@ pre { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
-const post = (o) => { try { window.webkit.messageHandlers.mewo.postMessage(JSON.stringify(o)); } catch (e) { /* no window behind the page */ } };
+const TAB = (location.hash.match(/tab=([\w-]+)/) || [])[1] || '';
+const post = (o) => { try { window.webkit.messageHandlers.mewo.postMessage(JSON.stringify({ ...o, tab: TAB })); } catch (e) { /* no window behind the page */ } };
 const MAX_SHOWN = 30000;
 
 const S = {
   cwd: '', model: '', mode: '', slash: [], models: [], turns: 0, startedAt: 0, state: 'starting', ended: false,
   tools: new Map(), asks: new Map(), queued: [], attach: [], liveKind: '', liveText: '', runningTool: '', status: '', thinkTokens: 0,
+  lastErr: '', retryPending: false,
 };
 const log = $('log'), inner = $('inner'), live = $('live'), spin = $('spin'), input = $('input'), pop = $('pop'), askBox = $('ask'), composer = $('composer');
 
@@ -312,7 +314,7 @@ function addUser(text, images, queued) {
   if (queued) S.queued.push(n);
   stick = true;
 }
-const addAssistant = (text, parent, bad) => { const n = put(el('div', 'row a md', md(text)), parent); if (bad) n.style.color = 'var(--err)'; };
+const addAssistant = (text, parent, bad) => { const n = put(el('div', 'row a md', md(text)), parent); if (bad) { n.style.color = 'var(--err)'; if (!parent) S.lastErr = text.trim(); } };
 function addThinking(text, parent) { const n = el('div', 'row think'); n.innerHTML = '<details><summary>Thought for a moment ›</summary><div class="tx"></div></details>'; n.querySelector('.tx').textContent = text; put(n, parent); }
 const addNote = (text, cls) => { const n = el('div', 'note' + (cls ? ' ' + cls : '')); n.textContent = text; put(n); };
 
@@ -440,8 +442,12 @@ setInterval(() => { if (!spin.classList.contains('on')) return; spin.querySelect
 function endTurn(ev) {
   S.turns = Math.max(0, S.turns - 1); S.runningTool = ''; S.status = ''; clearLive();
   for (const t of S.tools.values()) if (t.el.dataset.state === 'run') t.el.dataset.state = 'stop';
-  if (ev.is_error && ev.subtype !== 'error_during_execution') addNote(ev.result || (ev.errors || []).join('\n') || `The turn ended: ${ev.subtype}`, 'err');
-  if (!S.turns) { S.startedAt = 0; if (!S.asks.size) setState('finished'); } else S.startedAt = Date.now();
+  const err = ev.is_error && ev.subtype !== 'error_during_execution' ? String(ev.result || (ev.errors || []).join('\n') || `The turn ended: ${ev.subtype}`) : '';
+  // Claude Code has already said it as a message of its own: once is enough.
+  if (err && err.trim() !== S.lastErr) addNote(err, 'err');
+  S.lastErr = '';
+  // A turn the sign-in race failed is tried again by the host (`retrying` came just before): not finished.
+  if (!S.turns) { S.startedAt = 0; if (!S.asks.size && !S.retryPending) setState('finished'); } else S.startedAt = Date.now();
   paintSpin(); paintSend();
 }
 
@@ -489,19 +495,26 @@ function handle(ev) {
   }
 }
 function fromWindow(ev) {
-  if (ev.kind === 'prompt') { addUser(ev.text || '', [], false); S.turns++; S.startedAt = Date.now(); begin(); }
+  if (ev.kind === 'said') {
+    S.retryPending = false;
+    if (ev.quiet) addNote('Trying again'); else addUser(ev.text || '', ev.images || [], S.turns > 0);
+    if (!S.turns) S.startedAt = Date.now();
+    S.turns++; begin();
+  }
+  else if (ev.kind === 'retrying') { S.retryPending = true; addNote(`Another Claude Code was renewing the sign-in. Trying again in ${ev.in}s (Esc: don't)`); setState('working'); }
+  else if (ev.kind === 'retry_cancelled') { S.retryPending = false; addNote('Not trying again'); if (!S.turns && !S.asks.size) setState('finished'); }
   else if (ev.kind === 'info') { S.cwd = ev.cwd || S.cwd; if (ev.model) S.model = ev.model; if (ev.mode) S.mode = ev.mode; paintChips(); $('hello-s').textContent = (ev.cwd || '').split('/').pop() || ''; ready(); if (!S.turns) setState('ready'); }
   else if (ev.kind === 'hello') {
     S.slash = (ev.commands || []).filter((c) => c.name && !c.name.startsWith('__') && !TERMINAL_ONLY.has(c.name)); S.models = ev.models || []; if (ev.mode) S.mode = ev.mode;
     const mine = S.models.find((m) => m.value === (S.model || 'default')); if (mine && mine.resolved) S.model = mine.resolved;
     paintChips();
   }
-  else if (ev.kind === 'resolved') { closeAsk(ev.request_id); addNote(ev.by === 'phone' ? 'Answered from your phone' : 'Answered'); }
+  else if (ev.kind === 'resolved') { closeAsk(ev.request_id); if (ev.by === 'phone') addNote('Answered from your phone'); }
   else if (ev.kind === 'files') { if (ev.q === mentionQ) showPop(ev.files.map((f) => ({ n: f, pick: () => insertMention(f) })), { head: ev.files.length ? '' : 'No file matches' }); }
   else if (ev.kind === 'note') addNote(ev.text || '', ev.err ? 'err' : '');
   else if (ev.kind === 'exit') {
-    S.ended = true; S.turns = 0; clearLive(); S.asks.clear(); paintAsk(); paintSpin();
-    addNote(ev.text || 'The session ended.', ev.code ? 'err' : ''); addNote('You can close this window', 'sep');
+    S.ended = true; S.turns = 0; S.retryPending = false; clearLive(); S.asks.clear(); paintAsk(); paintSpin();
+    addNote(ev.text || 'The session ended.', ev.code ? 'err' : ''); addNote('You can close this tab', 'sep');
     composer.classList.add('off'); input.placeholder = 'The session ended'; input.disabled = true;
   }
 }
@@ -619,7 +632,7 @@ function questionCard(id, r) {
 }
 document.addEventListener('keydown', (e) => {
   const card = askBox.firstChild;
-  if (e.key === 'Escape') { if (!pop.hidden) { hidePop(); return; } if (card) { card.deny(); return; } if (S.turns && !S.ended) { e.preventDefault(); post({ t: 'interrupt' }); } return; }
+  if (e.key === 'Escape') { if (!pop.hidden) { hidePop(); return; } if (card) { card.deny(); return; } if (S.turns && !S.ended) { e.preventDefault(); post({ t: 'interrupt' }); } else if (S.retryPending) post({ t: 'cancel_retry' }); return; }
   if (!card || e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA)$/.test((document.activeElement || {}).tagName || '')) return;
   if (/^[1-9]$/.test(e.key) && +e.key <= (typeof card.count === 'function' ? card.count() : card.count)) { e.preventDefault(); card.pick(+e.key - 1); }
   else if (e.key === 'Enter' && card.enter && !(document.activeElement || {}).classList?.contains('btn')) { e.preventDefault(); card.enter(); }
@@ -640,10 +653,9 @@ function paintSend() {
 const autosize = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, innerHeight * 0.38) + 'px'; };
 function send() {
   const text = input.value.trim(); if ((!text && !S.attach.length) || S.ended) return;
-  const queued = S.turns > 0;
-  addUser(text, S.attach, queued); post({ t: 'send', text, images: S.attach.map((a) => ({ media_type: a.type, data: a.data })) });
-  S.attach = []; paintStrip(); input.value = ''; autosize(); hidePop();
-  S.turns++; if (!queued) S.startedAt = Date.now(); begin(); toEnd();
+  // It shows once the host has passed it on (`said`).
+  post({ t: 'send', text, images: S.attach.map((a) => ({ media_type: a.type, data: a.data })) });
+  S.attach = []; paintStrip(); input.value = ''; autosize(); hidePop(); stick = true; toEnd();
 }
 $('send').onclick = () => { if ($('send').classList.contains('stop')) post({ t: 'interrupt' }); else send(); };
 // A list above the composer: files for "@", commands for "/", the model and the mode.

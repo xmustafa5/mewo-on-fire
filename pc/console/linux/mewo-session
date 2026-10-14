@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-"""Mewo Session for Linux: one build session of "Build with me" in a window
-of its own.
+"""Mewo Session for Linux: the sessions of "Build with me", where you watch
+them.
 
-The daemon writes this file next to its state and starts it with an info
-file (JSON): the session's number, goal, feature, worktree, model, the
-script to run and the daemon's socket. The script records its pid and then
-becomes Claude Code, so the daemon tracks the run as it tracks a headless
-one. The header follows the session: its state (working, needs you,
-finished), its plan status and its pull request.
+The chat (v3.3): one window for every session, a tab each, as the Claude
+Code extension shows its conversations. A session is not the window's: its
+host (mewo-session-host, beside this file) runs Claude Code and keeps the
+conversation, and the window connects to it (`mewo-session --attach
+<host socket>`). The first host to start opens the window; the next ones
+find it on its socket and become tabs. A window that freezes, is force quit
+or is closed with "Keep them running" leaves the sessions working; the next
+window, which opens with any new session or the console's "Show the
+session", shows each live one again, its whole conversation included.
+Closing a tab, or the window with "Stop them", ends the session. The page
+beside this file, mewo-session-chat.html, draws each conversation the way
+the extension does: messages, tool calls with input and output, diffs,
+questions and permission prompts as buttons, a composer with the model and
+the mode. Every tab's page runs in one WebKit, which draws without the GPU:
+WebKitGTK drawing through it hangs on NVIDIA under Wayland once a few
+sessions are open.
 
-Two bodies. The chat (info "mode": "chat", needs WebKitGTK): Claude Code
-runs in its stream mode (JSON lines on stdin and stdout) and the page
-beside this file, mewo-session-chat.html, draws the conversation the way
-the Claude Code extension does: messages, tool calls with input and output,
-diffs, questions and permission prompts as buttons, a composer with the
-model and the mode. A prompt that waits also goes to the phones, through
-`mewo ask`, and the first answer wins. The terminal (GTK + VTE) is the
-other body: Claude Code as it is in a terminal, in the console's colours;
-it is what opens without WebKitGTK.
+The terminal (GTK + VTE, `mewo-session <info.json>`): Claude Code as it is
+in a terminal, in the console's colours, a window per session; it is what
+opens without WebKitGTK or with `session_terminal`. The header follows the
+session in both: its state (working, needs you, finished), its plan status
+and its pull request.
 
 In the terminal, Ctrl+C copies the selection (with nothing selected it reaches Claude as
 usual), Ctrl+V pastes text (an image on the clipboard goes to Claude, which
 pastes it itself), Ctrl+Shift+C / Ctrl+Shift+V always copy and paste, a
 right click offers Copy, Paste and Select all; Ctrl+= / Ctrl+- / Ctrl+0 zoom.
+In the chat, Ctrl+W closes the tab and Ctrl+Page Up / Page Down move between tabs.
 """
 
 import json
@@ -35,7 +42,11 @@ import sys
 import threading
 import time
 
-import gi
+# Before WebKit loads: it draws without the GPU (see above).
+os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
+os.environ.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
+
+import gi  # noqa: E402
 
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
@@ -60,9 +71,13 @@ except (ValueError, ImportError):
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 CHAT_PAGE = os.path.join(HERE, "mewo-session-chat.html")
-# v3.2: each window keeps <pid>.json here while it is open (its folder and Claude Code session), so the
+# v3.2: what can be brought forward keeps <pid>.json here (its folder and Claude Code session), so the
 # console can offer "Show the session"; on SIGUSR1 it comes forward, with the click's token from <pid>.token.
+# Since v3.3 a chat's entry is its host's: the host passes the request on to the window.
 WINDOWS = os.path.expanduser("~/.local/state/mewo-on-fire/windows")
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.local/state/mewo-on-fire")
+# The chat window listens here for hosts that want a tab: one window at a time.
+WINDOW_SOCKET = os.path.join(RUNTIME, "mewo-session-window.sock")
 
 # The console's colours (dashboard/index.html :root).
 BG = "#04070c"
@@ -149,6 +164,24 @@ window.chat, .chat {{ background-color: {CHAT_BG}; }}
 .chat menu, .chat .menu {{ background-color: #1e1f23; border: 1px solid #2f333b; }}
 .chat menu menuitem {{ color: #cccccc; font-family: sans-serif; }}
 .chat menu menuitem:hover {{ background-color: #2f3034; color: #ffffff; }}
+.chat notebook {{ background-color: {CHAT_BG}; border: none; }}
+.chat notebook > header {{ background-color: {CHAT_LINE}; border: none; box-shadow: none; padding: 0; }}
+.chat notebook > header > tabs {{ margin: 0; }}
+.chat notebook > header > tabs > tab {{
+  background-color: transparent; color: {CHAT_DIM}; border: none; border-right: 1px solid #23262c;
+  box-shadow: none; outline: none; padding: 5px 6px 5px 12px; margin: 0; min-height: 0; font-family: sans-serif; font-size: 9.5pt;
+}}
+.chat notebook > header > tabs > tab:hover {{ color: {CHAT_TEXT}; background-color: rgba(172, 178, 191, 0.05); }}
+.chat notebook > header > tabs > tab:checked {{ color: {CHAT_TEXT}; background-color: {CHAT_BG}; box-shadow: inset 0 1px {CORAL}; }}
+.chat notebook > header arrow {{ color: {CHAT_DIM}; min-width: 18px; }}
+.chat notebook > stack {{ background-color: {CHAT_BG}; }}
+.tabdot {{ font-size: 8pt; color: {CHAT_DIM}; }}
+.tabdot.working {{ color: {CORAL}; }}
+.tabdot.waiting {{ color: {CHAT_AMBER}; }}
+.tabdot.finished {{ color: {CHAT_OK}; }}
+.tabdot.ended {{ color: #4b5058; }}
+button.tabx {{ min-height: 0; min-width: 0; padding: 0 4px; border: none; border-radius: 4px; background: none; box-shadow: none; color: {CHAT_DIM}; }}
+button.tabx:hover {{ color: {CHAT_TEXT}; background-color: rgba(172, 178, 191, 0.14); }}
 """
 
 STATES = {
@@ -200,27 +233,119 @@ def find_tool(name):
     return None
 
 
-class Chat:
-    """The chat body: the page in a WebKit view, Claude Code under it in stream mode."""
+def plan_detail(info):
+    """The plan status and the pull request of the window's session, from the daemon."""
+    out = {}
+    if info.get("feature") and info.get("n"):
+        try:
+            d = ask_daemon(info.get("socket", ""), {"cmd": "session_detail", "feature": info["feature"], "workspace": info.get("workspace", ""), "n": info["n"]})
+            ps = d.get("session") or {}
+            out["status"] = ps.get("status", "")
+            out["pr"] = ps.get("pr_url", "")
+        except (OSError, ValueError):
+            pass
+    return out
 
-    def __init__(self, win, info):
-        self.win, self.info, self.folder = win, info, win.folder
-        self.proc = None
-        self.session_id = ""
+
+class Header:
+    """The title bar: the brand line and the goal on the left; the plan status, the pull request
+    and the state chip on the right. And the line under it, lit by the state."""
+
+    def __init__(self, window, chat):
+        self.window = window
+        self.accent, self.dim = (CORAL, CHAT_DIM) if chat else (CYAN, DIM)
+        self.size = "8pt" if chat else "9pt"
+        self.state = "starting"
+        self.pr_url = ""
+        self.status_text = ""
+        self.notice = 0
+        self.bar = Gtk.HeaderBar()
+        self.bar.set_show_close_button(True)
+        titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
+        self.brand = Gtk.Label(xalign=0)
+        self.goal = Gtk.Label(xalign=0)
+        self.goal.get_style_context().add_class("goal")
+        self.goal.set_ellipsize(Pango.EllipsizeMode.END)
+        self.goal.set_max_width_chars(70)
+        titles.pack_start(self.brand, False, False, 0)
+        titles.pack_start(self.goal, False, False, 0)
+        self.bar.pack_start(titles)
+        self.chip = Gtk.Label(label=STATES["starting"], valign=Gtk.Align.CENTER)
+        self.chip.get_style_context().add_class("chip")
+        self.chip.get_style_context().add_class("starting")
+        self.pr = Gtk.Button(label="PULL REQUEST ↗", valign=Gtk.Align.CENTER)
+        self.pr.get_style_context().add_class("pr")
+        self.pr.set_no_show_all(True)
+        self.pr.connect("clicked", self.open_pr)
+        self.status = Gtk.Label(label="", valign=Gtk.Align.CENTER)
+        self.status.get_style_context().add_class("status")
+        self.bar.pack_end(self.chip)
+        self.bar.pack_end(self.pr)
+        self.bar.pack_end(self.status)
+        self.edge = Gtk.Box()
+        self.edge.get_style_context().add_class("edge")
+
+    def set_session(self, n, goal):
+        self.brand.set_markup(spaced("◉ MEWO ON FIRE", self.accent, size=self.size) + spaced(f"  ·  SESSION {n}", self.dim, size=self.size))
+        self.goal.set_text(goal)
+
+    def set_state(self, state):
+        if state == self.state or state not in STATES:
+            return
+        for w in (self.chip, self.edge):
+            ctx = w.get_style_context()
+            ctx.remove_class(self.state)
+            ctx.add_class(state)
+        self.state = state
+        self.chip.set_text(STATES[state])
+
+    def set_status(self, text):
+        self.status_text = text
+        if not self.notice:
+            self.status.set_markup(spaced(text, self.dim, size="8pt") if text else "")
+
+    def set_pr(self, url):
+        self.pr_url = url
+        self.pr.set_visible(bool(url))
+
+    def open_pr(self, _btn):
+        if self.pr_url:
+            Gtk.show_uri_on_window(self.window, self.pr_url, Gdk.CURRENT_TIME)
+
+    def flash(self, text):
+        """A word in the header for a moment, where the plan status sits."""
+        self.notice += 1
+        mine = self.notice
+        self.status.set_markup(spaced(text, self.accent, size="8pt"))
+
+        def back():
+            if self.notice == mine:
+                self.notice = 0
+                self.status.set_markup(spaced(self.status_text, self.dim, size="8pt") if self.status_text else "")
+            return False
+
+        GLib.timeout_add(1200, back)
+
+
+class Chat:
+    """The chat body of a tab: the page in a WebKit view, connected to the session's host."""
+
+    def __init__(self, tab, conn, reader, related):
+        self.tab = tab
+        self.conn, self.reader = conn, reader
         self.page_ready = False
-        self.inbox = []          # events read from Claude Code, not yet seen here
+        self.inbox = []          # events from the host, not yet seen here
         self.outbox = []         # events for the page
         self.lock = threading.Lock()
-        self.asks = {}           # request id → {"request": ..., "proc": the `mewo ask` that holds it for the phones}
-        self.err_tail = []
+        self.send_lock = threading.Lock()
         self.files, self.files_at = None, 0.0
-        self.serial = 0
-        self.stopping = False
+        self.closing = False
 
-        manager = WebKit2.UserContentManager()
-        manager.register_script_message_handler("mewo")
-        manager.connect("script-message-received::mewo", self.on_message)
-        web = WebKit2.WebView.new_with_user_content_manager(manager)
+        if related is not None:
+            # Every tab's page in the one web process (and the window's one message handler).
+            web = WebKit2.WebView.new_with_related_view(related)
+        else:
+            web = WebKit2.WebView.new_with_user_content_manager(tab.win.manager)
         web.set_background_color(rgba(CHAT_BG))
         settings = web.get_settings()
         settings.set_enable_developer_extras(bool(os.environ.get("MEWO_SESSION_DEBUG")))
@@ -229,110 +354,60 @@ class Chat:
         web.connect("context-menu", self.on_context_menu)
         web.connect("key-press-event", self.on_key)
         self.page_uri = GLib.filename_to_uri(CHAT_PAGE, None)
-        web.load_uri(self.page_uri)
+        web.load_uri(f"{self.page_uri}#tab={tab.id}")
         self.web = web
-        GLib.timeout_add(33, self.flush)
+        self.timer = GLib.timeout_add(33, self.flush)
 
-    # ---------- Claude Code ----------
+    # ---------- the host ----------
 
     def start(self):
-        command = ["/bin/sh", self.info["script"], "chat"]
-        # Claude Code never outlives its window, even one that is killed outright: nobody could see or answer it.
-        setpriv = find_tool("setpriv")
-        if setpriv:
-            command = [setpriv, "--pdeathsig", "TERM", "--"] + command
-        try:
-            self.proc = subprocess.Popen(
-                command, cwd=self.folder,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-        except OSError as e:
-            self.push({"type": "mewo", "kind": "exit", "code": 1, "text": f"Could not start Claude Code: {e}"})
-            self.win.session_ended()
-            return
-        self.win.alive = True
-        threading.Thread(target=self.read_out, daemon=True).start()
-        threading.Thread(target=self.read_err, daemon=True).start()
-        self.push({"type": "mewo", "kind": "info", "cwd": self.folder, "model": self.info.get("model", ""), "mode": self.info.get("permission_mode", "bypassPermissions")})
-        # Its commands and models, for the "/" list and the model list, before the first message.
-        self.write({"type": "control_request", "request_id": "mewo-hello", "request": {"subtype": "initialize"}})
-        prompt = ""
-        try:
-            with open(self.info.get("prompt_file") or "", encoding="utf-8") as f:
-                prompt = f.read().strip()
-        except OSError:
-            pass
-        if prompt:
-            self.say(prompt, [])
-            self.push({"type": "mewo", "kind": "prompt", "text": prompt})
+        threading.Thread(target=self.read_host, daemon=True).start()
 
-    def read_out(self):
-        for raw in self.proc.stdout:
-            try:
-                ev = json.loads(raw)
-            except ValueError:
-                continue
-            with self.lock:
-                self.inbox.append(ev)
-        code = self.proc.wait()
-        GLib.idle_add(self.on_exit, code)
-
-    def read_err(self):
-        for raw in self.proc.stderr:
-            line = raw.decode("utf-8", "replace").rstrip()
-            if line:
-                self.err_tail = (self.err_tail + [line])[-6:]
-
-    def write(self, obj):
-        if not self.proc or self.proc.poll() is not None:
-            return False
+    def read_host(self):
         try:
-            with self.lock:
-                self.proc.stdin.write(json.dumps(obj).encode() + b"\n")
-                self.proc.stdin.flush()
-            return True
+            for raw in self.reader:
+                try:
+                    ev = json.loads(raw)
+                except ValueError:
+                    continue
+                with self.lock:
+                    self.inbox.append(ev)
         except (OSError, ValueError):
-            return False
+            pass
+        GLib.idle_add(self.on_lost)
 
-    def say(self, text, images):
-        content = [{"type": "image", "source": {"type": "base64", "media_type": i.get("media_type", "image/png"), "data": i.get("data", "")}} for i in images or []]
-        if text:
-            content.append({"type": "text", "text": text})
-        self.write({"type": "user", "message": {"role": "user", "content": content}})
-
-    def control(self, request):
-        self.serial += 1
-        self.write({"type": "control_request", "request_id": f"mewo-{self.serial}", "request": request})
-
-    def on_exit(self, code):
-        self.flush()
-        for ask in self.asks.values():
-            self.drop_phone(ask)
-        self.asks.clear()
-        text = "The session ended."
-        failed = code not in (0, None) and code > 0 and not self.stopping
-        if failed:
-            text = f"Claude Code stopped (exit {code})." + ("\n" + "\n".join(self.err_tail) if self.err_tail else "")
-        elif code not in (0, None) and not self.stopping:
-            text = "The session was stopped."  # a signal: Stop now on the console, or the build ending it
-        self.push({"type": "mewo", "kind": "exit", "code": code if failed else 0, "text": text})
-        self.win.session_ended()
+    def on_lost(self):
+        """The host went away. With an end it said, the tab already shows it; without, say so."""
+        if not self.closing and not self.tab.ended:
+            self.flush()
+            self.push({"type": "mewo", "kind": "exit", "code": 1, "text": "Lost the session: its host stopped."})
+            self.tab.session_ended()
         return False
 
+    def write(self, obj):
+        try:
+            with self.send_lock:
+                self.conn.sendall(json.dumps(obj).encode() + b"\n")
+            return True
+        except OSError:
+            return False
+
     def stop(self):
-        """The window closes: Claude Code ends with it."""
-        self.stopping = True
-        for ask in self.asks.values():
-            self.drop_phone(ask)
-        if self.proc and self.proc.poll() is None:
-            try:
-                self.proc.stdin.close()
-            except OSError:
-                pass
-            try:
-                self.proc.wait(1.5)
-            except subprocess.TimeoutExpired:
-                self.proc.terminate()
+        """The tab closes: the session ends."""
+        self.write({"t": "stop"})
+        self.detach()
+
+    def detach(self):
+        """The window closes and the session goes on."""
+        if self.closing:
+            return
+        self.closing = True
+        GLib.source_remove(self.timer)
+        try:
+            self.conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.conn.close()
 
     # ---------- events ----------
 
@@ -348,27 +423,26 @@ class Chat:
             if ev.get("parent_tool_use_id") or e.get("type") in self.QUIET_STREAM:
                 return False
             return (e.get("delta") or {}).get("type") != "input_json_delta"
-        return t in ("assistant", "user", "result", "control_request", "control_cancel_request", "control_response", "rate_limit_event")
+        return t in ("assistant", "user", "result", "control_request", "control_cancel_request", "control_response", "rate_limit_event", "mewo")
 
     def flush(self):
         with self.lock:
             fresh, self.inbox = self.inbox, []
         for ev in fresh:
             t = ev.get("type")
-            if t == "system" and ev.get("subtype") == "init":
-                if ev.get("session_id") and ev["session_id"] != self.session_id:
-                    self.session_id = ev["session_id"]
-                    self.win.register(self.session_id)
-            elif t == "control_request":
-                r = ev.get("request") or {}
-                if r.get("subtype") == "can_use_tool":
-                    self.ask_opened(ev.get("request_id", ""), r)
-                else:
-                    # Nothing here answers the other host requests (hook callbacks, MCP).
-                    self.write({"type": "control_response", "response": {"subtype": "error", "request_id": ev.get("request_id", ""), "error": "not supported by the Mewo Session window"}})
+            if t == "mewo":
+                kind = ev.get("kind")
+                if kind == "show":
+                    self.tab.win.show_tab(self.tab, ev.get("token", ""))
                     continue
-            elif t == "control_cancel_request":
-                self.drop_phone(self.asks.pop(ev.get("request_id", ""), None))
+                if kind in ("host", "live"):
+                    continue
+                if kind == "exit":
+                    self.tab.session_ended()
+            elif t == "system" and ev.get("subtype") == "init":
+                self.tab.session_id = ev.get("session_id") or self.tab.session_id
+            elif t == "control_request" and (ev.get("request") or {}).get("subtype") != "can_use_tool":
+                continue  # the host answered it
             elif t == "control_response" and (ev.get("response") or {}).get("request_id") == "mewo-hello":
                 r = (ev.get("response") or {}).get("response") or {}
                 self.outbox.append({
@@ -391,92 +465,25 @@ class Chat:
     def push(self, ev):
         self.outbox.append(ev)
 
-    # ---------- a prompt that waits: here, and on the phones ----------
-
-    def ask_opened(self, rid, r):
-        ask = {"request": r, "proc": None}
-        self.asks[rid] = ask
-        mewo = find_tool("mewo")
-        if mewo:
-            payload = {
-                "hook_event_name": "PermissionRequest", "tool_name": r.get("tool_name", ""), "tool_input": r.get("input") or {},
-                "session_id": self.session_id, "cwd": self.folder, "transcript_path": "",
-                "permission_suggestions": r.get("permission_suggestions") or [],
-            }
-            try:
-                ask["proc"] = subprocess.Popen([mewo, "ask"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                threading.Thread(target=self.wait_phone, args=(rid, ask["proc"], json.dumps(payload).encode()), daemon=True).start()
-            except OSError:
-                ask["proc"] = None
-
-    def wait_phone(self, rid, proc, payload):
-        try:
-            out, _ = proc.communicate(payload)
-            decision = json.loads(out)["hookSpecificOutput"]["decision"]
-        except (OSError, ValueError, KeyError, TypeError):
-            return
-        GLib.idle_add(self.answer, rid, decision, "phone")
-
-    def drop_phone(self, ask):
-        proc = (ask or {}).get("proc")
-        if proc and proc.poll() is None:
-            proc.terminate()  # its socket closes, so the daemon takes the request off the phones
-
-    def answer(self, rid, decision, by):
-        """`decision` is a permission result: {"behavior": "allow"|"deny", ...}."""
-        ask = self.asks.pop(rid, None)
-        if ask is None:
-            return False
-        r = ask["request"]
-        if decision.get("behavior") == "allow":
-            response = {"behavior": "allow", "updatedInput": decision.get("updatedInput") or r.get("input") or {}}
-            if decision.get("updatedPermissions"):
-                response["updatedPermissions"] = decision["updatedPermissions"]
-        else:
-            response = {"behavior": "deny", "message": decision.get("message") or "The user said no."}
-        self.write({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": response}})
-        if by == "phone":
-            self.push({"type": "mewo", "kind": "resolved", "request_id": rid, "by": "phone"})
-        else:
-            self.drop_phone(ask)
-        if self.session_id:
-            self.tell_daemon({"cmd": "session_state", "session_id": self.session_id, "cwd": self.folder, "state": "working"})
-        return False
-
-    def tell_daemon(self, request):
-        sock = self.info.get("socket", "")
-
-        def run():
-            try:
-                ask_daemon(sock, request)
-            except (OSError, ValueError):
-                pass
-
-        threading.Thread(target=run, daemon=True).start()
-
     # ---------- the page ----------
 
-    def on_message(self, _manager, result):
-        try:
-            value = result.get_js_value() if hasattr(result, "get_js_value") else result
-            msg = json.loads(value.to_string())
-        except (ValueError, AttributeError):
-            return
+    def on_page(self, msg):
         t = msg.get("t")
         if t == "ready":
             self.page_ready = True
         elif t == "send":
-            self.say(msg.get("text", ""), msg.get("images") or [])
+            if not self.write({"t": "send", "text": msg.get("text", ""), "images": msg.get("images") or []}):
+                self.push({"type": "mewo", "kind": "note", "text": "Not sent: the window has lost the session.", "err": True})
         elif t == "respond":
-            self.answer(msg.get("request_id", ""), msg.get("response") or {}, "window")
-        elif t == "interrupt":
-            self.control({"subtype": "interrupt"})
+            self.write({"t": "respond", "request_id": msg.get("request_id", ""), "response": msg.get("response") or {}})
+        elif t in ("interrupt", "cancel_retry"):
+            self.write({"t": t})
         elif t == "set_model":
-            self.control({"subtype": "set_model", "model": msg.get("model") or "default"})
+            self.write({"t": "set_model", "model": msg.get("model") or "default"})
         elif t == "set_mode":
-            self.control({"subtype": "set_permission_mode", "mode": msg.get("mode") or "default"})
+            self.write({"t": "set_mode", "mode": msg.get("mode") or "default"})
         elif t == "state":
-            self.win.set_state(msg.get("state", ""))
+            self.tab.set_state(msg.get("state", ""))
         elif t == "copy":
             clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
             clipboard.set_text(msg.get("text", ""), -1)
@@ -499,9 +506,9 @@ class Chat:
         """A file Claude names opens in VS Code at its line, else in the app that owns it."""
         p = os.path.expanduser(path)
         if not os.path.isabs(p):
-            p = os.path.join(self.folder, p)
+            p = os.path.join(self.tab.folder, p)
         if not os.path.exists(p):
-            self.win.flash("NO SUCH FILE")
+            self.tab.flash("NO SUCH FILE")
             return
         code = find_tool("code")
         try:
@@ -510,13 +517,13 @@ class Chat:
             else:
                 Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(p, None), None)
         except (OSError, GLib.Error):
-            self.win.flash("COULD NOT OPEN IT")
+            self.tab.flash("COULD NOT OPEN IT")
 
     def find_files(self, q):
         """The folder's files for an "@": git's list (tracked and new, not ignored), best matches first."""
         if self.files is None or time.time() - self.files_at > 30:
             try:
-                out = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=self.folder, capture_output=True, text=True, timeout=6).stdout.split("\n")
+                out = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=self.tab.folder, capture_output=True, text=True, timeout=6).stdout.split("\n")
             except (OSError, subprocess.SubprocessError):
                 out = []
             self.files, self.files_at = [f for f in out if f][:60000], time.time()
@@ -565,7 +572,359 @@ class Chat:
         return False
 
 
+class Tab:
+    """One session in the chat window: its chat, its label on the tab strip, and what the
+    header shows while it is the tab in front."""
+
+    serial = 0
+
+    def __init__(self, win, info, conn, reader, related):
+        Tab.serial += 1
+        self.id = str(Tab.serial)
+        self.win, self.info = win, info
+        self.folder = os.path.realpath(info.get("folder") or "/")
+        self.sock_path = info.get("host_socket", "")
+        self.session_id = info.get("session_id", "")
+        self.state = "starting"
+        self.status_text = ""
+        self.pr_url = ""
+        self.ended = bool(info.get("ended"))
+        self.alive = not self.ended
+
+        n, goal = info.get("n", ""), info.get("goal", "")
+        box = Gtk.Box(spacing=7)
+        self.dot = Gtk.Label(label="●")
+        self.dot.get_style_context().add_class("tabdot")
+        self.dot.get_style_context().add_class("starting")
+        text = f"{n} · {goal}" if n != "" else goal or "Session"
+        title = Gtk.Label(label=text)
+        title.set_ellipsize(Pango.EllipsizeMode.END)
+        # The notebook gives a tab what its label needs at least: that much is readable.
+        title.set_width_chars(min(len(text), 22))
+        title.set_max_width_chars(26)
+        close = Gtk.Button(label="×", relief=Gtk.ReliefStyle.NONE, focus_on_click=False, valign=Gtk.Align.CENTER)
+        close.get_style_context().add_class("tabx")
+        close.set_tooltip_text("Close the session (Ctrl+W)")
+        close.connect("clicked", lambda *_: self.win.close_tab(self))
+        box.pack_start(self.dot, False, False, 0)
+        box.pack_start(title, True, True, 0)
+        box.pack_start(close, False, False, 0)
+        box.set_tooltip_text("   ·   ".join(b for b in (f"Session {n}" if n != "" else "", goal, info.get("feature", ""), info.get("branch", ""), info.get("model_label", "")) if b))
+        box.show_all()
+        self.label = box
+
+        self.chat = Chat(self, conn, reader, related)
+        self.poller = GLib.timeout_add_seconds(5, self.poll)
+        self.poll()
+
+    def set_state(self, state):
+        state = "finished" if state == "idle" else state
+        if self.ended:
+            state = "ended"
+        if state == self.state or state not in STATES:
+            return
+        ctx = self.dot.get_style_context()
+        ctx.remove_class(self.state)
+        ctx.add_class(state)
+        self.state = state
+        self.win.tab_changed(self)
+
+    def session_ended(self):
+        self.alive = False
+        self.ended = True
+        self.set_state("ended")
+
+    def flash(self, text):
+        if self.win.current() is self:
+            self.win.header.flash(text)
+
+    def poll(self):
+        threading.Thread(target=lambda: GLib.idle_add(self.show_fetched, plan_detail(self.info)), daemon=True).start()
+        return True
+
+    def show_fetched(self, out):
+        changed = False
+        if "status" in out and out["status"].upper() != self.status_text:
+            self.status_text, changed = out["status"].upper(), True
+        if out.get("pr") and out["pr"] != self.pr_url:
+            self.pr_url, changed = out["pr"], True
+        if changed:
+            self.win.tab_changed(self)
+        return False
+
+    def close(self, stop):
+        GLib.source_remove(self.poller)
+        if stop and self.alive:
+            self.chat.stop()
+        else:
+            self.chat.detach()
+
+
+class SessionsWindow(Gtk.Window):
+    """v3.3: every "Build with me" session in one window, a tab each."""
+
+    def __init__(self, server):
+        super().__init__(title="Mewo Session")
+        self.server = server
+        self.tabs = []
+        self.connecting = set()
+        self.set_default_size(1100, 780)
+        self.get_style_context().add_class("chat")
+
+        self.header = Header(self, chat=True)
+        self.header.set_session("", "")
+        self.set_titlebar(self.header.bar)
+
+        # One handler for the pages of every tab: each message says which tab it is from.
+        self.manager = WebKit2.UserContentManager()
+        self.manager.register_script_message_handler("mewo")
+        self.manager.connect("script-message-received::mewo", self.on_message)
+
+        self.book = Gtk.Notebook()
+        self.book.set_scrollable(True)
+        self.book.set_show_border(False)
+        self.book.connect("switch-page", self.on_switch)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.pack_start(self.header.edge, False, False, 0)
+        box.pack_start(self.book, True, True, 0)
+        self.add(box)
+
+        # Before the page sees them: the web view would take Page Up and Page Down for scrolling.
+        keys = Gtk.AccelGroup()
+        keys.connect(Gdk.KEY_w, Gdk.ModifierType.CONTROL_MASK, Gtk.AccelFlags.VISIBLE, self.on_close_key)
+        keys.connect(Gdk.KEY_Page_Up, Gdk.ModifierType.CONTROL_MASK, Gtk.AccelFlags.VISIBLE, lambda *_: self.book.prev_page() or True)
+        keys.connect(Gdk.KEY_Page_Down, Gdk.ModifierType.CONTROL_MASK, Gtk.AccelFlags.VISIBLE, lambda *_: self.book.next_page() or True)
+        self.add_accel_group(keys)
+        self.connect("delete-event", self.on_close)
+        self.connect("destroy", self.on_destroy)
+        # Told to go (a logout, a kill): the window goes, the sessions go on.
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            unix_signal_add(GLib.PRIORITY_HIGH, sig, self.on_quit_signal)
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    # ---------- hosts ----------
+
+    def serve(self):
+        """Hosts that want a tab: {"attach": <host socket>, "token": <activation token>}."""
+        while True:
+            try:
+                conn, _ = self.server.accept()
+            except OSError:
+                return
+            try:
+                with conn:
+                    conn.settimeout(3)
+                    line = conn.makefile("rb").readline()
+                msg = json.loads(line or b"{}")
+            except (OSError, ValueError):
+                continue
+            if msg.get("attach"):
+                GLib.idle_add(self.attach, msg["attach"], msg.get("token", ""), bool(msg.get("token")))
+
+    def attach_all(self):
+        """Every session whose host is alive: what an earlier window left running."""
+        try:
+            names = sorted(os.listdir(WINDOWS))
+        except OSError:
+            return
+        for name in names:
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(WINDOWS, name), encoding="utf-8") as f:
+                    entry = json.load(f)
+                os.kill(int(entry.get("pid") or 0), 0)
+            except (OSError, ValueError, TypeError):
+                continue
+            if entry.get("socket"):
+                self.attach(entry["socket"], "", False)
+
+    def attach(self, sock_path, token, select):
+        tab = next((t for t in self.tabs if t.sock_path == sock_path), None)
+        if tab:
+            if token or select:
+                self.show_tab(tab, token)
+            return False
+        if sock_path in self.connecting:
+            return False
+        self.connecting.add(sock_path)
+
+        def connect():
+            conn = reader = info = None
+            try:
+                conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                conn.settimeout(5)
+                conn.connect(sock_path)
+                reader = conn.makefile("rb")
+                first = json.loads(reader.readline() or b"{}")
+                conn.settimeout(None)
+                if first.get("kind") == "host":
+                    info = first.get("info") or {}
+                    info["host_socket"] = sock_path
+            except (OSError, ValueError):
+                info = None
+            if info is None and conn is not None:
+                conn.close()
+            GLib.idle_add(self.add_tab, sock_path, info, conn, reader, token, select)
+
+        threading.Thread(target=connect, daemon=True).start()
+        return False
+
+    def add_tab(self, sock_path, info, conn, reader, token, select):
+        self.connecting.discard(sock_path)
+        if info is None:
+            self.close_if_empty()  # nothing to show
+            return False
+        if not self.tabs:
+            icon = info.get("icon", "")
+            if icon and os.path.exists(icon):
+                self.set_icon_from_file(icon)
+        related = self.tabs[0].chat.web if self.tabs else None
+        tab = Tab(self, info, conn, reader, related)
+        self.tabs.append(tab)
+        front = select or token or len(self.tabs) == 1
+        # A page takes the focus when it loads, and the notebook follows the focus: one at the back may not.
+        tab.chat.web.set_can_focus(front)
+        index = self.book.append_page(tab.chat.web, tab.label)
+        self.book.set_tab_reorderable(tab.chat.web, True)
+        tab.chat.web.show()
+        tab.chat.start()
+        if front:
+            self.book.set_current_page(index)
+        if token:
+            self.come_forward(token)
+        self.tab_changed(tab)
+        return False
+
+    # ---------- tabs ----------
+
+    def current(self):
+        page = self.book.get_nth_page(self.book.get_current_page())
+        return next((t for t in self.tabs if t.chat.web is page), None)
+
+    def on_switch(self, _book, page, _n):
+        for t in self.tabs:
+            t.chat.web.set_can_focus(t.chat.web is page)
+        tab = next((t for t in self.tabs if t.chat.web is page), None)
+        if tab:
+            self.show_header(tab)
+            GLib.idle_add(tab.chat.web.grab_focus)
+
+    def tab_changed(self, tab):
+        if self.current() is tab:
+            self.show_header(tab)
+        # A question waits in some tab: the dock and the shell say so, without taking the focus.
+        self.set_urgency_hint(any(t.state == "waiting" for t in self.tabs))
+
+    def show_header(self, tab):
+        h = self.header
+        h.set_session(tab.info.get("n", ""), tab.info.get("goal", ""))
+        h.set_state(tab.state)
+        h.set_status(tab.status_text)
+        h.set_pr(tab.pr_url)
+        self.set_title(tab.info.get("title") or "Mewo Session")
+
+    def show_tab(self, tab, token):
+        self.book.set_current_page(self.book.page_num(tab.chat.web))
+        self.come_forward(token)
+        tab.chat.web.grab_focus()
+
+    def come_forward(self, token):
+        self.deiconify()
+        if token:
+            # The console's click, handed over: with it the shell lets this window come forward.
+            self.set_startup_id(token)
+        else:
+            self.present()
+
+    def close_tab(self, tab):
+        if tab.alive and not self.ask(
+            f"Close session {tab.info.get('n', '')}?",
+            "Claude stops. If the session has not opened its pull request yet, the build starts it again.",
+            [("Keep it open", Gtk.ResponseType.CANCEL), ("Close", Gtk.ResponseType.OK)],
+        ) == Gtk.ResponseType.OK:
+            return
+        tab.close(stop=True)
+        self.book.remove_page(self.book.page_num(tab.chat.web))
+        self.tabs.remove(tab)
+        if not self.tabs:
+            self.destroy()
+
+    def on_close_key(self, *_):
+        tab = self.current()
+        if tab:
+            self.close_tab(tab)
+        return True
+
+    def close_if_empty(self):
+        if not self.tabs and not self.connecting:
+            self.destroy()
+        return False
+
+    def ask(self, text, more, buttons):
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION, buttons=Gtk.ButtonsType.NONE, text=text)
+        dialog.format_secondary_text(more)
+        for label, response in buttons:
+            dialog.add_button(label, response)
+        answer = dialog.run()
+        dialog.destroy()
+        return answer
+
+    # ---------- the window ----------
+
+    def on_message(self, _manager, result):
+        try:
+            value = result.get_js_value() if hasattr(result, "get_js_value") else result
+            msg = json.loads(value.to_string())
+        except (ValueError, AttributeError):
+            return
+        tab = next((t for t in self.tabs if t.id == str(msg.get("tab", ""))), None)
+        if tab:
+            tab.chat.on_page(msg)
+
+    def on_close(self, *_):
+        live = [t for t in self.tabs if t.alive]
+        if not live:
+            return False
+        one = len(live) == 1
+        answer = self.ask(
+            "Close the window?",
+            ("One session is" if one else f"{len(live)} sessions are") + " still running. Kept running, "
+            + ("it goes on working and comes back" if one else "they go on working and come back")
+            + " with the whole conversation when the window opens again (Show the session on the console). Stopped, Claude stops"
+            + ("" if one else " in each") + ", and the build starts again a session that has no pull request yet.",
+            [("Cancel", Gtk.ResponseType.CANCEL), ("Stop " + ("it" if one else "them"), Gtk.ResponseType.REJECT), ("Keep " + ("it" if one else "them") + " running", Gtk.ResponseType.OK)],
+        )
+        if answer == Gtk.ResponseType.REJECT:
+            for t in live:
+                t.close(stop=True)
+            self.tabs = [t for t in self.tabs if t not in live]
+            return False
+        return answer != Gtk.ResponseType.OK
+
+    def on_quit_signal(self):
+        self.destroy()
+        return GLib.SOURCE_REMOVE
+
+    def on_destroy(self, *_):
+        for t in self.tabs:
+            t.close(stop=False)
+        self.tabs = []
+        try:
+            self.server.close()
+            os.unlink(WINDOW_SOCKET)
+        except OSError:
+            pass
+        # Leave at once: the hosts keep the sessions, and on Wayland the flush that ends gtk_main can wait
+        # for good. WebKit's processes end with this one.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
+
+
 class SessionWindow(Gtk.Window):
+    """The terminal: one session, Claude Code in a terminal, a window of its own."""
+
     def __init__(self, info):
         super().__init__(title=info.get("title", "Mewo Session"))
         self.info = info
@@ -573,51 +932,17 @@ class SessionWindow(Gtk.Window):
         self.alive = False
         self.ended = False
         self.state = "starting"
-        self.pr_url = ""
         self.font_scale = 1.0
-        self.status_text = ""
-        self.notice = 0
         self.term = None
-        self.chat = None
-        # The chat when it was asked for and this computer can show it, else the terminal.
-        self.chat_mode = info.get("mode") == "chat" and WebKit2 is not None and os.path.exists(CHAT_PAGE)
-        self.accent, self.dim = (CORAL, CHAT_DIM) if self.chat_mode else (CYAN, DIM)
 
-        self.set_default_size(1100, 780 if self.chat_mode else 760)
+        self.set_default_size(1100, 760)
         icon = info.get("icon", "")
         if icon and os.path.exists(icon):
             self.set_icon_from_file(icon)
-        self.get_style_context().add_class("chat" if self.chat_mode else "mewo")
-
-        # Header: the brand line and the goal; the state chip and the pull request on the right.
-        bar = Gtk.HeaderBar()
-        bar.set_show_close_button(True)
-        titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.CENTER)
-        brand = Gtk.Label(xalign=0)
-        brand.set_markup(
-            spaced("◉ MEWO ON FIRE", self.accent, size="8pt" if self.chat_mode else "9pt")
-            + spaced(f"  ·  SESSION {info.get('n', '')}", self.dim, size="8pt" if self.chat_mode else "9pt")
-        )
-        goal = Gtk.Label(label=info.get("goal", ""), xalign=0)
-        goal.get_style_context().add_class("goal")
-        goal.set_ellipsize(Pango.EllipsizeMode.END)
-        goal.set_max_width_chars(70)
-        titles.pack_start(brand, False, False, 0)
-        titles.pack_start(goal, False, False, 0)
-        bar.pack_start(titles)
-        self.chip = Gtk.Label(label=STATES["starting"], valign=Gtk.Align.CENTER)
-        self.chip.get_style_context().add_class("chip")
-        self.chip.get_style_context().add_class("starting")
-        self.pr = Gtk.Button(label="PULL REQUEST ↗", valign=Gtk.Align.CENTER)
-        self.pr.get_style_context().add_class("pr")
-        self.pr.set_no_show_all(True)
-        self.pr.connect("clicked", self.open_pr)
-        self.status = Gtk.Label(label="", valign=Gtk.Align.CENTER)
-        self.status.get_style_context().add_class("status")
-        bar.pack_end(self.chip)
-        bar.pack_end(self.pr)
-        bar.pack_end(self.status)
-        self.set_titlebar(bar)
+        self.get_style_context().add_class("mewo")
+        self.header = Header(self, chat=False)
+        self.header.set_session(info.get("n", ""), info.get("goal", ""))
+        self.set_titlebar(self.header.bar)
 
         # Under it: where the session runs, and a line lit by its state.
         meta = Gtk.Label(xalign=0)
@@ -625,15 +950,10 @@ class SessionWindow(Gtk.Window):
         meta.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         bits = [info.get("feature", ""), info.get("branch", ""), os.path.basename(self.folder), info.get("model_label", "")]
         meta.set_text("   ·   ".join(b for b in bits if b))
-        self.edge = Gtk.Box()
-        self.edge.get_style_context().add_class("edge")
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.pack_start(self.edge, False, False, 0)
-        if self.chat_mode:
-            self.chat = Chat(self, info)
-            box.pack_start(self.chat.web, True, True, 0)
-        elif Vte is not None:
+        box.pack_start(self.header.edge, False, False, 0)
+        if Vte is not None:
             box.pack_start(meta, False, False, 0)
             box.pack_start(self.build_terminal(), True, True, 0)
         else:
@@ -645,15 +965,12 @@ class SessionWindow(Gtk.Window):
         self.connect("destroy", self.on_destroy)
         # The handler first, then the entry that invites the signal.
         unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, self.on_show_signal)
-        self.register("")
+        self.register()
         # Told to go (a logout, a kill): close as a click on the cross would, so Claude Code ends with the window.
         for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             unix_signal_add(GLib.PRIORITY_HIGH, sig, self.on_quit_signal)
 
-        if self.chat:
-            self.chat.start()
-            self.chat.web.grab_focus()
-        elif self.term:
+        if self.term:
             self.term.spawn_async(
                 Vte.PtyFlags.DEFAULT, self.folder, ["/bin/sh", info["script"]], None,
                 GLib.SpawnFlags.DEFAULT, None, None, -1, None, self.on_spawned,
@@ -703,13 +1020,10 @@ class SessionWindow(Gtk.Window):
         self.term.grab_focus()
 
     def on_exit(self, _term, _status):
-        self.session_ended()
-        self.term.feed("\r\n\x1b[38;2;123;147;171m  The session ended. You can close this window.\x1b[0m\r\n".encode())
-
-    def session_ended(self):
         self.alive = False
         self.ended = True
         self.set_state("ended")
+        self.term.feed("\r\n\x1b[38;2;123;147;171m  The session ended. You can close this window.\x1b[0m\r\n".encode())
 
     def on_quit_signal(self):
         self.destroy()
@@ -721,14 +1035,12 @@ class SessionWindow(Gtk.Window):
                 os.remove(os.path.join(WINDOWS, f"{os.getpid()}.{ext}"))
             except OSError:
                 pass
-        if self.chat:
-            self.chat.stop()
 
     # ---------- "Show the session" on the console ----------
 
-    def register(self, session_id):
+    def register(self):
         """This window's entry in the list the console reads."""
-        entry = {"pid": os.getpid(), "folder": self.folder, "session_id": session_id, "n": self.info.get("n", ""), "feature": self.info.get("feature", "")}
+        entry = {"pid": os.getpid(), "folder": self.folder, "session_id": "", "n": self.info.get("n", ""), "feature": self.info.get("feature", "")}
         path = os.path.join(WINDOWS, f"{os.getpid()}.json")
         try:
             os.makedirs(WINDOWS, exist_ok=True)
@@ -753,9 +1065,7 @@ class SessionWindow(Gtk.Window):
             self.set_startup_id(token)
         else:
             self.present()
-        if self.chat:
-            self.chat.web.grab_focus()
-        elif self.term:
+        if self.term:
             self.term.grab_focus()
         return GLib.SOURCE_CONTINUE
 
@@ -765,12 +1075,8 @@ class SessionWindow(Gtk.Window):
             state = "ended"
         if state == self.state or state not in STATES:
             return
-        for w in (self.chip, self.edge):
-            ctx = w.get_style_context()
-            ctx.remove_class(self.state)
-            ctx.add_class(state)
         self.state = state
-        self.chip.set_text(STATES.get(state, state.upper()))
+        self.header.set_state(state)
         # A question waits: the dock and the shell say so, without taking the focus.
         self.set_urgency_hint(state == "waiting")
 
@@ -781,37 +1087,25 @@ class SessionWindow(Gtk.Window):
         return True
 
     def fetch(self):
-        sock = self.info.get("socket", "")
         out = {}
         try:
-            sessions = [] if self.chat else ask_daemon(sock, {"cmd": "sessions"}).get("sessions") or []
-            mine = [] if self.chat else [s for s in sessions if os.path.realpath(s.get("cwd") or "/") == self.folder]
+            sessions = ask_daemon(self.info.get("socket", ""), {"cmd": "sessions"}).get("sessions") or []
+            mine = [s for s in sessions if os.path.realpath(s.get("cwd") or "/") == self.folder]
             if mine:
                 out["state"] = max(mine, key=lambda s: s.get("last_ts") or 0).get("state", "")
-            if self.info.get("feature") and self.info.get("n"):
-                d = ask_daemon(sock, {"cmd": "session_detail", "feature": self.info["feature"], "workspace": self.info.get("workspace", ""), "n": self.info["n"]})
-                ps = d.get("session") or {}
-                out["status"] = ps.get("status", "")
-                out["pr"] = ps.get("pr_url", "")
         except (OSError, ValueError):
             pass
+        out.update(plan_detail(self.info))
         GLib.idle_add(self.show_fetched, out)
 
     def show_fetched(self, out):
         if out.get("state"):
             self.set_state(out["state"])
         if "status" in out:
-            self.status_text = out["status"].upper()
-            if not self.notice:
-                self.status.set_markup(spaced(self.status_text, self.dim, size="8pt"))
-        if out.get("pr") and out["pr"] != self.pr_url:
-            self.pr_url = out["pr"]
-            self.pr.show()
+            self.header.set_status(out["status"].upper())
+        if out.get("pr") and out["pr"] != self.header.pr_url:
+            self.header.set_pr(out["pr"])
         return False
-
-    def open_pr(self, _btn):
-        if self.pr_url:
-            Gtk.show_uri_on_window(self, self.pr_url, Gdk.CURRENT_TIME)
 
     # ---------- keys and closing ----------
 
@@ -819,27 +1113,13 @@ class SessionWindow(Gtk.Window):
         if not self.term.get_has_selection():
             return
         self.term.copy_clipboard_format(Vte.Format.TEXT)
-        self.flash("COPIED")
+        self.header.flash("COPIED")
 
     def paste(self, *_):
         self.term.paste_clipboard()
 
     def clipboard_has_text(self):
         return Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_is_text_available()
-
-    def flash(self, text):
-        """A word in the header for a moment, where the plan status sits."""
-        self.notice += 1
-        mine = self.notice
-        self.status.set_markup(spaced(text, self.accent, size="8pt"))
-
-        def back():
-            if self.notice == mine:
-                self.notice = 0
-                self.status.set_markup(spaced(self.status_text, self.dim, size="8pt") if self.status_text else "")
-            return False
-
-        GLib.timeout_add(1200, back)
 
     def on_key(self, _term, event):
         ctrl = event.state & Gdk.ModifierType.CONTROL_MASK
@@ -895,19 +1175,89 @@ class SessionWindow(Gtk.Window):
         return answer != Gtk.ResponseType.OK
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("usage: mewo-session <info.json>", file=sys.stderr)
-        sys.exit(2)
-    with open(sys.argv[1], encoding="utf-8") as f:
-        info = json.load(f)
-    # Grouped with Mewo Console in the dock (its desktop entry and window class).
-    GLib.set_prgname(info.get("app_id") or "mewo-console")
-    GLib.set_application_name("Mewo Session")
+def window_server():
+    """The chat window's socket, or None when another window has it."""
+    for _ in range(2):
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            server.bind(WINDOW_SOCKET)
+        except OSError:
+            server.close()
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(2)
+                    s.connect(WINDOW_SOCKET)
+                return None  # a window answers on it
+            except OSError:
+                pass
+            try:
+                os.unlink(WINDOW_SOCKET)  # left by a window that did not close cleanly
+            except OSError:
+                pass
+            continue
+        os.chmod(WINDOW_SOCKET, 0o600)
+        server.listen(8)
+        return server
+    return None
+
+
+def hand_over(sock_path, token):
+    """Gives the session to the chat window that is open, if one is. True when it took it."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(3)
+            s.connect(WINDOW_SOCKET)
+            s.sendall(json.dumps({"attach": sock_path, "token": token}).encode() + b"\n")
+        return True
+    except OSError:
+        return False
+
+
+def style():
     Gtk.Settings.get_default().set_property("gtk-application-prefer-dark-theme", True)
     provider = Gtk.CssProvider()
     provider.load_from_data(CSS.encode())
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        print("usage: mewo-session --attach [<host socket>] | mewo-session <info.json>", file=sys.stderr)
+        sys.exit(2)
+    # Grouped with Mewo Console in the dock (its desktop entry and window class).
+    GLib.set_prgname("com.torchcorp.mewo-on-fire.console")
+    GLib.set_application_name("Mewo Session")
+    if args[0] == "--attach":
+        if WebKit2 is None:
+            print("mewo-session: the chat needs WebKitGTK for Python (gir1.2-webkit2-4.1)", file=sys.stderr)
+            sys.exit(1)
+        sock_path = args[1] if len(args) > 1 else ""
+        token = os.environ.get("XDG_ACTIVATION_TOKEN") or os.environ.get("DESKTOP_STARTUP_ID") or ""
+        server = None
+        for _ in range(3):
+            if sock_path and hand_over(sock_path, token):
+                return
+            if not sock_path and os.path.exists(WINDOW_SOCKET) and hand_over("", token):
+                return
+            server = window_server()
+            if server:
+                break
+            time.sleep(0.2)  # another window is starting: give it the session in a moment
+        if server is None:
+            sys.exit(1)
+        style()
+        win = SessionsWindow(server)
+        win.show_all()
+        win.attach_all()
+        if sock_path:
+            win.attach(sock_path, "", True)
+        GLib.idle_add(win.close_if_empty)
+        Gtk.main()
+    with open(args[0], encoding="utf-8") as f:
+        info = json.load(f)
+    GLib.set_prgname(info.get("app_id") or "com.torchcorp.mewo-on-fire.console")
+    style()
     win = SessionWindow(info)
     win.connect("destroy", Gtk.main_quit)
     win.show_all()

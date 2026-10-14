@@ -228,8 +228,13 @@ tool call with its input and output, edits as diffs, questions and
 permission prompts as buttons (your phone gets them too; the first answer
 wins), and a composer with the model, the permission mode, `@` for a file,
 `/` for a command, pasted images, Enter to send and Esc to stop. A file
-Claude names opens in VS Code at its line. On the console, a session that
-has such a window open gets **Show the session**, which brings it forward.
+Claude names opens in VS Code at its line. Every session is a tab of one
+window (Ctrl+W closes a tab, Ctrl+Page Up / Page Down move between them),
+and each runs on its own: if the window freezes or is closed with **Keep
+them running**, the sessions go on, and the window shows them again, whole
+conversation included, the next time it opens. On the console, a session
+that has a window or tab gets **Show the session**, which brings it
+forward (and opens the window when it is closed).
 It needs GTK 3 and WebKitGTK for
 Python (`python3-gi`, `gir1.2-webkit2-4.1`: what the console itself needs).
 Without WebKitGTK, or with `"session_terminal": true` in
