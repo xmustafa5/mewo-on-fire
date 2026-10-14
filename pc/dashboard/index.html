@@ -1346,8 +1346,6 @@ const graph = (() => {
 
   return { setData, wake, fit };
 })();
-// The sessions the graph shows. Step 10 (filters) replaces this body.
-function visibleSessions() { return model.all || []; }
 const featureLabel = (key) => { const f = features.find((x) => x.key === key); return f ? `${f.app} / ${f.slug}` : key; };
 function renderGraph() {
   const d = model.daemon;
@@ -2552,7 +2550,7 @@ const evKey = (e) => `${e.id}:${e.ts}`;
 function activityHtml(now) {
   const d = model.daemon || {}, all = model.all || [], evs = model.events || [], h = [];
   const cleared = prefs.feed_cleared_at || 0;
-  const list = evs.filter((e) => MewoCore.eventPasses(e, filters, now, hiddenNow(), cleared)).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 60);
+  const list = evs.filter((e) => MewoCore.eventPasses(e, filters, now, new Set(hiddenNow().map((x) => x.id)), cleared)).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 60);
   h.push(`<div class="ins-h"><div class="ins-t">Activity</div>${list.length ? '<button class="link" id="feedclear" type="button" title="Clear the activity feed">Clear</button>' : ''}</div>`);
   // Needs-you cards: what waits for an answer, whatever the filters say.
   const reqs = [...(model.requests || [])].sort((a, b) => (b.ts || 0) - (a.ts || 0));
@@ -2584,7 +2582,7 @@ function activityHtml(now) {
 
 function sessionHtml(id, now) {
   const s = sessionOf(id); if (!s) return null;
-  const d = model.daemon || {}, hidden = hiddenNow().has(s.id), win = s.peer ? 0 : windowOf(s.id);
+  const d = model.daemon || {}, hidden = isHiddenSession(s), win = s.peer ? 0 : windowOf(s.id);
   insArts = [...(s.artifacts || [])].reverse(); insArtsPeer = !!s.peer;
   const pills = [statePill(s.state)];
   if (hidden) pills.push('<span class="pillx">Hidden</span>');
@@ -2786,17 +2784,26 @@ addEventListener('resize', () => { if (!insResize) insResize = requestAnimationF
 
 // The Mac app drags the window from the toolbar: it needs the toolbar's rect and every control's in it.
 if (window.mewoHost === 'mac' && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mewo) {
-  const tb = $('toolbar'), rect = (r) => [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+  const tb = $('toolbar'), rect = (el) => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]; };
+  const CONTROLS = 'button, input, select, textarea, a[href], label, .seg, [role=button], [tabindex]';
   let dragQ = 0;
   const postDrag = () => {
     dragQ = 0;
-    const controls = [...tb.querySelectorAll('button, input, label, select, .seg, [role=button]')]
-      .map((el) => el.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0).map(rect);
-    window.webkit.messageHandlers.mewo.postMessage({ cmd: 'drag_regions', toolbar: rect(tb.getBoundingClientRect()), controls });
+    // A sheet over the toolbar band (full-screen preview, the large build map) takes the clicks: no drag then.
+    const covered = document.querySelector('#preview.on.full, #bigmap.on');
+    const controls = [];
+    for (const el of [...tb.querySelectorAll('*'), ...document.querySelectorAll('#ctxmenu.on, #ctxmenu.on *')]) {
+      if (!el.getClientRects().length) continue;
+      const cur = getComputedStyle(el).cursor;
+      if (el.matches(CONTROLS) || cur === 'pointer' || cur === 'text') controls.push(rect(el));
+    }
+    window.webkit.messageHandlers.mewo.postMessage({ cmd: 'drag_regions', toolbar: covered ? [0, 0, 0, 0] : rect(tb), controls });
   };
   const queueDrag = () => { if (!dragQ) dragQ = requestAnimationFrame(postDrag); };
   addEventListener('load', queueDrag); addEventListener('resize', queueDrag);
-  if (window.ResizeObserver) { const ro = new ResizeObserver(queueDrag); ro.observe(tb); ro.observe($('tb-pc')); }
+  if (window.ResizeObserver) new ResizeObserver(queueDrag).observe(tb);
+  // Controls that appear, move or hide inside the toolbar, menus and sheets opening: post again.
+  new MutationObserver(queueDrag).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
   queueDrag();
 }
 // ---------- state ----------
