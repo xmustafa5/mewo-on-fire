@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../app_state.dart';
 import '../models.dart';
 import 'artifact_screen.dart';
+import 'build_map_screen.dart';
 import 'chat_screen.dart';
 import 'flow_sheets.dart';
 import 'sign_sheet.dart';
@@ -123,26 +124,6 @@ class _FeatureScreenState extends State<FeatureScreen> {
     if (!mounted) return;
     setState(() => _flowBusy = false);
     _toast(error.isEmpty ? (on ? 'Building. Come back later.' : 'Build autopilot off') : error);
-  }
-
-  /// Which wave each session is in: 1 for no dependency, else one past its
-  /// deepest dependency. Sessions of one wave can run together.
-  Map<int, int> _waves(List<PlanSession> ss) {
-    final by = {for (final s in ss) s.n: s};
-    final w = <int, int>{};
-    int depth(int n, Set<int> seen) {
-      final cached = w[n];
-      if (cached != null) return cached;
-      if (!seen.add(n)) return 1;
-      final deps = (by[n]?.dependsOn ?? const <int>[]).where((d) => d != n && by.containsKey(d)).toList();
-      final v = deps.isEmpty ? 1 : 1 + deps.map((d) => depth(d, seen)).reduce((a, b) => a > b ? a : b);
-      w[n] = v;
-      return v;
-    }
-    for (final s in ss) {
-      depth(s.n, <int>{});
-    }
-    return w;
   }
 
   /// The sign sheet of the gate the flow asks for, when you are the one to sign it.
@@ -302,6 +283,8 @@ class _FeatureScreenState extends State<FeatureScreen> {
             title: Text(title),
             subtitle: Text(sub),
             actions: [
+              if (f?.plan?.sessions.isNotEmpty ?? false)
+                GhostIconButton(icon: Icons.account_tree_rounded, tooltip: 'Build map', onPressed: () => Navigator.of(context).push(BuildMapScreen.route(widget.pcId, widget.featureKey))),
               GhostIconButton(icon: Icons.refresh_rounded, tooltip: 'Refresh', onPressed: _state.refreshFeatures),
             ],
           ),
@@ -398,7 +381,7 @@ class _FeatureScreenState extends State<FeatureScreen> {
       for (final r in plan.revised) {
         out.add(enter(_warning(context, 'Revised $r', color: Ember.amber)));
       }
-      final waveOf = _waves(plan.sessions);
+      final waveOf = planWaves(plan.sessions);
       final ordered = [...plan.sessions]..sort((a, b) => (waveOf[a.n] ?? 1) != (waveOf[b.n] ?? 1) ? (waveOf[a.n] ?? 1) - (waveOf[b.n] ?? 1) : a.n - b.n);
       var shownWave = 0;
       for (final s in ordered) {
