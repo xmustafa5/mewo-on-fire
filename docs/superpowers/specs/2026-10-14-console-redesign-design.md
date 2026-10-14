@@ -107,7 +107,7 @@ Replaces `layout()`, `drawNet()`, `spawnParticles`, and the click bursts. Canvas
 
 **Peers:** all of a peer's sessions are nodes, subject to the filters (today's cap of 8 non-ended peer sessions goes away; filters and hiding replace it).
 
-**Links:** session → project; project → each computer it has sessions on; session → feature; build session → plan session (`plan_session`), only when both nodes are visible.
+**Links:** session → project; project → each computer it has sessions on; session → feature (`feature` key). Build sessions of one feature therefore cluster around the feature node; `plan_session` is a step number, shown as "S<n>" in the session's details, not a link.
 
 **Physics** (hand-written, about 300 lines):
 - All-pairs repulsion (O(n²) is fine; sessions are capped at 50 per PC), link springs (rest length 60 for session links, 110 for project↔computer), weak gravity to the center, collision by radius.
@@ -124,7 +124,7 @@ Replaces `layout()`, `drawNet()`, `spawnParticles`, and the click bursts. Canvas
 - Labels: computers always; projects from zoom 0.6; sessions from zoom 1.1 or when hovered or neighbor-of-hovered. Each label fades in over a 0.2 zoom band.
 - Click a session, project, computer or feature: the inspector shows its details (section 5).
   - A project's details have "Filter to this project".
-  - A feature's details reuse `renderFeatureDetail`.
+  - A feature's details show its step and session counts, with "Open in Features" and "Open in Pipeline".
 - Right-click a session: a small menu with Show window / Open in Claude / Hide.
 - Esc clears the selection.
 
@@ -180,7 +180,7 @@ Bulk actions affect only sessions that are visible under the current filters, an
   - Show window / Open in Claude / "On <peer>" (same rules as `showDetail` today), Hide or Unhide, and the artifacts list (opens `#preview` as today).
 - **Project details:** session list with state dots, and "Filter to this project".
 - **Computer details:** name, online state, phones live/paired, relay, listening, queued from phone, events today, hosts, port, version, the 24h activity chart (`drawChart`, restyled). Peers also get "Remove PC" (existing `peer_remove` flow).
-- **Feature details:** `renderFeatureDetail`.
+- **Feature details:** step, plan sessions merged, live sessions, branch, and "Open in Features" / "Open in Pipeline" buttons (`renderFeatureDetail` draws only inside the Features view, so it is not reused).
 - A back chevron and Esc return to Activity.
 
 ## 6. Console settings (daemon)
