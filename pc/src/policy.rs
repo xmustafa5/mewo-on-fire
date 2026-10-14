@@ -1465,7 +1465,7 @@ fn compute_step(f: &mut Feature) {
     let (total, merged) = f
         .plan
         .as_ref()
-        .map(|p| (p.sessions.len() as u32, p.sessions.iter().filter(|s| s.status.eq_ignore_ascii_case("merged")).count() as u32))
+        .map(|p| (p.sessions.len() as u32, p.sessions.iter().filter(|s| status_word(&s.status) == "merged").count() as u32))
         .unwrap_or((0, 0));
     f.sessions_total = total;
     f.sessions_merged = merged;
@@ -1615,12 +1615,26 @@ pub fn enrich(f: &mut Feature, sessions: &[Session], prs: &[Value]) {
         } else if ps.attempts == 2 && unfinished && !ps.running {
             ps.warnings.push("Failed twice? The next attempt goes one tier up (policy 9.1).".to_string());
         }
-        let status = ps.status.to_ascii_lowercase();
+        // What the daemon committed and the working copy does not show yet.
+        {
+            let mut g = PLAN_OVERLAY.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(map) = g.as_mut() {
+                let k = (f.key.clone(), ps.n);
+                if let Some(cell) = map.get(&k) {
+                    if status_word(cell) == status_word(&ps.status) {
+                        map.remove(&k);
+                    } else {
+                        ps.status = cell.clone();
+                    }
+                }
+            }
+        }
+        let status = status_word(&ps.status);
         ps.effective = if ps.pr_state == "merged" || status == "merged" {
             "merged".to_string()
         } else if ps.pr_state == "open" || status == "in review" {
             "review".to_string()
-        } else if status == "blocked" || status.starts_with("blocked:") {
+        } else if status == "blocked" {
             "blocked".to_string()
         } else if ps.running || status == "in progress" {
             "progress".to_string()
@@ -1956,53 +1970,161 @@ pub fn unsign(ws: &Path, key: &str, gate_id: &str, role: &str, untick: &[usize])
     Ok(json!({"ok": true, "file": gate.file, "committed": commit.is_ok(), "note": commit.err().unwrap_or_default()}))
 }
 
-/// Sets a session's status (and optional pull request link) in the plan's
-/// order table and section, as the owner records it (policy 8.4).
-pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> Result<Value, String> {
-    let f = find_feature(ws, key).ok_or_else(|| format!("No feature {key}"))?;
-    let plan = f.plan.as_ref().ok_or_else(|| "This feature has no session plan".to_string())?;
-    let path = ws.join(&plan.file);
-    let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+/// v3.3: the status word of a plan's Status cell: the text before the first
+/// ":", trimmed, in lower case. "Merged: https://…" is "merged", "In review:
+/// https://…" is "in review", "Blocked: <reason>" is "blocked".
+pub fn status_word(cell: &str) -> String {
+    cell.split(':').next().unwrap_or("").trim().to_ascii_lowercase()
+}
+
+/// v3.3: what the plan's Status cell should be changed to so it follows
+/// GitHub (`effective`), by the status word only; None when it already does.
+pub fn status_to_write(cell: &str, effective: &str) -> Option<&'static str> {
+    let word = status_word(cell);
+    match effective {
+        "merged" if word != "merged" => Some("Merged"),
+        "review" if word != "in review" && word != "merged" => Some("In review"),
+        _ => None,
+    }
+}
+
+/// Statuses the daemon committed that the working copy may not show yet (it
+/// is pulled by people and sessions, never by the daemon): feature key and
+/// session number → the cell committed. `enrich` reads them until the
+/// working copy shows the same status word.
+static PLAN_OVERLAY: Mutex<Option<HashMap<(String, u32), String>>> = Mutex::new(None);
+
+fn overlay_set(key: &str, n: u32, cell: &str) {
+    let mut g = PLAN_OVERLAY.lock().unwrap_or_else(|p| p.into_inner());
+    g.get_or_insert_with(HashMap::new).insert((key.to_string(), n), cell.to_string());
+}
+
+/// The plan's text with session `n`'s Status cell set to `cell`, and its
+/// "**Pull request:**" line set to `pr` when that line holds no link yet;
+/// every other byte as it was. None when nothing would change. The second
+/// value is the cell it had.
+pub fn plan_with_status(text: &str, n: u32, cell: &str, pr: &str) -> Option<(String, String)> {
+    let mut out = String::with_capacity(text.len() + 64);
     let mut in_order = false;
     let mut in_session = false;
     let mut changed = false;
+    let mut found = false;
     let mut prev = String::new();
     let mut status_col = 6usize;
-    for l in lines.iter_mut() {
-        if l.starts_with("## ") {
-            in_order = l[3..].trim().eq_ignore_ascii_case("order");
-            in_session = l[3..].trim().to_ascii_lowercase().starts_with(&format!("session {n}:")) || l[3..].trim().eq_ignore_ascii_case(&format!("session {n}"));
-            continue;
-        }
-        if in_order {
-            let mut c = cells(l);
+    for piece in text.split_inclusive('\n') {
+        let body = piece.trim_end_matches(['\n', '\r']);
+        let ending = &piece[body.len()..];
+        let mut line = body.to_string();
+        if let Some(h) = body.strip_prefix("## ") {
+            in_order = h.trim().eq_ignore_ascii_case("order");
+            in_session = h.trim().to_ascii_lowercase().starts_with(&format!("session {n}:")) || h.trim().eq_ignore_ascii_case(&format!("session {n}"));
+        } else if in_order {
+            let mut c = cells(body);
             // The Status column by the table's header (a plan may add a Repository column).
             if c.len() >= 4 && c[0].parse::<u32>().is_err() && c.iter().any(|h| h.trim() == "#") {
                 status_col = c.iter().position(|h| h.trim().eq_ignore_ascii_case("status")).unwrap_or(6);
-                continue;
-            }
-            if c.len() > status_col && c[0].parse::<u32>().ok() == Some(n) {
+            } else if c.len() > status_col && c[0].parse::<u32>().ok() == Some(n) {
+                found = true;
                 prev = c[status_col].clone();
-                c[status_col] = status.to_string();
-                *l = format!("| {} |", c.join(" | "));
-                changed = true;
+                if prev.trim() != cell.trim() {
+                    c[status_col] = cell.to_string();
+                    line = format!("| {} |", c.join(" | "));
+                    changed = true;
+                }
             }
-        }
-        if in_session && !pr.is_empty() && l.trim().starts_with("**Pull request:**") {
-            *l = format!("**Pull request:** {pr}");
+        } else if in_session && !pr.is_empty() && body.trim().starts_with("**Pull request:**") && !body.contains("://") {
+            // A line that already holds a link (or two) is the session's own record: left alone.
+            line = format!("**Pull request:** {pr}");
             changed = true;
         }
+        out.push_str(&line);
+        out.push_str(ending);
     }
-    if !changed {
-        return Err(format!("Session {n} is not in the order table"));
+    (found && changed).then_some((out, prev))
+}
+
+/// Runs git in `dir` with bytes on stdin and extra environment; its stdout.
+fn git_raw(dir: &Path, args: &[&str], input: Option<&[u8]>, env: &[(&str, &Path)]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let mut cmd = Command::new(git_bin());
+    cmd.args(args).current_dir(dir).stdout(Stdio::piped()).stderr(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0").envs(crate::github::envs());
+    for (k, v) in env {
+        cmd.env(k, v);
     }
-    let mut out = lines.join("\n");
-    out.push('\n');
-    fs::write(&path, out).map_err(|e| e.to_string())?;
-    crate::flow::journal(ws, key, "plan_status", &format!("Session {n}: {status}"), vec![plan.file.clone()], "", true, json!({"n": n, "status": status, "prev": prev}));
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() });
+    let mut child = cmd.spawn().ok()?;
+    if let (Some(data), Some(mut stdin)) = (input, child.stdin.take()) {
+        stdin.write_all(data).ok()?;
+    }
+    let out = child.wait_with_output().ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
+/// v3.3: changes one file of the workspace's feature branch as a commit
+/// pushed to origin, made from origin's version of the file with git's
+/// plumbing: the working copy, its index and its branch are never touched
+/// (people and sessions pull it). `edit` gets the file as origin has it and
+/// gives the new text, or None when there is nothing to change. Tried again
+/// on a fresh fetch when another push got there first. The commit, or None
+/// when origin needed no change.
+pub fn commit_on_branch(ws: &Path, branch: &str, file: &str, message: &str, edit: impl Fn(&str) -> Option<String>) -> Result<Option<String>, String> {
+    let remote = format!("refs/remotes/origin/{branch}");
+    let index = std::env::temp_dir().join(format!("mewo-plan-index-{}-{}", std::process::id(), crate::config::now_ms()));
+    let mut last = String::new();
+    for _ in 0..3 {
+        git_long(ws, &["fetch", "-q", "origin", &format!("+refs/heads/{branch}:{remote}")]);
+        let base = git(ws, &["rev-parse", "--verify", "--quiet", &remote]).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).ok_or_else(|| format!("No origin/{branch} to commit on"))?;
+        let entry = git(ws, &["ls-tree", &base, "--", file]).unwrap_or_default();
+        let (mode, blob) = entry.split_whitespace().next().zip(entry.split_whitespace().nth(2)).map(|(m, b)| (m.to_string(), b.to_string())).ok_or_else(|| format!("{file} is not on origin/{branch}"))?;
+        let old = git_raw(ws, &["cat-file", "blob", &blob], None, &[]).ok_or_else(|| format!("Could not read {file} from origin/{branch}"))?;
+        let Some(new) = edit(&String::from_utf8_lossy(&old)) else { return Ok(None) };
+        let step = || -> Option<String> {
+            let blob = String::from_utf8(git_raw(ws, &["hash-object", "-w", "--stdin"], Some(new.as_bytes()), &[])?).ok()?;
+            let env = [("GIT_INDEX_FILE", index.as_path())];
+            git_raw(ws, &["read-tree", &base], None, &env)?;
+            git_raw(ws, &["update-index", "--cacheinfo", &format!("{mode},{},{file}", blob.trim())], None, &env)?;
+            let tree = String::from_utf8(git_raw(ws, &["write-tree"], None, &env)?).ok()?;
+            let commit = String::from_utf8(git_raw(ws, &["commit-tree", tree.trim(), "-p", &base, "-m", message], None, &[])?).ok()?;
+            Some(commit.trim().to_string())
+        };
+        let made = step();
+        let _ = fs::remove_file(&index);
+        let commit = made.ok_or_else(|| "Could not make the commit (no git identity in the workspace?)".to_string())?;
+        if git_long(ws, &["push", "-q", "origin", &format!("{commit}:refs/heads/{branch}")]).is_some() {
+            let _ = git(ws, &["update-ref", &remote, &commit]);
+            return Ok(Some(commit));
+        }
+        last = format!("Could not push to origin/{branch}");
+    }
+    Err(last)
+}
+
+/// Sets a session's status (and optional pull request link) in the plan's
+/// order table and section, as the owner records it (policy 8.4). "Merged"
+/// and "In review" are written with their link ("Merged: <link>"); a
+/// "**Pull request:**" line that already holds a link stays as it is. Since
+/// v3.3 it is a commit on the feature branch (`commit_on_branch`), never an
+/// edit of the workspace's working copy.
+pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> Result<Value, String> {
+    let f = find_feature(ws, key).ok_or_else(|| format!("No feature {key}"))?;
+    let plan = f.plan.as_ref().ok_or_else(|| "This feature has no session plan".to_string())?;
+    let word = status_word(status);
+    let cell = if !pr.is_empty() && !status.contains(':') && (word == "merged" || word == "in review") { format!("{}: {pr}", status.trim()) } else { status.trim().to_string() };
+    let prev = std::cell::RefCell::new(String::new());
+    let commit = commit_on_branch(ws, &f.branch, &plan.file, &format!("records({}): Session {n} {}", f.app, status.trim()), |text| {
+        plan_with_status(text, n, &cell, pr).map(|(out, was)| {
+            *prev.borrow_mut() = was;
+            out
+        })
+    })?;
+    // Shown at once, whatever the working copy says until it is pulled.
+    overlay_set(key, n, &cell);
     invalidate();
-    Ok(json!({"ok": true, "file": plan.file}))
+    let Some(hash) = commit else {
+        return Ok(json!({"ok": true, "file": plan.file, "committed": false, "note": "origin already had it"}));
+    };
+    crate::flow::journal(ws, key, "plan_status", &format!("Session {n}: {cell}"), vec![plan.file.clone()], &hash, true, json!({"n": n, "status": cell, "prev": prev.into_inner()}));
+    Ok(json!({"ok": true, "file": plan.file, "committed": true, "commit": hash}))
 }
 
 // ---------------------------------------------------------------------------
@@ -2307,4 +2429,106 @@ pub fn session_warning(cwd: &str) -> Option<String> {
         return Some(format!("Branch '{branch}' in {repo} does not follow feature/{{app}}-{{feature}} or fix/{{app}}-{{slug}} (policy 7.2)."));
     }
     None
+}
+
+#[cfg(test)]
+mod plan_status_tests {
+    use super::*;
+
+    const PLAN: &str = "# Plan\n\n## Order\n\n| # | Session | Level | Tier | Depends on | Owner | Status |\n|---|---|---|---|---|---|---|\n| 16 | FE · Wallpaper | Build | 2 | 8 | Mustafa.M | Merged: https://github.com/o/r/pull/26 |\n| 17 | FE · Domains | Build | 2 | 8 | Mustafa.M | Merged: https://github.com/o/r/pull/31, review follow-up https://github.com/o/r/pull/35 |\n| 18 | FE · DNS | Build | 2 | 8 | Mustafa.M | In review: https://github.com/o/r/pull/30 |\n| 26 | FE · Notifications | Build | 2 | 8 | Mustafa.M | Not started |\n\n## Session 17: FE · Domains\n\n**Pull request:** https://github.com/o/r/pull/31; review follow-up https://github.com/o/r/pull/35\n\n## Session 26: FE · Notifications\n\n**Pull request:**\r\n\r\nDone when: tests pass.\n";
+
+    #[test]
+    fn the_status_word_is_the_text_before_the_colon() {
+        assert_eq!(status_word("Merged: https://github.com/o/r/pull/26"), "merged");
+        assert_eq!(status_word(" In review: https://x "), "in review");
+        assert_eq!(status_word("Blocked: pnpm test fails"), "blocked");
+        assert_eq!(status_word("MERGED"), "merged");
+        assert_eq!(status_word("Not started"), "not started");
+    }
+
+    #[test]
+    fn rows_that_match_github_cause_no_write() {
+        assert_eq!(status_to_write("Merged: https://github.com/o/r/pull/26", "merged"), None);
+        assert_eq!(status_to_write("Merged: https://github.com/o/r/pull/31, review follow-up https://github.com/o/r/pull/35", "merged"), None);
+        assert_eq!(status_to_write("In review: https://github.com/o/r/pull/30", "review"), None);
+        assert_eq!(status_to_write("Merged", "merged"), None);
+        assert_eq!(status_to_write("In progress", "merged"), Some("Merged"));
+        assert_eq!(status_to_write("In progress", "review"), Some("In review"));
+        assert_eq!(status_to_write("Not started", "ready"), None);
+        // Every row of the plan above, as GitHub sees it: nothing to write.
+        for (cell, effective) in [("Merged: https://github.com/o/r/pull/26", "merged"), ("In review: https://github.com/o/r/pull/30", "review"), ("Not started", "ready")] {
+            assert_eq!(status_to_write(cell, effective), None, "{cell}");
+        }
+    }
+
+    #[test]
+    fn writing_the_same_cell_changes_nothing() {
+        assert!(plan_with_status(PLAN, 16, "Merged: https://github.com/o/r/pull/26", "https://github.com/o/r/pull/26").is_none());
+    }
+
+    #[test]
+    fn a_write_changes_only_its_row_and_an_empty_pull_request_line() {
+        let (out, prev) = plan_with_status(PLAN, 26, "Merged: https://github.com/o/r/pull/45", "https://github.com/o/r/pull/45").unwrap();
+        assert_eq!(prev, "Not started");
+        let changed: Vec<(&str, &str)> = PLAN.split_inclusive('\n').zip(out.split_inclusive('\n')).filter(|(a, b)| a != b).collect();
+        assert_eq!(changed.len(), 2, "{changed:?}");
+        assert!(out.contains("| 26 | FE · Notifications | Build | 2 | 8 | Mustafa.M | Merged: https://github.com/o/r/pull/45 |\n"));
+        // Its line ending is kept, and the rest of the file is byte for byte.
+        assert!(out.contains("**Pull request:** https://github.com/o/r/pull/45\r\n"));
+        assert_eq!(out.len() - PLAN.len(), changed.iter().map(|(a, b)| b.len() as isize - a.len() as isize).sum::<isize>() as usize);
+    }
+
+    #[test]
+    fn a_pull_request_line_with_links_is_left_alone() {
+        let (out, _) = plan_with_status(PLAN, 17, "In review: https://github.com/o/r/pull/35", "https://github.com/o/r/pull/35").unwrap();
+        assert!(out.contains("**Pull request:** https://github.com/o/r/pull/31; review follow-up https://github.com/o/r/pull/35\n"));
+    }
+
+    fn sh(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git").args(args).current_dir(dir).output().expect("git");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn a_commit_on_the_branch_leaves_the_working_copy_alone() {
+        let root = std::env::temp_dir().join(format!("mewo-plan-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (origin, ws) = (root.join("origin.git"), root.join("ws"));
+        fs::create_dir_all(&ws).unwrap();
+        sh(&root, &["init", "-q", "--bare", "-b", "feature/x", origin.to_str().unwrap()]);
+        sh(&ws, &["init", "-q", "-b", "feature/x"]);
+        sh(&ws, &["config", "user.name", "Test"]);
+        sh(&ws, &["config", "user.email", "test@example.com"]);
+        sh(&ws, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        fs::create_dir_all(ws.join("plan")).unwrap();
+        fs::write(ws.join("plan/SESSION_PLAN.md"), PLAN).unwrap();
+        fs::write(ws.join("other.md"), "other\n").unwrap();
+        sh(&ws, &["add", "-A"]);
+        sh(&ws, &["commit", "-q", "-m", "plan"]);
+        sh(&ws, &["push", "-q", "origin", "feature/x"]);
+        // A working copy with someone's uncommitted change, and something staged.
+        fs::write(ws.join("other.md"), "other, being edited\n").unwrap();
+        fs::write(ws.join("staged.md"), "staged\n").unwrap();
+        sh(&ws, &["add", "staged.md"]);
+        let head = sh(&ws, &["rev-parse", "HEAD"]);
+        let status = sh(&ws, &["status", "--porcelain"]);
+
+        // Rows that already say so: no commit at all.
+        let none = commit_on_branch(&ws, "feature/x", "plan/SESSION_PLAN.md", "records: none", |t| plan_with_status(t, 16, "Merged: https://github.com/o/r/pull/26", "").map(|(o, _)| o)).unwrap();
+        assert!(none.is_none());
+        assert_eq!(sh(&ws, &["rev-parse", "refs/remotes/origin/feature/x"]), head);
+
+        let made = commit_on_branch(&ws, "feature/x", "plan/SESSION_PLAN.md", "records: Session 26 Merged", |t| plan_with_status(t, 26, "Merged: https://github.com/o/r/pull/45", "https://github.com/o/r/pull/45").map(|(o, _)| o)).unwrap().unwrap();
+        // On origin: one commit, on top of the old head, changing that one file.
+        assert_eq!(sh(&origin, &["rev-parse", "feature/x"]), made);
+        assert_eq!(sh(&origin, &["rev-parse", &format!("{made}^")]), head);
+        assert_eq!(sh(&origin, &["diff", "--name-only", &head, &made]), "plan/SESSION_PLAN.md");
+        assert!(sh(&origin, &["show", &format!("{made}:plan/SESSION_PLAN.md")]).contains("| Mustafa.M | Merged: https://github.com/o/r/pull/45 |"));
+        // The working copy: same HEAD, same changes, the plan file as it was.
+        assert_eq!(sh(&ws, &["rev-parse", "HEAD"]), head);
+        assert_eq!(sh(&ws, &["status", "--porcelain"]), status);
+        assert_eq!(fs::read_to_string(ws.join("plan/SESSION_PLAN.md")).unwrap(), PLAN);
+        let _ = fs::remove_dir_all(&root);
+    }
 }

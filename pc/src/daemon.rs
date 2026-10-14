@@ -1239,16 +1239,11 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
             }
         }
     }
-    // Statuses in the plan follow what GitHub says.
+    // Statuses in the plan follow what GitHub says. Only the status word
+    // counts ("Merged: <link>" is merged): the sessions record their own, and
+    // the daemon corrects one only when the word is wrong, as a commit.
     for s in &plan.sessions {
-        let status = s.status.to_ascii_lowercase();
-        let want = if s.effective == "merged" && status != "merged" {
-            Some("Merged")
-        } else if s.effective == "review" && status != "in review" {
-            Some("In review")
-        } else {
-            None
-        };
+        let want = policy::status_to_write(&s.status, &s.effective);
         if let Some(w) = want {
             let (ws2, key, n, pr) = (ws.to_path_buf(), f.key.clone(), s.n, s.pr_url.clone());
             let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, w, &pr)).await;
@@ -1450,7 +1445,7 @@ async fn build_tick(state: Arc<AppState>, ws: &Path, f: &policy::Feature, st: &f
             }
         } else {
             let (ws2, key, n) = (ws.to_path_buf(), f.key.clone(), s.n);
-            let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, "Blocked", "")).await;
+            let _ = tokio::task::spawn_blocking(move || policy::set_plan_status(&ws2, &key, n, "Blocked: three attempts without a pull request", "")).await;
             flow::journal(ws, &f.key, "blocked", &format!("Session {} blocked: three attempts without a pull request", s.n), Vec::new(), "", false, json!({"session": s.n}));
             let _ = state.emit(Event { kind: "warning".to_string(), project: f.app.clone(), cwd: ws.to_string_lossy().into_owned(), message: format!("{} / {}: session {} is blocked after three attempts without a pull request. A person decides.", f.app, f.slug, s.n), detail: format!("{}|session|{}", f.key, s.n), ..Event::default() }, &Meta::default());
         }
