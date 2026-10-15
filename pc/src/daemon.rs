@@ -720,6 +720,20 @@ impl AppState {
 
     /// The session and its last `limit` chat items: the transcript merged by
     /// `ts` with the messages sent from phones. None for an unknown session.
+    /// v2.11: the reviewer sessions of a pull request.
+    pub fn reviewers_of(&self, pr_url: &str) -> Vec<String> {
+        lock(&self.sessions).reviewers_of(pr_url)
+    }
+
+    /// v2.11: a session's steps as the console's live view shows them, each
+    /// tool call with its input and result.
+    pub async fn live_steps(&self, session_id: &str, limit: usize) -> Option<(Session, Vec<transcript::Step>)> {
+        let session = self.find_session(session_id).ok()?;
+        let (path, _) = lock(&self.sessions).chat_source(&session.id)?;
+        let steps = if path.is_empty() { Vec::new() } else { tokio::task::spawn_blocking(move || transcript::steps(&path, limit)).await.unwrap_or_default() };
+        Some((session, steps))
+    }
+
     pub async fn chat(&self, session_id: &str, limit: usize) -> Option<(Session, Vec<ChatItem>)> {
         let source = lock(&self.sessions).chat_source(session_id);
         let (path, phone) = source?;

@@ -753,6 +753,16 @@ impl Sessions {
         out
     }
 
+    /// v2.11: the reviewer sessions of a pull request, wherever they run:
+    /// those briefed "Review the pull request <url>".
+    pub fn reviewers_of(&self, pr_url: &str) -> Vec<String> {
+        if pr_url.is_empty() {
+            return Vec::new();
+        }
+        let brief = format!("Review the pull request {pr_url} ");
+        self.entries.values().filter(|e| e.first_prompt.contains(&brief)).map(|e| e.session.id.clone()).collect()
+    }
+
     /// v1.7: the result of a match. Returns the snapshot when it changed.
     pub fn set_match(&mut self, id: &str, feature: String, n: u32) -> Option<Session> {
         let entry = self.entries.get_mut(id)?;

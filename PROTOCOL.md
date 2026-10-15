@@ -1113,3 +1113,47 @@ rollback) is a commit pushed to the feature branch, made from origin's
 copy of the plan with git's plumbing (`records(<app>): Session N …`): the
 workspace's working copy, index and branch are never written. Until the
 working copy is pulled, the daemon shows what it committed.
+
+# v3.4 — answering the open questions
+
+The console's OPEN QUESTIONS badge on a feature asks them one by one.
+`open_questions {feature, workspace}` → `{file, questions: [{n,
+question, raised_by, owner, due, blocks}]}`: the rows of the feature's
+`OPEN_QUESTIONS.md` without an answer, columns found by the table's
+header. `blocks` lists the plan sessions, not merged yet, whose Status
+or Depends on cell names the question (`OQ 28`, `question 28`); those
+come first, then by number.
+
+`answer_question {feature, workspace, n, answer, name}` writes the
+answer (line breaks as `<br>`, a pipe escaped) and today's date into
+the question's row, never over an answer already there, and journals it
+as `answer` with the name. Like a plan status, the file is written, not
+committed. A plan session whose Status starts with `Blocked` and names
+this question, in its Status or its Depends on, goes back to `Not
+started` once every question it names has an answer; the reply lists
+them in `unblocked`, and the build autopilot picks them up.
+
+# v3.5 — a session as it happens
+
+The console's session panel shows the session live, as a Claude Desktop
+conversation: its messages, and each tool call with what it ran and what
+came back. `session_live {session, limit}` (a session id or its prefix,
+the last `limit` steps, 300 by default) → `{session, steps: [{id, ts,
+kind (user | assistant | tool), text, tool, input, result, done,
+error}]}`. A tool call's `text` is its one-liner, `input` the call in
+full (a command, an edit as `- ` and `+ ` lines, a path), `result` what
+came back, cut at 4000 characters; `done` once it came back. Subagent
+steps (sidechains) are left out. The console asks every 1.5 seconds and
+updates only the steps that changed.
+
+`session_detail`'s `live` now lists the session's runs (`kind: "run"`)
+and its reviewers (`kind: "review"`): the sessions briefed "Review the
+pull request <its url>", wherever they run, and those in its review
+worktree. A run is tied to its plan session by its `-s<N>` branch (v3.1);
+a reviewer, in its `…-review` worktree or briefed "Review the pull
+request" anywhere, belongs to the feature but is not an attempt.
+
+A pull request belongs to one session: the one the plan names, else the
+one on the session's own branch; a title or description that says
+"Session N" only counts in the session's own repository, for a pull
+request no other session has.

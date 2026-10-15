@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -116,6 +117,179 @@ pub fn read(path: &str, limit: usize) -> Transcript {
             tr
         }
         Err(_) => Transcript::default(),
+    }
+}
+
+/// v2.11: one step of a session as the console's live view shows it: a
+/// message, or a tool call with what it was asked and, once it came back,
+/// what it returned.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Step {
+    pub id: String,
+    pub ts: u64,
+    /// `user`, `assistant` or `tool`.
+    pub kind: String,
+    /// The message, or the tool call's one-liner.
+    pub text: String,
+    /// The tool's name, for a tool call.
+    pub tool: String,
+    /// The call's input in full: a command, an edit as removed and added
+    /// lines, a path.
+    pub input: String,
+    pub result: String,
+    /// The result came back.
+    pub done: bool,
+    pub error: bool,
+}
+
+/// Input and result of a tool call are cut here, for the console.
+const MAX_STEP_CHARS: usize = 4000;
+
+/// The last `limit` steps of the transcript at `path`; empty when it cannot
+/// be read.
+pub fn steps(path: &str, limit: usize) -> Vec<Step> {
+    // The console asks every second or two; an unchanged file is not parsed again.
+    static LAST: Mutex<Option<(String, FileKey, usize, Vec<Step>)>> = Mutex::new(None);
+    let key = file_key(path);
+    if let (Some(k), Ok(last)) = (key, LAST.lock()) {
+        if let Some((p, lk, ll, s)) = last.as_ref() {
+            if p == path && *lk == k && *ll == limit {
+                return s.clone();
+            }
+        }
+    }
+    let s = read_tail(Path::new(path)).map(|bytes| parse_steps(&bytes, limit)).unwrap_or_default();
+    if let (Some(k), Ok(mut last)) = (key, LAST.lock()) {
+        *last = Some((path.to_string(), k, limit, s.clone()));
+    }
+    s
+}
+
+fn parse_steps(bytes: &[u8], limit: usize) -> Vec<Step> {
+    let mut out: Vec<Step> = Vec::new();
+    // tool_use id → its step, for the tool_result that comes back later.
+    let mut calls: HashMap<String, usize> = HashMap::new();
+    let mut last_ts: u64 = 0;
+    for (n, line) in bytes.split(|&b| b == b'\n').enumerate() {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let Ok(v) = serde_json::from_slice::<Value>(line) else { continue };
+        let kind = str_of(&v, "type");
+        if !matches!(kind, "user" | "assistant") || flag(&v, "isSidechain") || flag(&v, "isMeta") {
+            continue;
+        }
+        if let Some(ts) = v.get("timestamp").and_then(Value::as_str).and_then(parse_ts) {
+            last_ts = ts;
+        }
+        let base = match v.get("uuid").and_then(Value::as_str) {
+            Some(u) if !u.is_empty() => u.to_string(),
+            _ => format!("line-{n}"),
+        };
+        let content = v.get("message").and_then(|m| m.get("content"));
+        let step = |id: String, kind: &str, text: String| Step { id, ts: last_ts, kind: kind.to_string(), text: truncate_chars(&text, MAX_ITEM_CHARS), ..Step::default() };
+        if kind == "user" {
+            if let Some((text, _)) = user_text(content, &mut HashSet::new()) {
+                out.push(step(base.clone(), "user", text));
+            }
+            for b in content.and_then(Value::as_array).into_iter().flatten() {
+                if str_of(b, "type") != "tool_result" {
+                    continue;
+                }
+                if let Some(&i) = calls.get(str_of(b, "tool_use_id")) {
+                    let s = &mut out[i];
+                    s.result = truncate_chars(&result_text(b.get("content")), MAX_STEP_CHARS);
+                    s.done = true;
+                    s.error = flag(b, "is_error");
+                }
+            }
+            continue;
+        }
+        let blocks: Vec<&Value> = match content {
+            Some(Value::String(_)) => content.into_iter().collect(),
+            Some(Value::Array(a)) => a.iter().collect(),
+            _ => Vec::new(),
+        };
+        for (i, b) in blocks.into_iter().enumerate() {
+            let id = if i == 0 { base.clone() } else { format!("{base}:{i}") };
+            // What Claude said, without the suggestion line meant for the phone's buttons.
+            let said = match b {
+                Value::String(s) => suggest::split(s.trim()).0,
+                _ if str_of(b, "type") == "text" => suggest::split(str_of(b, "text").trim()).0,
+                _ => String::new(),
+            };
+            if !said.trim().is_empty() {
+                out.push(step(id, "assistant", said.trim().to_string()));
+                continue;
+            }
+            match str_of(b, "type") {
+                "tool_use" => {
+                    let name = str_of(b, "name");
+                    let input = b.get("input").unwrap_or(&Value::Null);
+                    calls.insert(str_of(b, "id").to_string(), out.len());
+                    out.push(Step { tool: name.to_string(), input: truncate_chars(&tool_input(name, input), MAX_STEP_CHARS), ..step(id, "tool", tool_line(name, input)) });
+                }
+                _ => {}
+            }
+        }
+    }
+    let excess = out.len().saturating_sub(limit);
+    out.drain(..excess);
+    out
+}
+
+/// A tool call's input in full, as the console shows it when opened.
+fn tool_input(name: &str, input: &Value) -> String {
+    let field = |k: &str| str_of(input, k).to_string();
+    let edit = |old: &str, new: &str| {
+        let mut lines: Vec<String> = old.lines().map(|l| format!("- {l}")).collect();
+        lines.extend(new.lines().map(|l| format!("+ {l}")));
+        lines.join("\n")
+    };
+    match name {
+        "Bash" => field("command"),
+        "Read" => {
+            let range = match (input.get("offset").and_then(Value::as_u64), input.get("limit").and_then(Value::as_u64)) {
+                (Some(o), Some(l)) => format!(" (lines {o} to {})", o + l),
+                (Some(o), None) => format!(" (from line {o})"),
+                _ => String::new(),
+            };
+            format!("{}{range}", field("file_path"))
+        }
+        "Edit" => format!("{}\n{}", field("file_path"), edit(str_of(input, "old_string"), str_of(input, "new_string"))),
+        "MultiEdit" => {
+            let edits = input.get("edits").and_then(Value::as_array).map(|a| a.iter().map(|e| edit(str_of(e, "old_string"), str_of(e, "new_string"))).collect::<Vec<_>>().join("\n…\n")).unwrap_or_default();
+            format!("{}\n{edits}", field("file_path"))
+        }
+        "Write" => format!("{}\n{}", field("file_path"), field("content")),
+        "Grep" | "Glob" => [("pattern", ""), ("path", "in "), ("glob", "files "), ("output_mode", "")].iter().filter(|(k, _)| !str_of(input, k).is_empty()).map(|(k, p)| format!("{p}{}", str_of(input, k))).collect::<Vec<_>>().join(" · "),
+        "TodoWrite" => input
+            .get("todos")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(|t| format!("{} {}", match str_of(t, "status") { "completed" => "[x]", "in_progress" => "[~]", _ => "[ ]" }, str_of(t, "content"))).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default(),
+        "Agent" | "Task" => format!("{}\n\n{}", field("description"), field("prompt")),
+        "WebFetch" => format!("{}\n{}", field("url"), field("prompt")),
+        "WebSearch" => field("query"),
+        _ => serde_json::to_string_pretty(input).unwrap_or_default(),
+    }
+}
+
+/// What a tool_result says: its text, an image as `[image]`.
+fn result_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .map(|b| match str_of(b, "type") {
+                "text" => str_of(b, "text").to_string(),
+                "image" => "[image]".to_string(),
+                _ => String::new(),
+            })
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
     }
 }
 
@@ -765,4 +939,30 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steps_pair_each_tool_call_with_its_result() {
+        let lines = [
+            r#"{"type":"user","uuid":"u1","timestamp":"2026-10-13T10:00:00Z","message":{"content":"Build session 18"}}"#,
+            r#"{"type":"assistant","uuid":"a1","timestamp":"2026-10-13T10:00:05Z","message":{"content":[{"type":"text","text":"Checking the branch."},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git branch --show-current\ngit status"}}]}}"#,
+            r#"{"type":"user","uuid":"u2","timestamp":"2026-10-13T10:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"feature/x-s18"}]}}"#,
+            r#"{"type":"assistant","uuid":"a2","isSidechain":true,"message":{"content":[{"type":"text","text":"a subagent's own step"}]}}"#,
+            r#"{"type":"assistant","uuid":"a3","timestamp":"2026-10-13T10:00:09Z","message":{"content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"src/a.ts","old_string":"left","new_string":"start"}}]}}"#,
+        ]
+        .join("\n");
+        let steps = parse_steps(lines.as_bytes(), 100);
+        let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["user", "assistant", "tool", "tool"]);
+        assert_eq!((steps[2].tool.as_str(), steps[2].text.as_str()), ("Bash", "git branch --show-current"));
+        assert_eq!(steps[2].input, "git branch --show-current\ngit status");
+        assert_eq!((steps[2].result.as_str(), steps[2].done, steps[2].error), ("feature/x-s18", true, false));
+        assert_eq!(steps[3].input, "src/a.ts\n- left\n+ start");
+        assert!(!steps[3].done, "an edit without its result yet is still running");
+        assert_eq!(parse_steps(lines.as_bytes(), 2).len(), 2);
+    }
 }

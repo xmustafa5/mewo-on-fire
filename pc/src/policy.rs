@@ -1560,8 +1560,13 @@ pub fn match_session(cwd: &str, branch: &str, first_prompt: &str) -> (String, u3
     }
     let dir = features.join(&slug);
     let key = format!("{app}/{slug}");
-    // A review belongs to the feature, not to the plan session's attempts.
-    let n = if cwd.trim_end_matches('/').ends_with("-review") {
+    // A review belongs to the feature, not to the plan session's attempts: in its
+    // `…-review` worktree, or wherever its brief opens as a reviewer's.
+    let brief = first_prompt.trim_start();
+    let reviewer = cwd.trim_end_matches('/').ends_with("-review")
+        || brief.starts_with("Review the pull request")
+        || brief.starts_with("You review in your own git worktree");
+    let n = if reviewer {
         0
     } else if from_branch != 0 {
         from_branch
@@ -1571,24 +1576,64 @@ pub fn match_session(cwd: &str, branch: &str, first_prompt: &str) -> (String, u3
     (key, n)
 }
 
+/// The pull request of each plan session, as an index into `prs`: the one
+/// on the branch the daemon gives the session (`<feature branch>-s<N>`),
+/// else the one the plan names unless it is on another session's branch (a
+/// session that wrote its link into the wrong section); else one titled or
+/// described as "Session N", in the session's own repository and not already
+/// another session's (a description that mentions the next session is not
+/// that session's).
+fn pick_prs(sessions: &[PlanSession], branch: &str, prs: &[Value]) -> Vec<Option<usize>> {
+    let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let own: Vec<Option<usize>> = sessions.iter().map(|ps| prs.iter().position(|p| s(p, "branch").eq_ignore_ascii_case(&format!("{branch}-s{}", ps.n)))).collect();
+    let mut claimed: HashSet<usize> = own.iter().flatten().copied().collect();
+    let mut picks: Vec<Option<usize>> = sessions
+        .iter()
+        .zip(&own)
+        .map(|(ps, own)| {
+            let named = ps.pr.trim_matches(|c| c == '<' || c == '>');
+            own.or_else(|| prs.iter().position(|p| !named.is_empty() && s(p, "url") == named).filter(|i| !claimed.contains(i)))
+        })
+        .collect();
+    claimed.extend(picks.iter().flatten().copied());
+    for (ps, pick) in sessions.iter().zip(picks.iter_mut()) {
+        if pick.is_some() {
+            continue;
+        }
+        let needle_a = format!("session {}:", ps.n);
+        let needle_b = format!("session {} ", ps.n);
+        let needle_c = format!("session {}\n", ps.n);
+        // `https://github.com/<owner>/<repo>/pull/<n>` against `code/<repo>`.
+        let own_repo = ps.repo.rsplit('/').next().unwrap_or("");
+        *pick = prs
+            .iter()
+            .enumerate()
+            .find(|(i, p)| {
+                let url = s(p, "url");
+                let repo = url.split('/').nth(4).unwrap_or("");
+                if claimed.contains(i) || (!own_repo.is_empty() && !repo.eq_ignore_ascii_case(own_repo)) {
+                    return false;
+                }
+                let t = format!("{}\n{}", s(p, "title").to_ascii_lowercase(), s(p, "body").to_ascii_lowercase());
+                t.starts_with(&needle_a) || t.starts_with(&needle_b) || t.contains(&needle_c) || t.contains(&format!("\n{needle_b}")) || t.contains(&format!("\n{needle_a}"))
+            })
+            .map(|(i, _)| i);
+        if let Some(i) = *pick {
+            claimed.insert(i);
+        }
+    }
+    picks
+}
+
 /// Fills the live part of a feature's plan from the sessions the daemon
 /// knows and the pull requests into the feature branch.
 pub fn enrich(f: &mut Feature, sessions: &[Session], prs: &[Value]) {
     let Some(plan) = f.plan.as_mut() else { return };
     let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let mut merged = 0u32;
-    for ps in &mut plan.sessions {
-        // The pull request: named in the plan, or titled "Session N".
-        let needle_a = format!("session {}:", ps.n);
-        let needle_b = format!("session {} ", ps.n);
-        let needle_c = format!("session {}\n", ps.n);
-        let pr = prs.iter().find(|p| !ps.pr.is_empty() && s(p, "url") == ps.pr.trim_matches(|c| c == '<' || c == '>')).or_else(|| {
-            prs.iter().find(|p| {
-                let t = format!("{}\n{}", s(p, "title").to_ascii_lowercase(), s(p, "body").to_ascii_lowercase());
-                t.starts_with(&needle_a) || t.starts_with(&needle_b) || t.contains(&needle_c) || t.contains(&format!("\n{needle_b}")) || t.contains(&format!("\n{needle_a}"))
-            })
-        });
-        if let Some(pr) = pr {
+    let picks = pick_prs(&plan.sessions, &f.branch, prs);
+    for (ps, pick) in plan.sessions.iter_mut().zip(picks) {
+        if let Some(pr) = pick.map(|i| &prs[i]) {
             ps.pr_state = s(pr, "state").to_ascii_lowercase();
             ps.pr_url = s(pr, "url");
             ps.pr_number = pr.get("number").and_then(Value::as_u64).unwrap_or(0);
@@ -2128,6 +2173,207 @@ pub fn set_plan_status(ws: &Path, key: &str, n: u32, status: &str, pr: &str) -> 
 }
 
 // ---------------------------------------------------------------------------
+// open questions (v2.10)
+// ---------------------------------------------------------------------------
+
+/// Where the columns of `OPEN_QUESTIONS.md` are, by its header; the
+/// template's order (`# | Question | Raised by | Owner | Due | Answer |
+/// Answered on`) when there is none.
+struct QuestionCols {
+    question: usize,
+    raised: usize,
+    owner: usize,
+    due: usize,
+    answer: usize,
+    on: Option<usize>,
+}
+
+fn question_cols(text: &str) -> QuestionCols {
+    let head = text.lines().map(row_cells).find(|c| c.first().is_some_and(|x| x == "#") && c.iter().any(|x| x.eq_ignore_ascii_case("answer")));
+    let Some(head) = head else {
+        return QuestionCols { question: 1, raised: 2, owner: 3, due: 4, answer: 5, on: Some(6) };
+    };
+    let at = |name: &str, or: usize| head.iter().position(|x| x.eq_ignore_ascii_case(name)).unwrap_or(or);
+    QuestionCols {
+        question: at("question", 1),
+        raised: at("raised by", 2),
+        owner: at("owner", 3),
+        due: at("due", 4),
+        answer: at("answer", 5),
+        on: head.iter().position(|x| x.eq_ignore_ascii_case("answered on")),
+    }
+}
+
+/// The cells of a table row, an escaped pipe (`\|`) staying in its cell.
+fn row_cells(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let Some(t) = t.strip_prefix('|') else { return Vec::new() };
+    let t = t.strip_suffix('|').filter(|r| !r.ends_with('\\')).unwrap_or(t);
+    let mut out = vec![String::new()];
+    let mut prev = ' ';
+    for ch in t.chars() {
+        if ch == '|' && prev != '\\' {
+            out.push(String::new());
+        } else if let Some(c) = out.last_mut() {
+            c.push(ch);
+        }
+        prev = ch;
+    }
+    out.into_iter().map(|c| c.trim().to_string()).collect()
+}
+
+/// The numbers of the questions in `text` without an answer.
+fn unanswered(text: &str, col: &QuestionCols) -> HashSet<u32> {
+    text.lines()
+        .map(row_cells)
+        .filter_map(|c| {
+            let n = c.first()?.parse::<u32>().ok()?;
+            let get = |i: usize| c.get(i).map(|x| clean(x)).unwrap_or_default();
+            (!get(col.question).is_empty() && get(col.answer).is_empty()).then_some(n)
+        })
+        .collect()
+}
+
+/// Open question numbers a plan cell names: `OQ 28`, `OQ #28`, `question 28`.
+fn question_refs(s: &str) -> Vec<u32> {
+    let lower = s.to_ascii_lowercase();
+    let b = lower.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if !b[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        let before = lower[..start].trim_end().trim_end_matches('#').trim_end();
+        if before.ends_with("oq") || before.ends_with("question") || before.ends_with("questions") {
+            if let Ok(n) = lower[start..i].parse::<u32>() {
+                out.push(n);
+            }
+        }
+    }
+    out
+}
+
+/// The plan's order table: `(session, status, depends on)` per row.
+fn plan_order(text: &str) -> Vec<(u32, String, String)> {
+    let mut out = Vec::new();
+    let mut in_order = false;
+    let (mut status_col, mut dep_col) = (6usize, 5usize);
+    for l in text.lines() {
+        if let Some(h) = l.strip_prefix("## ") {
+            in_order = h.trim().eq_ignore_ascii_case("order");
+            continue;
+        }
+        if !in_order {
+            continue;
+        }
+        let c = cells(l);
+        if c.len() >= 4 && c[0].parse::<u32>().is_err() && c.iter().any(|h| h == "#") {
+            status_col = c.iter().position(|h| h.eq_ignore_ascii_case("status")).unwrap_or(status_col);
+            dep_col = c.iter().position(|h| h.to_ascii_lowercase().starts_with("depends")).unwrap_or(dep_col);
+            continue;
+        }
+        let Some(n) = c.first().and_then(|x| x.parse::<u32>().ok()) else { continue };
+        out.push((n, c.get(status_col).cloned().unwrap_or_default(), c.get(dep_col).cloned().unwrap_or_default()));
+    }
+    out
+}
+
+/// v2.10: the questions of a feature without an answer, for the console
+/// to ask one by one: those a plan session waits for (`blocks`) first,
+/// then by number.
+pub fn open_questions(ws: &Path, key: &str) -> Result<Value, String> {
+    let f = find_feature(ws, key).ok_or_else(|| format!("No feature {key}"))?;
+    let file = format!("{}/OPEN_QUESTIONS.md", f.dir);
+    let text = fs::read_to_string(ws.join(&file)).map_err(|e| format!("Could not read {file}: {e}"))?;
+    let col = question_cols(&text);
+    let open = unanswered(&text, &col);
+    let order = f.plan.as_ref().and_then(|p| read_lines(&ws.join(&p.file))).map(|t| plan_order(&t)).unwrap_or_default();
+    let mut list: Vec<Value> = Vec::new();
+    for c in text.lines().map(row_cells) {
+        let Some(n) = c.first().and_then(|x| x.parse::<u32>().ok()) else { continue };
+        if !open.contains(&n) {
+            continue;
+        }
+        let get = |i: usize| c.get(i).map(|x| x.replace("\\|", "|")).unwrap_or_default();
+        // Sessions not merged yet that name it in their status or dependencies.
+        let blocks: Vec<u32> = order
+            .iter()
+            .filter(|(_, status, deps)| !status.eq_ignore_ascii_case("merged") && (question_refs(status).contains(&n) || question_refs(deps).contains(&n)))
+            .map(|(s, _, _)| *s)
+            .collect();
+        list.push(json!({"n": n, "question": get(col.question), "raised_by": get(col.raised), "owner": get(col.owner), "due": get(col.due), "blocks": blocks}));
+    }
+    list.sort_by_key(|q| (q["blocks"].as_array().is_none_or(|a| a.is_empty()), q["n"].as_u64().unwrap_or(0)));
+    Ok(json!({"ok": true, "file": file, "questions": list}))
+}
+
+/// The text of `OPEN_QUESTIONS.md` with `answer` and `date` in question
+/// `n`'s row; an error when there is no such row or it has an answer.
+fn fill_answer(text: &str, col: &QuestionCols, n: u32, answer: &str, date: &str) -> Result<String, String> {
+    // A table cell is one line, and a bare pipe would end it.
+    let answer = answer.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("<br>").replace('|', "\\|");
+    if answer.is_empty() {
+        return Err("An answer is needed".to_string());
+    }
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let row = lines.iter().position(|l| row_cells(l).first().and_then(|x| x.parse::<u32>().ok()) == Some(n)).ok_or_else(|| format!("There is no question {n}"))?;
+    let mut c = row_cells(&lines[row]);
+    if !c.get(col.answer).map(|x| clean(x)).unwrap_or_default().is_empty() {
+        return Err(format!("Question {n} has an answer already"));
+    }
+    let width = col.answer.max(col.on.unwrap_or(0)) + 1;
+    if c.len() < width {
+        c.resize(width, String::new());
+    }
+    c[col.answer] = answer;
+    if let Some(on) = col.on {
+        c[on] = date.to_string();
+    }
+    lines[row] = format!("| {} |", c.join(" | "));
+    let mut out = lines.join("\n");
+    out.push('\n');
+    Ok(out)
+}
+
+/// v2.10: writes an answer and today's date into a question's row of
+/// `OPEN_QUESTIONS.md` (never over an answer already there). A session the
+/// plan holds as Blocked on questions that all have answers now goes back
+/// to Not started, for the build autopilot to pick up.
+pub fn answer_question(ws: &Path, key: &str, n: u32, answer: &str, name: &str) -> Result<Value, String> {
+    let f = find_feature(ws, key).ok_or_else(|| format!("No feature {key}"))?;
+    let file = format!("{}/OPEN_QUESTIONS.md", f.dir);
+    let path = ws.join(&file);
+    let text = fs::read_to_string(&path).map_err(|e| format!("Could not read {file}: {e}"))?;
+    let col = question_cols(&text);
+    let out = fill_answer(&text, &col, n, answer, &today())?;
+    fs::write(&path, &out).map_err(|e| format!("Could not write {file}: {e}"))?;
+    let name = name.trim();
+    let title = if name.is_empty() { format!("Open question {n} answered") } else { format!("Open question {n} answered by {name}") };
+    crate::flow::journal(ws, key, "answer", &title, vec![file.clone()], "", false, json!({"n": n, "name": name}));
+    invalidate();
+    let open = unanswered(&out, &col);
+    let mut unblocked: Vec<u32> = Vec::new();
+    if let Some(text) = f.plan.as_ref().and_then(|p| read_lines(&ws.join(&p.file))) {
+        for (s, status, deps) in plan_order(&text) {
+            if !status.to_ascii_lowercase().starts_with("blocked") {
+                continue;
+            }
+            let refs: Vec<u32> = question_refs(&status).into_iter().chain(question_refs(&deps)).collect();
+            if refs.contains(&n) && refs.iter().all(|q| !open.contains(q)) && set_plan_status(ws, key, s, "Not started", "").is_ok() {
+                unblocked.push(s);
+            }
+        }
+    }
+    Ok(json!({"ok": true, "file": file, "unblocked": unblocked}))
+}
+
+// ---------------------------------------------------------------------------
 // the self-check scan (Checklists F and H, policy 8.5)
 // ---------------------------------------------------------------------------
 
@@ -2530,5 +2776,77 @@ mod plan_status_tests {
         assert_eq!(sh(&ws, &["status", "--porcelain"]), status);
         assert_eq!(fs::read_to_string(ws.join("plan/SESSION_PLAN.md")).unwrap(), PLAN);
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const QUESTIONS: &str = "# Open questions\n\n| # | Question | Raised by | Owner | Due | Answer | Answered on |\n|---|---|---|---|---|---|---|\n| 1 | Asked and answered? | Design | Product lead | Handoff | Yes. | 2026-10-11 |\n| 28 | New wording for the live header? | Session planning | Design lead | Before session 14 |  |  |\n| 30 | A placeholder answer? | Design | Product lead | Handoff | — |  |\n";
+
+    #[test]
+    fn question_refs_names_open_questions_only() {
+        assert_eq!(question_refs("9, 12; OQ 28 answered"), vec![28]);
+        assert_eq!(question_refs("Blocked: OQ 28 (live and stale copy) has no answer"), vec![28]);
+        assert_eq!(question_refs("Blocked (OQ #7), question 9"), vec![7, 9]);
+        assert!(question_refs("3, 5, 6").is_empty());
+    }
+
+    #[test]
+    fn row_cells_keeps_an_escaped_pipe() {
+        assert_eq!(row_cells(r"| 1 | a \| b | c |"), vec!["1", r"a \| b", "c"]);
+        assert!(row_cells("not a row").is_empty());
+    }
+
+    #[test]
+    fn unanswered_reads_the_answer_column_by_its_header() {
+        let col = question_cols(QUESTIONS);
+        assert_eq!((col.answer, col.on), (5, Some(6)));
+        let mut open: Vec<u32> = unanswered(QUESTIONS, &col).into_iter().collect();
+        open.sort();
+        assert_eq!(open, vec![28, 30]);
+    }
+
+    #[test]
+    fn fill_answer_writes_one_row_and_never_over_an_answer() {
+        let col = question_cols(QUESTIONS);
+        let out = fill_answer(QUESTIONS, &col, 28, "Live · updated now\n\nReconnecting | retry", "2026-10-13").unwrap();
+        assert!(out.contains(r"| 28 | New wording for the live header? | Session planning | Design lead | Before session 14 | Live · updated now<br>Reconnecting \| retry | 2026-10-13 |"));
+        assert!(out.contains("| 1 | Asked and answered? | Design | Product lead | Handoff | Yes. | 2026-10-11 |"));
+        assert_eq!(unanswered(&out, &col).into_iter().collect::<Vec<_>>(), vec![30]);
+        assert!(fill_answer(QUESTIONS, &col, 1, "Again", "2026-10-13").is_err());
+        assert!(fill_answer(QUESTIONS, &col, 99, "Nobody asked", "2026-10-13").is_err());
+        assert!(fill_answer(QUESTIONS, &col, 28, " \n ", "2026-10-13").is_err());
+    }
+
+    #[test]
+    fn a_pull_request_belongs_to_one_session_in_its_own_repository() {
+        let session = |n: u32, repo: &str| PlanSession { n, repo: repo.to_string(), ..PlanSession::default() };
+        let sessions = [session(14, "code/Contact-Center"), session(19, "code/torch-business-os"), session(20, "code/Contact-Center")];
+        let prs = [
+            // Session 19's, in the shell, whose description mentions session 20.
+            json!({"url": "https://github.com/TORCH-Corp/torch-business-os/pull/18", "branch": "feature/x-s19", "title": "feat(core): open the app on the link's path (CC session 19)", "body": "Why\nSession 20 makes Contact Center open the route."}),
+            json!({"url": "https://github.com/TORCH-Corp/Contact-Center/pull/13", "branch": "feature/x-s14", "title": "Session 14: live Inbox", "body": ""}),
+        ];
+        assert_eq!(pick_prs(&sessions, "feature/x", &prs), vec![Some(1), Some(0), None]);
+        // Described as session 20, in Contact Center and nobody's branch: session 20's.
+        let more = [prs[0].clone(), prs[1].clone(), json!({"url": "https://github.com/TORCH-Corp/Contact-Center/pull/14", "branch": "hand-made", "title": "Open the route the shell sends", "body": "Session 20: navigation"})];
+        assert_eq!(pick_prs(&sessions, "feature/x", &more), vec![Some(1), Some(0), Some(2)]);
+        // Session 20's run wrote its link into session 18's section too: the
+        // pull request on session 20's branch stays session 20's.
+        let mut planned = [session(18, "code/Contact-Center"), session(20, "code/Contact-Center")];
+        planned[0].pr = "https://github.com/TORCH-Corp/Contact-Center/pull/14".to_string();
+        planned[1].pr = planned[0].pr.clone();
+        let fourteen = [json!({"url": "https://github.com/TORCH-Corp/Contact-Center/pull/14", "branch": "feature/x-s20", "title": "Session 20: open the route the shell sends", "body": ""})];
+        assert_eq!(pick_prs(&planned, "feature/x", &fourteen), vec![None, Some(0)]);
+    }
+
+    #[test]
+    fn plan_order_reads_status_and_dependencies_by_header() {
+        let plan = "## Order\n\n| # | Session | Repository | Level | Tier | Depends on | Owner | Status |\n|---|---|---|---|---|---|---|---|\n| 9 | Realtime | backend | Architecture | 1 | 3, 5, 6 | Ali | Merged |\n| 14 | Live updates | Contact-Center | Architecture | 1 | 9, 12; OQ 28 answered | Ali | Blocked (OQ 28) |\n\n## Session 9: Realtime\n";
+        let rows = plan_order(plan);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1], (14, "Blocked (OQ 28)".to_string(), "9, 12; OQ 28 answered".to_string()));
     }
 }

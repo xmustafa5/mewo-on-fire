@@ -310,20 +310,21 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 #toast-undo:hover { background: var(--hover); }
 
 /* ---------- sheets: centred, over a dimmed window ---------- */
-#addpc, #pickprd, #dsys, #newsess, #sdetail, #bigmap, #preview {
+#addpc, #pickprd, #dsys, #oqask, #newsess, #sdetail, #bigmap, #preview {
   position: fixed; z-index: 40; top: 72px; left: 50%; transform: translateX(-50%); display: none;
   max-height: calc(100vh - 96px); overflow: auto; color: var(--text);
   background: var(--bg-raised); border-radius: var(--r-panel); box-shadow: var(--shadow), 0 0 0 100vmax var(--backdrop);
 }
-#addpc.on, #pickprd.on, #dsys.on { display: block; }
-#addpc, #pickprd, #dsys, #newsess { width: min(540px, calc(100vw - 32px)); padding: 18px 20px; }
+#addpc.on, #pickprd.on, #dsys.on, #oqask.on { display: block; }
+#addpc, #pickprd, #dsys, #oqask, #newsess { width: min(540px, calc(100vw - 32px)); padding: 18px 20px; }
 #newsess { width: min(440px, calc(100vw - 32px)); }
-#addpc .t, #pickprd .t, #dsys .t, #newsess .t { font-size: 15px; font-weight: 600; }
-#addpc .m, #newsess .m { margin: 4px 0 12px; color: var(--text-2); font-size: 12.5px; line-height: 1.45; }
+#oqask { width: min(620px, calc(100vw - 32px)); }
+#addpc .t, #pickprd .t, #dsys .t, #oqask .t, #newsess .t { font-size: 15px; font-weight: 600; }
+#addpc .m, #oqask .m, #newsess .m { margin: 4px 0 12px; color: var(--text-2); font-size: 12.5px; line-height: 1.45; }
 #pickprd .m, #dsys .m { margin: 6px 0 12px; color: var(--text-2); font: 600 10.5px/1.6 var(--sans); letter-spacing: .02em; }
-#addpc .msg, #pickprd .msg, #dsys .msg, #newsess .msg { min-height: 16px; margin-top: 8px; font-size: 12px; color: var(--text-2); }
-#addpc .msg.bad, #newsess .msg.bad { color: var(--waiting); }
-#addpc .row2, #pickprd .row2, #dsys .row2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+#addpc .msg, #pickprd .msg, #dsys .msg, #oqask .msg, #newsess .msg { min-height: 16px; margin-top: 8px; font-size: 12px; color: var(--text-2); }
+#addpc .msg.bad, #oqask .msg.bad, #newsess .msg.bad { color: var(--waiting); }
+#addpc .row2, #pickprd .row2, #dsys .row2, #oqask .row2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .found { max-height: 200px; overflow: auto; margin-bottom: 10px; border: .5px solid var(--sep-2); border-radius: 8px; }
 .found .row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 8px 10px; }
 .found .row + .row { border-top: .5px solid var(--sep); }
@@ -337,6 +338,16 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 #pickprd .found .row .v.ok { color: var(--done); }
 #dsys label { display: block; margin: 10px 0 4px; font: 600 10.5px var(--sans); letter-spacing: .02em; color: var(--text-2); }
 #dsys input { display: block; width: 100%; }
+/* v2.10: a feature's open questions, asked one by one. */
+#oqask .m .w { color: var(--ready); font-weight: 600; }
+#oqask .q {
+  max-height: 38vh; overflow: auto; margin: 0 0 12px; padding: 10px 12px; border-radius: var(--r-card); background: var(--fill);
+  font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+#oqask .q:empty { display: none; }
+#oqask textarea { display: block; width: 100%; min-height: 110px; font: 13px/1.5 var(--sans); }
+#oqask textarea:disabled { background: var(--fill); color: var(--text-2); }
+#oqask .msg.ok { color: var(--done); }
 #newsess label { display: block; margin: 12px 0 5px; font: 500 12px var(--sans); color: var(--text-2); }
 #newsess select, #newsess textarea { display: block; width: 100%; }
 #newsess textarea { min-height: 96px; line-height: 1.4; }
@@ -365,6 +376,64 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 #sdetail .acts { margin: 10px 0 0; }
 #sdetail .bar { height: 5px; margin: 8px 0; border-radius: 3px; background: var(--fill-2); overflow: hidden; }
 #sdetail .bar i { display: block; height: 100%; background: var(--ready); }
+/* v2.11: the session as it happens, like a Claude Desktop conversation, its cards beside it. */
+#sdetail.live { width: min(1240px, calc(100vw - 32px)); height: calc(100vh - 88px); }
+#sdetail.live .body { flex: 1; min-height: 0; overflow: hidden; padding: 0; }
+#sdetail .grid.one { grid-template-columns: 1fr; }
+.sd-cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; height: 100%; }
+.sd-info { overflow: auto; padding: 14px 16px 18px; border-left: .5px solid var(--sep); }
+.lv { position: relative; display: flex; flex-direction: column; min-height: 0; }
+.lv-hd { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 7px 12px 7px 16px; border-bottom: .5px solid var(--sep); font: 600 11.5px var(--sans); color: var(--text-2); }
+#lv-st { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lv-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--closed); }
+.lv-dot.on { background: var(--working); animation: lvpulse 1.4s ease-in-out infinite; }
+@keyframes lvpulse { 50% { opacity: .35; } }
+.lv-tabs { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; min-width: 0; margin-left: auto; }
+.lv-tabs:empty { display: none; }
+.lv-tabs .dot { width: 6px; height: 6px; margin-left: 5px; color: var(--working); vertical-align: 1px; }
+.lv-body { flex: 1; min-height: 0; overflow: auto; padding: 18px 24px 28px; }
+.lv-list { max-width: 760px; margin: 0 auto; }
+.lv-step { margin: 0 0 12px; color: var(--text); font: 13.5px/1.6 var(--sans); overflow-wrap: anywhere; }
+.lv-step p { margin: 0 0 8px; }
+.lv-step p:last-child { margin-bottom: 0; }
+#sdetail .lv-step ul { margin: 0 0 8px; padding-left: 20px; font-size: inherit; line-height: inherit; }
+.lv-step h4 { margin: 10px 0 6px; font-size: 14px; font-weight: 600; }
+.lv-step code { padding: 1px 5px; border-radius: 4px; background: var(--fill); font: 12px var(--mono); }
+#sdetail .lv-step pre { max-height: 340px; margin: 6px 0; padding: 9px 11px; border-radius: 8px; background: var(--fill); font: 11.5px/1.5 var(--mono); word-break: break-word; }
+.lv-step pre code { padding: 0; background: none; }
+.lv-user { display: flex; justify-content: flex-end; }
+.lv-bubble { max-width: 85%; padding: 10px 14px; border-radius: 16px; background: var(--fill); }
+.lv-bubble.clip { max-height: 9.6em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+.lv-more { display: block; margin: -6px 0 12px auto; }
+.lv-tool { margin: 0 0 6px; }
+.lv-th {
+  display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 10px; border: .5px solid var(--sep-2); border-radius: 8px;
+  background: var(--bg-raised); color: var(--text); font: 12px var(--mono); text-align: left; cursor: pointer;
+}
+.lv-th:hover { background: var(--hover); }
+.lv-ic { width: 16px; flex: none; color: var(--ready); text-align: center; }
+.lv-tn { flex: none; font-weight: 600; }
+.lv-tl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.lv-ok { flex: none; color: var(--done); }
+.lv-bad { flex: none; color: var(--waiting); }
+.lv-spin { width: 10px; height: 10px; flex: none; border: 2px solid var(--fill-2); border-top-color: var(--accent); border-radius: 50%; animation: lvspin .8s linear infinite; }
+@keyframes lvspin { to { transform: rotate(360deg); } }
+.lv-td { display: none; padding: 4px 0 2px 25px; }
+.lv-tool.open .lv-td { display: block; }
+.lv-td .k { margin-top: 6px; font: 600 10.5px var(--sans); letter-spacing: .02em; color: var(--text-2); }
+.lv-td .add { color: var(--done); }
+.lv-td .del { color: var(--waiting); }
+.lv-tool.err .lv-th { border-color: transparent; background: var(--warn-bg); }
+.lv-tail { display: flex; align-items: center; gap: 8px; max-width: 760px; margin: 4px auto 0; font: 500 12px var(--sans); color: var(--text-2); }
+.lv-tail .dots i { display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: 50%; background: var(--working); animation: lvpulse 1.2s ease-in-out infinite; }
+.lv-tail .dots i:nth-child(2) { animation-delay: .2s; }
+.lv-tail .dots i:nth-child(3) { animation-delay: .4s; }
+.lv-empty { max-width: 760px; margin: 40px auto; color: var(--text-2); font-size: 13px; text-align: center; }
+.lv-jump {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: none; height: 28px; padding: 0 14px;
+  border: 0; border-radius: 999px; background: var(--bg-raised); color: var(--accent); box-shadow: var(--shadow); font: 600 12px var(--sans); cursor: pointer;
+}
+.lv-jump.on { display: block; }
 #bigmap { top: 40px; right: 40px; bottom: 30px; left: 40px; z-index: 50; transform: none; max-height: none; flex-direction: column; overflow: hidden; }
 #bigmap.on { display: flex; }
 #bigmap .hd { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: .5px solid var(--sep); font: 600 11px var(--sans); letter-spacing: .02em; color: var(--text-2); }
@@ -463,6 +532,8 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 #plist .f .t { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
 #plist .f .m { margin-top: 3px; font: 500 10.5px/1.4 var(--sans); letter-spacing: .02em; color: var(--text-2); }
 .badge { padding: 2px 7px; border-radius: 999px; background: var(--fill); color: var(--ready); font: 600 10px/1.2 var(--sans); letter-spacing: .02em; white-space: nowrap; }
+button.badge { border: 0; cursor: pointer; }
+button.badge:hover { background: var(--ready-bg); }
 .steps { display: flex; gap: 3px; margin-top: 10px; }
 .steps i { flex: 1; height: 4px; border-radius: 2px; background: var(--fill-2); }
 .steps i.done { background: var(--done); }
@@ -613,6 +684,9 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
   #pipe { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 40%) minmax(0, 1fr); }
   #plist { border-right: 0; border-bottom: .5px solid var(--sep); }
   #sdetail .grid { grid-template-columns: 1fr; }
+  /* The conversation on top, the cards under it, one scroll for both. */
+  .sd-cols { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(60vh, 1fr) auto; overflow: auto; }
+  .sd-info { overflow: visible; border-left: 0; border-top: .5px solid var(--sep); }
 }
 /* ---------- inspector: rows that just arrived, pills, what a session made ---------- */
 @keyframes ev-in { from { opacity: 0; transform: translateY(-3px); } }
@@ -720,6 +794,14 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
   <label for="ds-ref">READ FIRST · WHERE ITS SHELL, COMPONENTS AND TOKENS ARE</label><input id="ds-ref" placeholder="src/app/modules/example, src/app/components/ui/components, src/styles/theme.css">
   <div class="row2"><button class="btn go" id="ds-save" type="button">SAVE</button><button class="btn" id="ds-glare" type="button">BACK TO GLARE</button><span class="sp"></span><button class="btn" id="ds-close" type="button">CLOSE</button></div>
   <div class="msg" id="ds-msg"></div>
+</div>
+<div id="oqask" role="dialog" aria-labelledby="oq-title">
+  <div class="t" id="oq-title">Open questions</div>
+  <div class="m" id="oq-meta"></div>
+  <div class="q" id="oq-q"></div>
+  <textarea id="oq-answer" aria-label="Your answer" placeholder="Your answer. It goes into OPEN_QUESTIONS.md with today's date. ⌘↩ saves."></textarea>
+  <div class="row2"><button class="btn go" id="oq-save" type="button">Save and next</button><button class="btn" id="oq-skip" type="button">Skip</button><button class="btn" id="oq-back" type="button">Back</button><span class="sp"></span><button class="btn" id="oq-close" type="button">Close</button></div>
+  <div class="msg" id="oq-msg"></div>
 </div>
 <div id="sdetail" role="dialog" aria-labelledby="sd-title"><div class="hd"><span class="k" id="sd-pill"></span><div class="t" id="sd-title"></div><button class="x" id="sd-close" type="button" aria-label="Close">×</button></div><div class="body" id="sd-body"></div></div>
 <div id="bigmap" role="dialog" aria-labelledby="bigmap-title"><div class="hd"><span id="bigmap-title">Build map</span><span class="sp"></span><button class="btn" id="bigmap-close" type="button">Close</button></div><div class="body"></div></div>
@@ -1686,18 +1768,112 @@ let sdCur = null, sdTimer = null;
 const fmtDur = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${String(m).padStart(2, '0')}m` : m ? `${m}m` : `${s}s`; };
 const fmtAt = (ms) => ms ? hm(ms) : '—';
 async function openSessionDetail(f, n) {
-  sdCur = { f, n }; $('sdetail').classList.add('on'); $('sd-title').textContent = `S${n} · loading…`; $('sd-body').innerHTML = '';
+  // The sheet: the session's conversation as it happens, and beside it the cards (#sd-info).
+  sdCur = { f, n }; $('sdetail').classList.add('on', 'live'); $('sd-title').textContent = `S${n} · loading…`;
+  $('sd-body').innerHTML = '<div class="sd-cols"><section class="lv" aria-label="The session as it happens"><div class="lv-hd"><span class="lv-dot" id="lv-dot"></span><span id="lv-st">Live</span><div class="seg small lv-tabs" id="lv-tabs" role="group" aria-label="Its Claude sessions"></div></div><div class="lv-body" id="lv-body"><div class="lv-list" id="lv-list"></div><div class="lv-tail" id="lv-tail"></div></div><button class="lv-jump" id="lv-jump" type="button">↓ Latest</button></section><aside class="sd-info" id="sd-info" aria-label="Details"></aside></div>';
+  lv = { id: '', pick: '', els: new Map(), live: [] };
+  $('lv-body').addEventListener('scroll', () => { if (lvAtBottom()) $('lv-jump').classList.remove('on'); });
+  $('lv-jump').onclick = () => { const b = $('lv-body'); b.scrollTop = b.scrollHeight; $('lv-jump').classList.remove('on'); };
   await refreshSessionDetail();
   clearInterval(sdTimer); sdTimer = setInterval(refreshSessionDetail, 10000);
+  clearInterval(lvTimer); lvTimer = setInterval(lvPoll, 1500);
 }
-function closeSessionDetail() { $('sdetail').classList.remove('on'); clearInterval(sdTimer); sdTimer = null; sdCur = null; }
+function closeSessionDetail() { $('sdetail').classList.remove('on'); clearInterval(sdTimer); clearInterval(lvTimer); sdTimer = lvTimer = null; sdCur = null; lv = null; }
+
+// v2.11: the session as it happens, like a Claude Desktop conversation:
+// its messages, and each tool call with what it ran and what came back.
+let lv = null, lvTimer = null;
+const LV_ICON = { Bash: '›_', Read: '◫', Edit: '✎', MultiEdit: '✎', Write: '✎', NotebookEdit: '✎', Grep: '⌕', Glob: '⌕', TodoWrite: '☑', Agent: '◎', Task: '◎', WebFetch: '◍', WebSearch: '◍' };
+function lvAtBottom() { const b = $('lv-body'); return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 60; }
+function lvInline(s) { return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>'); }
+function lvMd(text) {
+  return String(text || '').split('```').map((part, i) => {
+    if (i % 2) return `<pre>${esc(part.replace(/^[\w+-]*\n/, ''))}</pre>`;
+    return part.split(/\n{2,}/).map((p) => {
+      p = p.replace(/^\n+|\n+$/g, ''); if (!p.trim()) return '';
+      const lines = p.split('\n');
+      if (lines.every((l) => /^\s*\|/.test(l))) return `<pre>${esc(p)}</pre>`;
+      // Lines of a paragraph, list items and headings in the order they come.
+      let html = '', para = [], items = [];
+      const endPara = () => { if (para.length) html += `<p>${para.map(lvInline).join('<br>')}</p>`; para = []; };
+      const endList = () => { if (items.length) html += `<ul>${items.map((x) => `<li>${lvInline(x)}</li>`).join('')}</ul>`; items = []; };
+      for (const l of lines) {
+        const item = /^\s*(?:[-*]|\d+\.)\s+(.*)$/.exec(l), head = /^#{1,4}\s+(.*)$/.exec(l);
+        if (item) { endPara(); items.push(item[1]); } else if (head) { endPara(); endList(); html += `<h4>${lvInline(head[1])}</h4>`; } else { endList(); para.push(l); }
+      }
+      endPara(); endList();
+      return html;
+    }).join('');
+  }).join('');
+}
+function lvStep(s) {
+  const el = document.createElement('div');
+  if (s.kind === 'tool') {
+    const lines = (s.input || '').split('\n');
+    const input = s.tool === 'Bash' ? '$ ' + esc(s.input) : /^(Edit|MultiEdit)$/.test(s.tool) ? [esc(lines[0]), ...lines.slice(1).map((l) => l.startsWith('+ ') ? `<span class="add">${esc(l)}</span>` : l.startsWith('- ') ? `<span class="del">${esc(l)}</span>` : esc(l))].join('\n') : esc(s.input);
+    el.className = `lv-step lv-tool${s.error ? ' err' : ''}${s.tool === 'TodoWrite' ? ' open' : ''}`;
+    el.innerHTML = `<button class="lv-th" type="button"><span class="lv-ic">${esc(LV_ICON[s.tool] || '◆')}</span><span class="lv-tn">${esc(s.tool)}</span><span class="lv-tl">${esc(s.text)}</span>${!s.done ? '<span class="lv-spin" title="Running"></span>' : s.error ? '<span class="lv-bad" title="Failed">✕</span>' : '<span class="lv-ok" title="Done">✓</span>'}</button>`
+      + `<div class="lv-td">${s.input ? `<pre>${input}</pre>` : ''}${s.done ? `<div class="k">${s.error ? 'Error' : 'Result'}</div><pre>${esc(s.result || '(no output)')}</pre>` : '<div class="k">Running…</div>'}</div>`;
+    el.querySelector('.lv-th').onclick = () => el.classList.toggle('open');
+  } else if (s.kind === 'user') {
+    el.className = 'lv-step lv-user';
+    el.innerHTML = `<div class="lv-bubble">${lvMd(s.text)}</div>`;
+    if (s.text.length > 600 || s.text.split('\n').length > 8) {
+      const bubble = el.firstChild; bubble.classList.add('clip');
+      const more = document.createElement('button'); more.className = 'link lv-more'; more.type = 'button'; more.textContent = 'Show all';
+      more.onclick = () => { const clipped = bubble.classList.toggle('clip'); more.textContent = clipped ? 'Show all' : 'Show less'; };
+      const wrap = document.createElement('div'); wrap.append(el, more); return wrap;
+    }
+  } else {
+    el.className = 'lv-step lv-ai';
+    el.innerHTML = lvMd(s.text);
+  }
+  return el;
+}
+// The Claude sessions of this plan session (its runs, its reviewers): the
+// one at work is shown, unless one was picked.
+function lvSessions(list) {
+  if (!lv) return;
+  lv.live = [...list].sort((a, b) => a.last_ts - b.last_ts);
+  const busy = lv.live.filter((x) => x.state === 'working' || x.state === 'waiting');
+  const want = lv.live.some((x) => x.id === lv.pick) ? lv.pick : (busy[busy.length - 1] || lv.live[lv.live.length - 1] || {}).id || '';
+  if (want !== lv.id) { lv.id = want; lv.els.clear(); $('lv-list').innerHTML = ''; lvPoll(); }
+  let runs = 0, reviews = 0;
+  $('lv-tabs').innerHTML = lv.live.length > 1 ? lv.live.map((x) => `<button type="button" data-id="${esc(x.id)}" class="${x.id === lv.id ? 'on' : ''}" aria-pressed="${x.id === lv.id}" title="${esc(x.short)} · ${esc(stateLabel(x.state))}">${x.kind === 'review' ? `Review ${++reviews}` : `Run ${++runs}`}${x.state === 'working' ? '<span class="dot" aria-label="working"></span>' : ''}</button>`).join('') : '';
+  for (const b of $('lv-tabs').querySelectorAll('button')) b.onclick = () => { lv.pick = b.dataset.id; lvSessions(lv.live); };
+  if (!lv.id) { $('lv-list').innerHTML = '<div class="lv-empty">No Claude session has run for this session yet. When one starts, it shows here as it works.</div>'; $('lv-tail').innerHTML = ''; $('lv-st').textContent = 'Not started'; $('lv-dot').className = 'lv-dot'; }
+}
+async function lvPoll() {
+  if (!lv || !lv.id || !sdCur || document.hidden) return;
+  const id = lv.id;
+  const r = await daemon({ cmd: 'session_live', session: id, limit: 400, ...pcArg(sdCur.f) });
+  if (!lv || lv.id !== id) return;
+  if (!r.ok) { $('lv-st').textContent = r.error || 'Could not read it'; return; }
+  const follow = lvAtBottom(); const list = $('lv-list'); let added = false;
+  if (!lv.els.size && (r.steps || []).length) list.innerHTML = '';
+  for (const s of r.steps || []) {
+    const sig = `${s.done}|${s.error}|${(s.result || '').length}|${(s.text || '').length}|${(s.input || '').length}`;
+    const had = lv.els.get(s.id);
+    if (had && had.sig === sig) continue;
+    const el = lvStep(s);
+    if (had) { if (had.el.classList && had.el.classList.contains('open')) el.classList.add('open'); had.el.replaceWith(el); }
+    else { list.appendChild(el); added = true; }
+    lv.els.set(s.id, { el, sig });
+  }
+  const ses = r.session || {}, st = ses.state; const busy = st === 'working';
+  $('lv-dot').className = `lv-dot${busy ? ' on' : ''}`;
+  $('lv-st').textContent = `${busy ? 'Live' : stateLabel(st)}${ses.short ? ' · ' + ses.short : ''}${ses.model ? ' · ' + ses.model.replace(/^claude-/, '') : ''}`;
+  $('lv-tail').innerHTML = busy ? `<span class="dots"><i></i><i></i><i></i></span>Working · last step ${fmtAt(ses.last_ts)}` : st === 'waiting' ? 'Waiting for an answer' : `${stateLabel(st)} · last step ${fmtAt(ses.last_ts)}`;
+  if (!lv.els.size) list.innerHTML = '<div class="lv-empty">Nothing in its transcript yet.</div>';
+  if (follow) { const b = $('lv-body'); b.scrollTop = b.scrollHeight; } else if (added) $('lv-jump').classList.add('on');
+}
 $('sd-close').addEventListener('click', closeSessionDetail);
 async function refreshSessionDetail() {
   if (!sdCur || !$('sdetail').classList.contains('on')) return;
   const { f, n } = sdCur;
   const d = await daemon({ cmd: 'session_detail', feature: f.key, workspace: f.workspace, n, ...pcArg(f) });
   if (!sdCur || sdCur.n !== n) return;
-  if (!d.ok) { $('sd-body').innerHTML = `<div class="warn">${esc(d.error || 'Could not load the session')}</div>`; return; }
+  if (!d.ok) { $('sd-info').innerHTML = `<div class="warn">${esc(d.error || 'Could not load the session')}</div>`; return; }
   const s = d.session, t = d.timing || {}, run = d.run, rv = d.review, live = d.live || [];
   const eff = s.effective; const col = mapColor(s);
   $('sd-pill').textContent = (eff === 'review' ? 'IN REVIEW' : eff === 'progress' ? 'IN PROGRESS' : eff).toUpperCase(); $('sd-pill').style.color = col;
@@ -1705,10 +1881,10 @@ async function refreshSessionDetail() {
   const running = run && run.alive, reviewing = rv && rv.alive;
   const pct = eff === 'merged' ? 100 : eff === 'review' ? 90 : t.started_at ? Math.min(85, Math.round(100 * t.elapsed_s / Math.max(1, t.typical_s))) : 0;
   const now = live.find((l) => l.state === 'working' || l.state === 'waiting') || live[live.length - 1];
-  const steps = now ? [...now.chat].slice(-10).reverse() : [];
+  lvSessions(live);
   const what = eff === 'merged' ? 'Merged. Done.' : eff === 'review' ? (reviewing ? `A reviewer session is on the pull request (${fmtDur(rv.elapsed_s)} so far): checklists G and H, lint, types, tests.` : 'Pull request open, waiting for its review.') : running ? 'Working headless on this Mac.' : eff === 'progress' ? (now && now.state === 'waiting' ? 'Waiting for your answer: see the phone.' : 'Started; no live run at the moment.') : eff === 'ready' ? 'Ready: its dependencies are merged. The autopilot starts it next, or press Start.' : eff === 'blocked' ? 'Blocked: a person decides.' : `Waiting for ${(s.depends_on || []).map((x) => 'S' + x).join(', ') || 'its turn'}.`;
-  $('sd-body').innerHTML = `
-    <div class="grid">
+  $('sd-info').innerHTML = `
+    <div class="grid one">
       <div class="card"><div class="k">NOW</div><div style="font-size:12.5px;line-height:1.45">${esc(what)}</div>
         <div class="bar"><i style="width:${pct}%;background:${col}"></i></div>
         <div class="row"><span>ELAPSED</span><span>${t.started_at ? fmtDur(t.elapsed_s) : '—'}</span></div>
@@ -1729,15 +1905,12 @@ async function refreshSessionDetail() {
         <div class="acts">${s.pr_url ? `<button class="btn" type="button" data-url="${esc(s.pr_url)}">OPEN THE PULL REQUEST</button>` : ''}${now && windowOf(now.id) ? `<button class="btn" type="button" data-win="${windowOf(now.id)}">SHOW THE SESSION</button>` : ''}${now && now.desktop ? `<button class="btn" type="button" data-url="claude://claude.ai/epitaxy/${encodeURIComponent(now.desktop)}">OPEN IN DESKTOP</button>` : ''}${running || reviewing ? '<button class="btn" id="sd-stop" type="button" style="border-color:var(--heat);color:var(--heat)">STOP THIS RUN</button>' : ''}</div>
       </div>
     </div>
-    <div class="card" style="margin-top:12px"><div class="k">LAST STEPS${now ? ` · ${esc(now.short)}` : ''}</div>
-      <div class="steps">${steps.length ? steps.map((c) => `<div class="s ${c.tool ? 'tool' : ''}"><b>${esc((c.tool ? c.tool : c.role === 'assistant' ? 'CLAUDE' : c.role === 'user' ? 'PROMPT' : c.role).toUpperCase())}</b>${esc(c.text || '')}</div>`).join('') : (now && now.last_text ? `<div class="s"><b>CLAUDE</b>${esc(now.last_text)}</div>` : '<div class="s" style="color:var(--dim)">Nothing recorded yet.</div>')}</div>
-    </div>
     ${(s.done_when || []).length ? `<div class="card" style="margin-top:12px"><div class="k">DONE WHEN</div><ul>${s.done_when.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
     ${(s.warnings || []).length ? `<div class="warn" style="margin-top:12px">${s.warnings.map(esc).join('<br>')}</div>` : ''}
     ${run && (run.log || run.err) ? `<div class="card" style="margin-top:12px"><div class="k">THE RUN'S OUTPUT · ${run.alive ? 'STILL RUNNING, THE REPORT COMES AT THE END' : 'FINAL'}</div><pre>${esc((run.log || '').trim() || (run.err || '').trim() || '(nothing yet)')}</pre></div>` : ''}
     ${rv && rv.log ? `<div class="card" style="margin-top:12px"><div class="k">THE REVIEWER'S REPORT</div><pre>${esc(rv.log.trim())}</pre></div>` : ''}`;
-  for (const b of $('sd-body').querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
-  const stop = $('sd-body').querySelector('#sd-stop'); if (stop) stop.onclick = async () => { if (!confirm(`Stop the headless run of S${s.n}? The autopilot will treat it as stopped and may run it again.`)) return; stop.disabled = true; const r = await daemon({ cmd: 'session_stop', feature: f.key, workspace: f.workspace, n, ...pcArg(f) }); if (!r.ok) alert(r.error || 'Could not stop it'); refreshSessionDetail(); };
+  for (const b of $('sd-info').querySelectorAll('button[data-url]')) b.onclick = () => openUrl(b.dataset.url);
+  const stop = $('sd-info').querySelector('#sd-stop'); if (stop) stop.onclick = async () => { if (!confirm(`Stop the headless run of S${s.n}? The autopilot will treat it as stopped and may run it again.`)) return; stop.disabled = true; const r = await daemon({ cmd: 'session_stop', feature: f.key, workspace: f.workspace, n, ...pcArg(f) }); if (!r.ok) alert(r.error || 'Could not stop it'); refreshSessionDetail(); };
 }
 addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('sdetail').classList.contains('on')) { closeSessionDetail(); e.preventDefault(); } });
 addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('bigmap').classList.contains('on')) { $('bigmap').classList.remove('on'); e.preventDefault(); } });
@@ -1882,7 +2055,7 @@ function renderFeature() {
   const h = [];
   const plItem = (k) => (f.plane && f.plane.items && f.plane.items[k]) || null;
   const plLink = (k) => { const it = plItem(k); return it ? `<button class="plink" type="button" data-url="${esc(it.url)}" title="Open in Plane">PLANE${it.sequence_id ? ' #' + it.sequence_id : ''}${it.assignees && it.assignees.length ? ' · ASSIGNED' : ''}</button>` : ''; };
-  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}${f.prd_source === 'picked' ? ' · PICKED' : ''}` : ' · NO PRD FOUND'} <button class="btn pickprd" type="button" title="${esc(f.prd || 'No PRD file matched')}" style="padding:2px 7px;min-height:20px;font-size:10px;margin-left:6px">PRD…</button><button class="btn design" type="button" title="${esc((f.design || {}).repo || 'The design system the feature follows')}" style="padding:2px 7px;min-height:20px;font-size:10px;margin-left:6px;${(f.design || {}).checked_out === false ? 'border-color:var(--amber);color:var(--amber)' : ''}">DESIGN · ${esc(((f.design || {}).name || 'Glare').toUpperCase())}</button></div></div>${f.plane && f.plane.parent_url ? `<button class="plink" type="button" data-url="${esc(f.plane.parent_url)}">ON PLANE</button>` : ''}${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
+  h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}${f.prd_source === 'picked' ? ' · PICKED' : ''}` : ' · NO PRD FOUND'} <button class="btn pickprd" type="button" title="${esc(f.prd || 'No PRD file matched')}" style="padding:2px 7px;min-height:20px;font-size:10px;margin-left:6px">PRD…</button><button class="btn design" type="button" title="${esc((f.design || {}).repo || 'The design system the feature follows')}" style="padding:2px 7px;min-height:20px;font-size:10px;margin-left:6px;${(f.design || {}).checked_out === false ? 'border-color:var(--amber);color:var(--amber)' : ''}">DESIGN · ${esc(((f.design || {}).name || 'Glare').toUpperCase())}</button></div></div>${f.plane && f.plane.parent_url ? `<button class="plink" type="button" data-url="${esc(f.plane.parent_url)}">ON PLANE</button>` : ''}${f.open_questions ? `<button class="badge oqs" type="button" title="Answer them one by one">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</button>` : ''}</div>`);
   for (const w of (f.warnings || [])) h.push(`<div class="warn" style="margin-top:10px">${esc(w)}</div>`);
   if (pcs.length) h.push(`<div class="sec" style="margin-top:12px"><span>ON THE NETWORK</span></div><div class="files">${pcs.map((p) => `<span class="pill ${p.ready ? 'merged' : 'waiting'}" title="${esc(p.name)}">${esc((p.name || '').toUpperCase())}${p.sync.remote ? ` · ↑${p.sync.ahead || 0} ↓${p.sync.behind || 0}` : p.sync.local ? ' · NO REMOTE' : ' · NO BRANCH'}${p.ready ? '' : ' · REPO NOT FETCHED'}</span>`).join('')}</div>`);
   h.push(flowHtml(f));
@@ -1935,6 +2108,7 @@ function renderFeature() {
   if (plan) wireMap(box, f, plan);
   const ppb = box.querySelector('button.pickprd'); if (ppb) ppb.onclick = () => openPrdPicker(f);
   const dsb = box.querySelector('button.design'); if (dsb) dsb.onclick = () => openDesign(f);
+  const oqb = box.querySelector('button.oqs'); if (oqb) oqb.onclick = () => openQuestions(f);
   for (const gate of box.querySelectorAll('.gate')) {
     const form = gate.querySelector('form'); const id = gate.dataset.gate; const g = f.gates.find((x) => x.id === id);
     const signBtn = gate.querySelector('button.sign'); if (signBtn) signBtn.onclick = () => { form.classList.add('on'); form.querySelector('.name').focus(); };
@@ -2514,12 +2688,78 @@ async function saveDesign(glare) {
 $('ds-save').addEventListener('click', () => saveDesign(false));
 $('ds-glare').addEventListener('click', () => saveDesign(true));
 $('ds-close').addEventListener('click', () => $('dsys').classList.remove('on'));
+// v2.10: the open questions, asked one by one; an answer goes into OPEN_QUESTIONS.md.
+let oq = null;
+const oqSess = (list) => list.map((n) => 'S' + n).join(', ');
+async function openQuestions(f) {
+  const drafts = oq && oq.f.key === f.key ? oq.drafts : new Map();
+  const me = oq = { f, list: [], i: 0, answers: new Map(), drafts, unblocked: [], error: '' };
+  $('oqask').classList.add('on'); $('oq-title').textContent = `Open questions · ${f.app} / ${f.slug}`;
+  $('oq-meta').textContent = 'Reading OPEN_QUESTIONS.md…'; $('oq-q').textContent = ''; $('oq-answer').style.display = 'none';
+  for (const id of ['oq-save', 'oq-skip', 'oq-back']) $(id).style.display = 'none';
+  const msg = $('oq-msg'); msg.className = 'msg'; msg.textContent = '';
+  const r = await daemon({ cmd: 'open_questions', feature: f.key, workspace: f.workspace, ...pcArg(f) });
+  if (oq !== me) return;
+  if (r.ok) me.list = r.questions || []; else me.error = r.error || 'Could not read the questions';
+  showOq(false);
+}
+function keepDraft() {
+  const q = oq && oq.list[oq.i];
+  if (q && !oq.answers.has(q.n)) oq.drafts.set(q.n, $('oq-answer').value);
+}
+// Closing keeps what was typed: the same feature's questions open again with it.
+function closeOq() { keepDraft(); $('oqask').classList.remove('on'); }
+function showOq(keepMsg) {
+  const q = oq.list[oq.i]; const ta = $('oq-answer'); const msg = $('oq-msg');
+  if (!keepMsg) { msg.className = 'msg'; msg.textContent = ''; }
+  $('oq-back').style.display = oq.list.length ? '' : 'none'; $('oq-back').disabled = oq.i === 0;
+  if (!q) {
+    for (const id of ['oq-save', 'oq-skip']) $(id).style.display = 'none';
+    ta.style.display = 'none';
+    const open = oq.list.filter((x) => !oq.answers.has(x.n));
+    const un = [...new Set(oq.unblocked)];
+    $('oq-meta').textContent = oq.error ? oq.error : oq.list.length ? `${oq.answers.size} answered · ${open.length} still open` : 'Nothing to ask';
+    $('oq-q').textContent = oq.error ? '' : (!oq.list.length ? 'Every question of this feature has an answer.' : open.length ? `Still open: ${open.map((x) => '#' + x.n).join(', ')}. Open this again to answer them.` : 'Every question has an answer now.')
+      + (un.length ? ` ${oqSess(un)} can start now.` : '');
+    return;
+  }
+  const answered = oq.answers.has(q.n);
+  const facts = [`Question ${oq.i + 1} of ${oq.list.length}`, `#${q.n}`, q.owner && `owner ${q.owner}`, q.due && `due ${q.due}`, q.raised_by && `raised by ${q.raised_by}`].filter(Boolean).map((x) => esc(x));
+  const blocks = (q.blocks || []).length ? ` · <span class="w">${esc(oqSess(q.blocks))} wait${q.blocks.length > 1 ? '' : 's'} for it</span>` : '';
+  $('oq-meta').innerHTML = facts.join(' · ') + blocks;
+  $('oq-q').textContent = q.question;
+  ta.style.display = ''; ta.disabled = answered; ta.value = answered ? oq.answers.get(q.n) : (oq.drafts.get(q.n) || '');
+  $('oq-save').style.display = answered ? 'none' : ''; $('oq-skip').style.display = '';
+  $('oq-skip').textContent = answered ? 'Next' : 'Skip';
+  if (answered && !keepMsg) { msg.className = 'msg ok'; msg.textContent = 'Answered'; }
+  if (!answered) ta.focus();
+}
+async function saveOq() {
+  const me = oq; const q = me && me.list[me.i]; if (!q || me.answers.has(q.n)) return;
+  const text = $('oq-answer').value.trim(); const msg = $('oq-msg');
+  if (!text) { msg.className = 'msg bad'; msg.textContent = 'Write an answer, or skip it'; $('oq-answer').focus(); return; }
+  msg.className = 'msg'; msg.textContent = 'Saving…'; $('oq-save').disabled = true;
+  const r = await daemon({ cmd: 'answer_question', feature: me.f.key, workspace: me.f.workspace, n: q.n, answer: text, name: signerName, ...pcArg(me.f) });
+  $('oq-save').disabled = false;
+  if (oq !== me) return;
+  if (!r.ok) { msg.className = 'msg bad'; msg.textContent = r.error || 'Could not save it'; return; }
+  me.answers.set(q.n, text); me.drafts.delete(q.n);
+  const un = r.unblocked || []; me.unblocked.push(...un);
+  msg.className = 'msg ok'; msg.textContent = `Saved #${q.n}${un.length ? ` · ${oqSess(un)} can start now` : ''}`;
+  me.i++; showOq(true); refreshFeatures();
+}
+function moveOq(by) { if (!oq) return; keepDraft(); oq.i = Math.max(0, Math.min(oq.list.length, oq.i + by)); showOq(false); }
+$('oq-save').addEventListener('click', saveOq);
+$('oq-skip').addEventListener('click', () => moveOq(1));
+$('oq-back').addEventListener('click', () => moveOq(-1));
+$('oq-close').addEventListener('click', closeOq);
+$('oq-answer').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveOq(); } });
 // Esc closes the small sheets too (the preview, session and map sheets handle their own).
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (ns.box.style.display === 'block') { ns.box.style.display = 'none'; e.preventDefault(); return; }
-  const open = ['addpc', 'pickprd', 'dsys'].find((id) => $(id).classList.contains('on'));
-  if (open) { $(open).classList.remove('on'); e.preventDefault(); }
+  const open = ['addpc', 'pickprd', 'dsys', 'oqask'].find((id) => $(id).classList.contains('on'));
+  if (open === 'oqask') { closeOq(); e.preventDefault(); } else if (open) { $(open).classList.remove('on'); e.preventDefault(); }
 });
 $('pp-auto').addEventListener('click', () => setPrd(''));
 $('ap-scan').addEventListener('click', scanPcs);
@@ -2781,7 +3021,7 @@ $('tb-pc').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key =
 // runs before the sheets' own Esc handlers, so a sheet closing on this Esc keeps the selection.
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || e.defaultPrevented || !selection) return;
-  if (['preview', 'sdetail', 'bigmap', 'addpc', 'pickprd', 'dsys'].some((id) => $(id).classList.contains('on')) || ns.box.style.display === 'block') return;
+  if (['preview', 'sdetail', 'bigmap', 'addpc', 'pickprd', 'dsys', 'oqask'].some((id) => $(id).classList.contains('on')) || ns.box.style.display === 'block') return;
   if (document.querySelector('.menu.on')) return;
   const a = document.activeElement;
   if (a && (a.matches('input, textarea, select') || a.isContentEditable)) return;

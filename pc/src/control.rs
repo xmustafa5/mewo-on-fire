@@ -372,8 +372,16 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
         "plane_config" | "plane_test" | "plane_status" | "plane_members" | "plane_projects" | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_sync" | "plane_disconnect" => {
             tokio::task::block_in_place(|| plane_request(state, req))
         }
+        // v2.11: a session as it happens, for the console's live view.
+        "session_live" => {
+            let limit = req.get("limit").and_then(Value::as_u64).unwrap_or(300).clamp(1, 1000) as usize;
+            match tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(state.live_steps(&s("session"), limit))) {
+                Some((session, steps)) => json!({"ok": true, "session": session, "steps": steps}),
+                None => json!({"ok": false, "error": "No such session"}),
+            }
+        }
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" | "session_detail" | "session_stop" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" | "session_detail" | "session_stop" | "open_questions" | "answer_question" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -861,6 +869,15 @@ pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
                 Err(e) => json!({"ok": false, "error": e}),
             }
         }
+        // v2.10: the open questions, asked one by one in the console.
+        "open_questions" => policy::open_questions(&ws, &key).unwrap_or_else(|e| json!({"ok": false, "error": e})),
+        "answer_question" => {
+            let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as u32;
+            match policy::answer_question(&ws, &key, n, &s("answer"), &s("name")) {
+                Ok(v) => v,
+                Err(e) => json!({"ok": false, "error": e}),
+            }
+        }
         "start_session" => {
             let n = req.get("n").and_then(Value::as_u64).unwrap_or(0) as u32;
             let Some(f) = policy::features(&ws).into_iter().find(|f| f.key == key) else {
@@ -930,20 +947,30 @@ fn session_detail(state: &AppState, ws: &std::path::Path, f: &policy::Feature, n
         let (log, _) = run_log_tail(&format!("{}-S{}-", f.slug, n), true, 1600);
         json!({"started": t, "pid": review_pid, "alive": review_pid != 0 && crate::runner::alive(review_pid), "elapsed_s": now.saturating_sub(*t) / 1000, "log": log})
     });
-    // The live Claude sessions, with their last steps.
-    let mut live = Vec::new();
-    for l in &ps.live {
-        let id = l.get("id").and_then(Value::as_str).unwrap_or("");
-        if id.is_empty() {
-            continue;
+    // The live Claude sessions, with their last steps: its runs, then the
+    // reviewers in its review worktree (v2.11, for the console's live view).
+    let mut ids: Vec<(String, &str)> = ps.live.iter().filter_map(|l| l.get("id").and_then(Value::as_str)).filter(|id| !id.is_empty()).map(|id| (id.to_string(), "run")).collect();
+    let review_dir = format!("-S{n}-review");
+    let mut reviewers = state.reviewers_of(&ps.pr_url);
+    for x in state.session_list() {
+        if x.cwd.starts_with(&*ws.to_string_lossy()) && x.cwd.ends_with(&review_dir) {
+            reviewers.push(x.id);
         }
-        let chat = tokio::runtime::Handle::current().block_on(state.chat(id, 14));
+    }
+    for id in reviewers {
+        if !ids.iter().any(|(x, _)| *x == id) {
+            ids.push((id, "review"));
+        }
+    }
+    let mut live = Vec::new();
+    for (id, kind) in ids {
+        let chat = tokio::runtime::Handle::current().block_on(state.chat(&id, 14));
         let (sess, items) = match chat {
             Some(x) => x,
             None => continue,
         };
         live.push(json!({
-            "id": sess.id, "short": sess.short, "state": sess.state, "title": sess.title, "last_ts": sess.last_ts, "last_text": sess.last_text.chars().take(600).collect::<String>(), "desktop": sess.desktop,
+            "id": sess.id, "short": sess.short, "kind": kind, "state": sess.state, "title": sess.title, "last_ts": sess.last_ts, "last_text": sess.last_text.chars().take(600).collect::<String>(), "desktop": sess.desktop,
             "chat": items.iter().map(|c| json!({"ts": c.ts, "role": c.role, "tool": c.tool, "text": c.text.chars().take(280).collect::<String>()})).collect::<Vec<_>>(),
         }));
     }
