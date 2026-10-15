@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::control;
+use crate::policy;
 use crate::suggest;
 
 pub const MAX_MESSAGE_CHARS: usize = 200;
@@ -28,6 +29,34 @@ fn try_run() -> Option<()> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).ok()?;
     let v: Value = serde_json::from_str(&input).ok()?;
+    let event = v.get("hook_event_name").and_then(Value::as_str).unwrap_or("");
+    // v1.7 (TORCH policy): a Bash command that would commit to main of a
+    // code repository is refused; the phone hears why.
+    if event == "PreToolUse" {
+        if field(&v, "tool_name") == "Bash" {
+            let command = v.get("tool_input").map(|t| field(t, "command")).unwrap_or_default();
+            if let Some(reason) = policy::guard_command(&hook_cwd(&v), &command) {
+                println!(
+                    "{}",
+                    json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": reason,
+                        }
+                    })
+                );
+                let _ = control::request(&warning_request(&v, &reason, "blocked"), Duration::from_secs(1));
+            }
+        }
+        return Some(());
+    }
+    if event == "SessionStart" {
+        if let Some(text) = policy::session_warning(&hook_cwd(&v)) {
+            let _ = control::request(&warning_request(&v, &text, "branch"), Duration::from_secs(1));
+        }
+        return Some(());
+    }
     if v.get("hook_event_name").and_then(Value::as_str) == Some("UserPromptSubmit")
         && crate::config::suggestions_enabled()
     {
@@ -62,13 +91,20 @@ pub fn map_request(v: &Value) -> Option<Value> {
     let session_id = field(v, "session_id");
     let transcript_path = field(v, "transcript_path");
     let effort = effort_level(v);
+    let host = host_session_id();
+    let cwd = hook_cwd(v);
+    // v1.7: the branch, read here rather than by the daemon (which may not
+    // be allowed into the folder by macOS).
+    let branch = policy::branch_of(&cwd);
     if name == "UserPromptSubmit" {
         return Some(json!({
             "cmd": "session_state",
             "session_id": session_id,
-            "cwd": hook_cwd(v),
+            "cwd": cwd,
             "transcript_path": transcript_path,
             "effort": effort,
+            "host_session_id": host,
+            "branch": branch,
             "state": "working",
         }));
     }
@@ -79,7 +115,42 @@ pub fn map_request(v: &Value) -> Option<Value> {
         "session_id": session_id,
         "transcript_path": transcript_path,
         "effort": effort,
+        "host_session_id": host,
+        "branch": branch,
     }))
+}
+
+/// A `warning` event (v1.7) for the phones: what the policy objects to.
+fn warning_request(v: &Value, text: &str, detail: &str) -> Value {
+    let cwd = hook_cwd(v);
+    let session_id = field(v, "session_id");
+    json!({
+        "cmd": "emit",
+        "event": {
+            "kind": "warning",
+            "project": project_name(&cwd),
+            "cwd": cwd,
+            "session": session_id.chars().take(8).collect::<String>(),
+            "message": text,
+            "detail": detail,
+            "session_id": session_id,
+        },
+        "session_id": session_id,
+        "transcript_path": field(v, "transcript_path"),
+        "host_session_id": host_session_id(),
+        "branch": policy::branch_of(&cwd),
+    })
+}
+
+/// Claude Desktop's id of the session the hook runs in (v1.6): the app
+/// puts it in the environment of every Claude Code it starts. Empty in a
+/// terminal.
+pub fn host_session_id() -> String {
+    std::env::var("CLAUDE_CODE_HOST_SESSION_ID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.starts_with("local_") && s.len() < 80)
+        .unwrap_or_default()
 }
 
 /// `effort.level` from the hook input ("" if absent).

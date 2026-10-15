@@ -387,6 +387,14 @@ class CcTaskHandler extends TaskHandler {
       _handleGetChat(msg);
     } else if (cmd == 'get_image') {
       _handleGetImage(msg);
+    } else if (cmd == 'get_prs') {
+      _handleGetPrs(msg);
+    } else if (cmd == 'new_session') {
+      _handleNewSession(msg);
+    } else if (cmd == 'get_artifact') {
+      _handleGetArtifact(msg);
+    } else if (cmd == 'policy') {
+      _handlePolicy(msg);
     } else if (cmd == 'refresh_sessions') {
       _handleRefreshSessions();
     } else if (cmd == 'clear_sessions') {
@@ -580,6 +588,105 @@ class CcTaskHandler extends TaskHandler {
 
   /// `{"pc_id", "session_id"}` → `get_chat`; the reply is forwarded as
   /// `chat`, or `chat_error` right away when the PC is not connected.
+  /// v1.7: forwards a policy frame to the PC; answers with an error result
+  /// itself when the PC cannot be asked.
+  void _handlePolicy(Map<String, dynamic> msg) {
+    final pcId = _str(msg['pc_id']);
+    final frame = msg['frame'];
+    if (pcId.isEmpty || frame is! Map) return;
+    final f = Map<String, dynamic>.from(frame);
+    final type = _str(f['type']);
+    final clientId = _str(f['client_id']);
+    final link = _links[pcId];
+    String error = '';
+    if (link == null) {
+      error = 'This PC is no longer paired';
+    } else if (!link.sendPolicy(f)) {
+      link.kick();
+      error = '${link.pc.name} is not connected right now';
+    }
+    if (error.isEmpty) return;
+    final resultType = type == 'get_features' ? 'features' : '${type.replaceFirst('get_', '')}_result';
+    _sendToMain(jsonEncode({'type': resultType, 'pc_id': pcId, 'client_id': clientId, 'ok': false, 'error': error}));
+  }
+
+  Future<void> _onPolicy(PcLink link, Map<String, dynamic> msg) async {
+    _sendToMain(jsonEncode(<String, dynamic>{...msg, 'pc_id': link.pc.id}));
+  }
+
+  /// v1.6: asks the PC for the files of an artifact; answers with an error
+  /// `artifact_end` itself when the PC cannot be asked.
+  void _handleGetArtifact(Map<String, dynamic> msg) {
+    final pcId = _str(msg['pc_id']);
+    final clientId = _str(msg['client_id']);
+    if (pcId.isEmpty || clientId.isEmpty) return;
+    final link = _links[pcId];
+    String error = '';
+    if (link == null) {
+      error = 'This PC is no longer paired';
+    } else if (!link.getArtifact(clientId, _str(msg['session_id']), _str(msg['url']), id: _str(msg['id']), entry: _str(msg['entry']), title: _str(msg['title']))) {
+      link.kick();
+      error = '${link.pc.name} is not connected right now';
+    }
+    if (error.isEmpty) return;
+    _sendToMain(jsonEncode({'type': 'artifact_end', 'pc_id': pcId, 'client_id': clientId, 'ok': false, 'error': error}));
+  }
+
+  Future<void> _onArtifact(PcLink link, Map<String, dynamic> msg) async {
+    _sendToMain(jsonEncode(<String, dynamic>{...msg, 'pc_id': link.pc.id}));
+  }
+
+  /// v1.6: asks the PC to start a session in Claude Desktop; answers with
+  /// an error `new_session_result` itself when the PC cannot be asked.
+  void _handleNewSession(Map<String, dynamic> msg) {
+    final pcId = _str(msg['pc_id']);
+    final clientId = _str(msg['client_id']);
+    if (pcId.isEmpty || clientId.isEmpty) return;
+    final link = _links[pcId];
+    String error = '';
+    if (link == null) {
+      error = 'This PC is no longer paired';
+    } else if (!link.newSession(clientId, _str(msg['cwd']), _str(msg['prompt']))) {
+      link.kick();
+      error = '${link.pc.name} is not connected right now';
+    }
+    if (error.isEmpty) return;
+    _sendToMain(jsonEncode({'type': 'new_session_result', 'pc_id': pcId, 'client_id': clientId, 'ok': false, 'error': error}));
+  }
+
+  Future<void> _onNewSessionResult(PcLink link, String clientId, bool ok, String error) async {
+    _sendToMain(jsonEncode({'type': 'new_session_result', 'pc_id': link.pc.id, 'client_id': clientId, 'ok': ok, 'error': error}));
+  }
+
+  /// v1.6: asks the PC for the session's pull requests; answers with an
+  /// error `prs` itself when the PC cannot be asked.
+  void _handleGetPrs(Map<String, dynamic> msg) {
+    final pcId = _str(msg['pc_id']);
+    final sessionId = _str(msg['session_id']);
+    if (pcId.isEmpty || sessionId.isEmpty) return;
+    final link = _links[pcId];
+    String error = '';
+    if (link == null) {
+      error = 'This PC is no longer paired';
+    } else if (!link.getPrs(sessionId)) {
+      link.kick();
+      error = '${link.pc.name} is offline';
+    }
+    if (error.isEmpty) return;
+    _sendToMain(jsonEncode({
+      'type': 'prs',
+      'pc_id': pcId,
+      'session_id': sessionId,
+      'repo': '',
+      'prs': const <Object>[],
+      'error': error,
+    }));
+  }
+
+  Future<void> _onPrs(PcLink link, Map<String, dynamic> prs) async {
+    _sendToMain(jsonEncode(<String, dynamic>{...prs, 'type': 'prs', 'pc_id': link.pc.id}));
+  }
+
   void _handleGetChat(Map<String, dynamic> msg) {
     final pcId = _str(msg['pc_id']);
     final sessionId = _str(msg['session_id']);
@@ -777,6 +884,10 @@ class CcTaskHandler extends TaskHandler {
         onChat: _onChat,
         onImage: _onImage,
         onSendResult: _onSendResult,
+        onPrs: _onPrs,
+        onNewSessionResult: _onNewSessionResult,
+        onArtifact: _onArtifact,
+        onPolicy: _onPolicy,
       );
       _links[pc.id] = link;
       link.start();
@@ -1138,6 +1249,16 @@ class CcTaskHandler extends TaskHandler {
         ch = _chSessionEnd;
         priority = fln.Priority.low;
         title = '⏹ ${ev.project} session closed';
+        break;
+      case EventKind.warning:
+        ch = _chNeedsInput;
+        priority = fln.Priority.high;
+        title = '⚠️ ${ev.project}: policy';
+        break;
+      case EventKind.signoff:
+        ch = _chNeedsInput;
+        priority = fln.Priority.high;
+        title = '✍️ Signature asked for';
         break;
       default:
         ch = _chStop;

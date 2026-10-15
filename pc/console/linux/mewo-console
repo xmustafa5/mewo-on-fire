@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""Mewo Console for Linux: the operations console in a window of its own
+(GTK + WebKitGTK), the Linux counterpart of the Mac app in ../Sources.
+
+It runs `mewo dashboard` on a free localhost port for itself and shows that
+page, so the page, the daemon feed and the commands are the ones the
+installed `mewo` serves. Links the page leaves for (claude://, a pull
+request) go to the app that owns them. Ctrl+R reloads, F11 is full screen,
+Ctrl+Q quits; a second launch brings the open window forward.
+"""
+
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+import gi
+
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("WebKit2", "4.1")
+from gi.repository import Gdk, Gio, GLib, Gtk, WebKit2  # noqa: E402
+
+APP_ID = "com.torchcorp.mewo-on-fire.console"
+TITLE = "Mewo on Fire — Operations"
+HERE = os.path.dirname(os.path.realpath(__file__))
+ICON = os.path.join(HERE, "mewo-console.png")
+
+
+def mewo_bin():
+    for p in (shutil.which("mewo"), os.path.expanduser("~/.local/bin/mewo")):
+        if p and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def message_page(text):
+    text = GLib.markup_escape_text(text)
+    return (
+        "<body style='background:#04070c;color:#dbeafe;font:14px system-ui,sans-serif;padding:40px'>"
+        f"{text}<p style='color:#7c8ba1'>Ctrl+R tries again.</p></body>"
+    )
+
+
+class Console(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.FLAGS_NONE)
+        self.window = None
+        self.web = None
+        self.server = None
+        self.base = ""
+        self.ready = False
+        self.full = False
+
+    # ---------- window ----------
+
+    def do_startup(self):
+        Gtk.Application.do_startup(self)
+        Gtk.Settings.get_default().set_property("gtk-application-prefer-dark-theme", True)
+        for name, keys, handler in (
+            ("reload", ["<Primary>r", "F5"], lambda *_: self.load()),
+            ("fullscreen", ["F11"], lambda *_: self.toggle_full()),
+            ("quit", ["<Primary>q"], lambda *_: self.quit()),
+        ):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", handler)
+            self.add_action(action)
+            self.set_accels_for_action(f"app.{name}", keys)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self.on_signal)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self.on_signal)
+
+    def do_activate(self):
+        if self.window:
+            self.window.present()
+            return
+        win = Gtk.ApplicationWindow(application=self, title=TITLE)
+        win.set_default_size(1440, 900)
+        win.set_size_request(880, 560)
+        if os.path.exists(ICON):
+            win.set_icon_from_file(ICON)
+        win.override_background_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0.016, 0.027, 0.047, 1))
+        win.connect("window-state-event", self.on_window_state)
+
+        web = WebKit2.WebView()
+        web.set_background_color(Gdk.RGBA(0.016, 0.027, 0.047, 1))
+        web.get_settings().set_enable_developer_extras(True)
+        # The page knows it is in this app: "Show the session" then goes through on_policy, where a click's token is.
+        web.get_user_content_manager().add_script(WebKit2.UserScript.new(
+            "window.mewoHost = 'linux';", WebKit2.UserContentInjectedFrames.TOP_FRAME, WebKit2.UserScriptInjectionTime.START, None, None))
+        web.connect("decide-policy", self.on_policy)
+        web.connect("create", self.on_create)
+        win.add(web)
+        win.show_all()
+        self.window, self.web = win, web
+        self.load()
+        # A dashboard that stopped (the mewo binary was replaced, killed) comes back.
+        GLib.timeout_add_seconds(3, self.watch)
+
+    def toggle_full(self):
+        if not self.window:
+            return
+        if self.full:
+            self.window.unfullscreen()
+        else:
+            self.window.fullscreen()
+
+    def on_window_state(self, _win, event):
+        self.full = bool(event.new_window_state & Gdk.WindowState.FULLSCREEN)
+        return False
+
+    # ---------- the dashboard process ----------
+
+    def load(self):
+        if self.server and self.server.poll() is None and self.base:
+            self.web.load_uri(self.base + "/")
+            return
+        self.start_server()
+
+    def start_server(self):
+        self.stop_server()
+        self.ready = False
+        exe = mewo_bin()
+        if not exe:
+            self.web.load_html(message_page("The mewo command is not installed. Install Mewo on Fire first: curl -fsSL https://www.mewo-on-fire.com/install.sh | sh"), None)
+            return
+        port = free_port()
+        try:
+            self.server = subprocess.Popen(
+                [exe, "dashboard", str(port), "--no-open"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except OSError as e:
+            self.web.load_html(message_page(f"Could not run {exe}: {e}"), None)
+            return
+        self.base = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 10
+        GLib.timeout_add(100, self.wait_ready, port, deadline)
+
+    def wait_ready(self, port, deadline):
+        if not self.server or self.server.poll() is not None:
+            self.web.load_html(message_page("`mewo dashboard` stopped right away. Run it in a terminal to see why."), None)
+            return False
+        try:
+            socket.create_connection(("127.0.0.1", port), 0.2).close()
+        except OSError:
+            if time.monotonic() < deadline:
+                return True
+            self.web.load_html(message_page("`mewo dashboard` did not start listening."), None)
+            return False
+        self.ready = True
+        self.web.load_uri(self.base + "/")
+        return False
+
+    def watch(self):
+        if self.ready and self.server and self.server.poll() is not None:
+            self.start_server()
+        return True
+
+    def stop_server(self):
+        if self.server and self.server.poll() is None:
+            self.server.terminate()
+            try:
+                self.server.wait(2)
+            except subprocess.TimeoutExpired:
+                self.server.kill()
+        self.server = None
+
+    def do_shutdown(self):
+        self.stop_server()
+        Gtk.Application.do_shutdown(self)
+
+    def on_signal(self):
+        self.quit()
+        return GLib.SOURCE_REMOVE
+
+    # ---------- links ----------
+
+    def local(self, uri):
+        return bool(self.base) and (uri == self.base or uri.startswith(self.base + "/"))
+
+    @staticmethod
+    def open_outside(uri):
+        try:
+            Gio.AppInfo.launch_default_for_uri(uri, None)
+        except GLib.Error as e:
+            print(f"mewo-console: nothing opens {uri}: {e.message}", file=sys.stderr)
+
+    def on_policy(self, _web, decision, kind):
+        if kind == WebKit2.PolicyDecisionType.RESPONSE:
+            return False
+        action = decision.get_navigation_action()
+        uri = action.get_request().get_uri() or ""
+        if self.local(uri):
+            return False
+        scheme = (GLib.Uri.peek_scheme(uri) or "").lower()
+        if scheme in ("about", "data", "blob"):
+            return False
+        if scheme == "mewo-session":
+            self.show_session(uri)
+            decision.ignore()
+            return True
+        # A window.open(), a clicked link or another app's scheme leaves for that app;
+        # anything else (what a design or a page loads in its frame) stays.
+        clicked = action.get_navigation_type() == WebKit2.NavigationType.LINK_CLICKED
+        if kind == WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION or clicked or scheme not in ("http", "https", "file"):
+            self.open_outside(uri)
+            decision.ignore()
+            return True
+        return False
+
+    def show_session(self, uri):
+        """Brings a Mewo Session window forward: `mewo-session:show?pid=<its pid>`. The window is another
+        program, so the shell wants proof a person asked: an activation token made from the click here,
+        left for the window in <state>/windows/<pid>.token, then SIGUSR1."""
+        try:
+            pid = int(uri.split("pid=", 1)[1].split("&", 1)[0])
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                command = f.read()
+        except (IndexError, ValueError, OSError):
+            return
+        windows = os.path.expanduser("~/.local/state/mewo-on-fire/windows")
+        # Only a window that listed itself has the handler; to anything else SIGUSR1 is fatal.
+        if b"mewo-session" not in command or not os.path.exists(os.path.join(windows, f"{pid}.json")):
+            return
+        token = ""
+        try:
+            context = self.window.get_display().get_app_launch_context()
+            info = Gio.AppInfo.create_from_commandline("true", "Mewo Session", Gio.AppInfoCreateFlags.NONE)
+            token = context.get_startup_notify_id(info, []) or ""
+        except (GLib.Error, TypeError, AttributeError):
+            pass
+        try:
+            if token:
+                with open(os.path.join(windows, f"{pid}.token"), "w", encoding="utf-8") as f:
+                    f.write(token)
+            os.kill(pid, signal.SIGUSR1)
+        except OSError:
+            pass
+
+    def on_create(self, _web, action):
+        uri = action.get_request().get_uri() or ""
+        if uri and not self.local(uri):
+            self.open_outside(uri)
+        return None
+
+
+if __name__ == "__main__":
+    GLib.set_prgname("mewo-console")
+    GLib.set_application_name("Mewo Console")
+    sys.exit(Console().run(sys.argv))

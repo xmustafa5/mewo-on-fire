@@ -17,7 +17,11 @@ use crate::paths;
 const NOTIFICATION_MATCHER: &str =
     "permission_prompt|idle_prompt|agent_needs_input|elicitation_dialog";
 /// `mewo hook` (async). UserPromptSubmit: PROTOCOL.md v1.2 session state.
-const HOOK_EVENTS: [&str; 4] = ["Stop", "Notification", "SessionEnd", "UserPromptSubmit"];
+const HOOK_EVENTS: [&str; 5] = ["Stop", "Notification", "SessionEnd", "UserPromptSubmit", "SessionStart"];
+/// v1.7: the policy's guard rail on Bash commands (`mewo hook`, blocking so
+/// it can refuse).
+const GUARD_EVENT: &str = "PreToolUse";
+const GUARD_TIMEOUT_SECS: u64 = 10;
 /// PROTOCOL.md v1.1: answer prompts from the phone (`mewo ask`, blocking).
 const ASK_EVENT: &str = "PermissionRequest";
 const ASK_TIMEOUT_SECS: u64 = 86_400;
@@ -56,6 +60,13 @@ pub fn install() -> Result<()> {
 
     println!();
     print_firewall_hint(config::configured_port());
+    #[cfg(target_os = "macos")]
+    {
+        println!();
+        println!("Folders:  when the first session runs in Documents, Desktop or Downloads, macOS asks whether mewo");
+        println!("          may access that folder. Allow it: the TORCH flow (plans, signatures, the scan) reads");
+        println!("          and writes files there. Later: System Settings > Privacy & Security > Files and Folders.");
+    }
     println!();
     println!("Next: pair a phone with \"Pair a Phone…\" in the bell's menu, or run `mewo pair`");
     Ok(())
@@ -705,6 +716,24 @@ fn merge_hooks(settings: &mut Value, bin: &Path) -> Result<Vec<&'static str>> {
         );
         groups.push(Value::Object(group));
         added.push(event);
+    }
+
+    // Not async: a refusal has to reach Claude Code before the command runs.
+    let groups = hooks
+        .entry(GUARD_EVENT)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let groups = groups
+        .as_array_mut()
+        .ok_or_else(|| anyhow!("\"hooks.{}\" in settings.json is not an array", GUARD_EVENT))?;
+    if !groups.iter().any(|g| group_runs(g, "hook")) {
+        let mut group = Map::new();
+        group.insert("matcher".to_string(), json!("Bash"));
+        group.insert(
+            "hooks".to_string(),
+            json!([{"type": "command", "command": hook_cmd, "timeout": GUARD_TIMEOUT_SECS}]),
+        );
+        groups.push(Value::Object(group));
+        added.push(GUARD_EVENT);
     }
 
     // Not async: Claude Code waits for the phone's decision.

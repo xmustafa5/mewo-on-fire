@@ -19,6 +19,27 @@ pub fn state_dir() -> PathBuf {
     home().join(".local").join("state").join("mewo-on-fire")
 }
 
+/// v3.1: true on the daemon's first start after the computer restarted
+/// (the boot it remembers in `<state>/boot` is not this one). False when
+/// it cannot tell: the first run, or a system that does not say.
+pub fn restarted_since_last_start() -> bool {
+    let now = if cfg!(target_os = "macos") {
+        std::process::Command::new("sysctl").args(["-n", "kern.boottime"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+    } else {
+        std::fs::read_to_string("/proc/sys/kernel/random/boot_id").map(|s| s.trim().to_string()).unwrap_or_default()
+    };
+    if now.is_empty() {
+        return false;
+    }
+    let file = state_dir().join("boot");
+    let before = std::fs::read_to_string(&file).map(|s| s.trim().to_string()).unwrap_or_default();
+    if before != now {
+        let _ = std::fs::create_dir_all(state_dir());
+        let _ = std::fs::write(&file, &now);
+    }
+    !before.is_empty() && before != now
+}
+
 pub fn config_file() -> PathBuf {
     config_dir().join("config.json")
 }
@@ -41,6 +62,10 @@ pub fn events_file() -> PathBuf {
 
 pub fn sessions_file() -> PathBuf {
     state_dir().join("sessions.json")
+}
+
+pub fn console_file() -> PathBuf {
+    state_dir().join("console.json")
 }
 
 /// `/tmp/mewo-on-fire-$USER.sock`

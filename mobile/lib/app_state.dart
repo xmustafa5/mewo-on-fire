@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' as fln;
+import 'package:path_provider/path_provider.dart';
 
 import 'background.dart';
 import 'ios_background.dart';
@@ -94,6 +95,24 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final ValueNotifier<SessionRef?> openSession = ValueNotifier<SessionRef?>(null);
 
   final Map<String, ChatState> _chats = <String, ChatState>{};
+
+  /// v1.7 (TORCH policy): features by PC, and the policy requests waiting
+  /// for the PC's answer, by client id.
+  final Map<String, FeaturesData> _features = <String, FeaturesData>{};
+  final Map<String, Completer<Map<String, dynamic>>> _policyWaits = <String, Completer<Map<String, dynamic>>>{};
+  final Map<String, ScanReport> _scans = <String, ScanReport>{};
+
+  /// Artifact files on their way from a PC (v1.6), by client id.
+  final Map<String, _ArtifactFetch> _artifactFetches = <String, _ArtifactFetch>{};
+
+  /// New sessions asked of a PC (v1.6), by client id, until it answers.
+  final Map<String, Completer<String>> _newSessions = <String, Completer<String>>{};
+
+  /// Pull requests by session key (v1.6), while a chat is open.
+  final Map<String, PrList> _prs = <String, PrList>{};
+  final Map<String, Timer> _prsTimers = <String, Timer>{};
+  final Map<String, Timer> _prsTimeouts = <String, Timer>{};
+  static const Duration _prsEvery = Duration(minutes: 2);
 
   /// Fetched chat images by `pcId|sessionId|imageId`, oldest first.
   final Map<String, ChatImage> _images = <String, ChatImage>{};
@@ -307,6 +326,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       // After a reply was delivered, Claude's answer shows up with its stop.
       if (ev.kind == EventKind.stop && ev.sessionId.isNotEmpty) {
         _scheduleChatRefresh(pcId, ev.sessionId);
+        // It may have pushed or opened a pull request meanwhile.
+        if (_watched.containsKey(sessionKey(pcId, ev.sessionId))) {
+          Timer(const Duration(seconds: 3), () => refreshPrs(pcId, ev.sessionId));
+        }
       }
       notifyListeners();
     } else if (type == 'requests') {
@@ -333,6 +356,18 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _finishChat(key, error: msg['error'] is String ? msg['error'] as String : 'Failed');
     } else if (type == 'image') {
       _onImage(msg);
+    } else if (type == 'prs') {
+      _onPrs(msg);
+    } else if (type == 'artifact_file' || type == 'artifact_end') {
+      _onArtifactFrame(msg);
+    } else if (type == 'features') {
+      _onFeatures(msg);
+    } else if (type is String && type.endsWith('_result') && type != 'new_session_result') {
+      final c = _policyWaits.remove('${msg['client_id']}');
+      c?.complete(msg);
+    } else if (type == 'new_session_result') {
+      final c = _newSessions.remove('${msg['client_id']}');
+      c?.complete(msg['ok'] == true ? '' : (msg['error'] is String && (msg['error'] as String).isNotEmpty ? msg['error'] as String : 'The PC could not start it'));
     } else if (type == 'send_result') {
       _onSendResult(msg);
     }
@@ -540,7 +575,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _watched[key] = (_watched[key] ?? 0) + 1;
     // Not synchronously: called from initState (during a build), and
     // refreshChat notifies listeners.
-    unawaited(Future<void>.microtask(() => refreshChat(pcId, sessionId)));
+    unawaited(Future<void>.microtask(() {
+      refreshChat(pcId, sessionId);
+      refreshPrs(pcId, sessionId);
+    }));
+    _prsTimers[key]?.cancel();
+    _prsTimers[key] = Timer.periodic(_prsEvery, (_) => refreshPrs(pcId, sessionId));
   }
 
   void unwatchChat(String pcId, String sessionId) {
@@ -552,6 +592,414 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     _watched.remove(key);
     _chatRefreshTimers.remove(key)?.cancel();
+    _prsTimers.remove(key)?.cancel();
+  }
+
+  // ---- the TORCH flow (v1.7) ----
+
+  FeaturesData? featuresOf(String pcId) => _features[pcId];
+
+  /// Every feature of every PC, newest activity first.
+  List<(String, TorchFeature)> get allFeatures {
+    final out = <(String, TorchFeature)>[];
+    for (final e in _features.entries) {
+      for (final f in e.value.features) {
+        out.add((e.key, f));
+      }
+    }
+    out.sort((a, b) {
+      final ra = a.$2.running ? 0 : 1;
+      final rb = b.$2.running ? 0 : 1;
+      if (ra != rb) return ra - rb;
+      return a.$2.key.compareTo(b.$2.key);
+    });
+    return out;
+  }
+
+  ScanReport? scanOf(String pcId, String sessionId) => _scans[sessionKey(pcId, sessionId)];
+
+  /// Asks every PC for its features.
+  Future<void> refreshFeatures() async {
+    for (final pc in pcs) {
+      try {
+        sendToTask(jsonEncode({'cmd': 'policy', 'pc_id': pc.id, 'frame': {'type': 'get_features', 'client_id': _clientId()}}));
+      } catch (_) {}
+    }
+  }
+
+  void _onFeatures(Map<String, dynamic> msg) {
+    final pcId = '${msg['pc_id']}';
+    if (pcId.isEmpty) return;
+    final hadPlane = _features[pcId]?.plane.configured ?? false;
+    if (msg['ok'] != false && msg['plane'] is Map && (msg['plane'] as Map)['configured'] == true && !hadPlane) {
+      Timer(const Duration(milliseconds: 300), refreshMine);
+    }
+    if (msg['ok'] == false && _features.containsKey(pcId)) {
+      // Keep what was known; the error shows on the list.
+      final old = _features[pcId]!;
+      _features[pcId] = FeaturesData(features: old.features, selfCheck: old.selfCheck, reviewCheck: old.reviewCheck, error: '${msg['error'] ?? ''}', ts: old.ts, workspaces: old.workspaces, roles: old.roles, apps: old.apps, roleNames: old.roleNames, warning: old.warning, plane: old.plane);
+    } else {
+      _features[pcId] = FeaturesData.fromJson(msg);
+    }
+    notifyListeners();
+  }
+
+  String _clientId() => DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+
+  /// A policy frame to [pcId], answered by its `*_result`. The map has
+  /// `ok` and, when false, `error`.
+  Future<Map<String, dynamic>> policy(String pcId, String type, Map<String, dynamic> params) async {
+    if (!await _isRunning()) return {'ok': false, 'error': 'The background service is stopped. Start it on Home.'};
+    final clientId = _clientId();
+    final c = Completer<Map<String, dynamic>>();
+    _policyWaits[clientId] = c;
+    try {
+      sendToTask(jsonEncode({'cmd': 'policy', 'pc_id': pcId, 'frame': {...params, 'type': type, 'client_id': clientId}}));
+    } catch (_) {
+      _policyWaits.remove(clientId);
+      return {'ok': false, 'error': 'Could not reach the background service'};
+    }
+    final r = await c.future.timeout(const Duration(seconds: 30), onTimeout: () => {'ok': false, 'error': 'No answer from ${pcNameFor(pcId)}'});
+    _policyWaits.remove(clientId);
+    return r;
+  }
+
+  /// Signs a gate; refreshes the features after.
+  Future<String> sign(String pcId, TorchFeature f, TorchGate g, String role, String name, List<bool> checks) async {
+    final r = await policy(pcId, 'sign', {'feature': f.key, 'workspace': f.workspace, 'gate': g.id, 'role': role, 'name': name, 'checks': checks});
+    if (r['ok'] == true) {
+      if (name.trim().isNotEmpty && name.trim() != settings.signerName) await updateSettings(settings.copyWith(signerName: name.trim()));
+      unawaited(refreshFeatures());
+      final note = '${r['note'] ?? ''}';
+      return note;
+    }
+    throw StateError('${r['error'] ?? 'The PC could not sign it'}');
+  }
+
+  Future<String> requestSign(String pcId, TorchFeature f, TorchGate g, String role) async {
+    final r = await policy(pcId, 'request_sign', {'feature': f.key, 'workspace': f.workspace, 'gate': g.id, 'role': role, 'name': settings.signerName});
+    return r['ok'] == true ? '' : '${r['error'] ?? 'Could not ask'}';
+  }
+
+  /// Starts a planned session in Claude Desktop on the PC.
+  Future<String> startPlanSession(String pcId, TorchFeature f, int n) async {
+    final r = await policy(pcId, 'start_session', {'feature': f.key, 'workspace': f.workspace, 'n': n});
+    if (r['ok'] == true) {
+      Timer(const Duration(seconds: 4), refreshSessions);
+      Timer(const Duration(seconds: 5), refreshFeatures);
+      return '';
+    }
+    return '${r['error'] ?? 'The PC could not start it'}';
+  }
+
+  Future<String> setPlanStatus(String pcId, TorchFeature f, int n, String status) async {
+    final r = await policy(pcId, 'plan_status', {'feature': f.key, 'workspace': f.workspace, 'n': n, 'status': status, 'pr': ''});
+    if (r['ok'] == true) {
+      unawaited(refreshFeatures());
+      return '';
+    }
+    return '${r['error'] ?? 'Could not write the plan'}';
+  }
+
+  // ---- the flow runner (v1.8) ----
+
+  Future<String> _flowCmd(String pcId, String type, Map<String, dynamic> params, {bool refresh = true}) async {
+    final r = await policy(pcId, type, params);
+    if (r['ok'] == true) {
+      if (refresh) Timer(const Duration(milliseconds: 600), refreshFeatures);
+      return '';
+    }
+    return '${r['error'] ?? 'The PC could not do it'}';
+  }
+
+  /// Does the flow's next action for [f] now. Empty string on success.
+  Future<String> flowNext(String pcId, TorchFeature f) => _flowCmd(pcId, 'flow_next', {'feature': f.key, 'workspace': f.workspace, 'name': settings.signerName});
+
+  /// v2.6: one plan session in full (its run, review, live steps, timing).
+  Future<Map<String, dynamic>> sessionDetail(String pcId, TorchFeature f, int n) => policy(pcId, 'session_detail', {'feature': f.key, 'workspace': f.workspace, 'n': n});
+
+  /// v2.6: ends a session's headless run.
+  Future<String> sessionStop(String pcId, TorchFeature f, int n) => _flowCmd(pcId, 'session_stop', {'feature': f.key, 'workspace': f.workspace, 'n': n});
+
+  /// v2.6: the build autopilot on or off.
+  Future<String> buildSet(String pcId, TorchFeature f, {required bool on, int parallel = 2, bool review = true, bool resumeNextWork = false, bool stopRunning = false}) => _flowCmd(pcId, 'build_set', {'feature': f.key, 'workspace': f.workspace, 'on': on, 'parallel': parallel, 'review': review, 'resume_next_work': resumeNextWork, 'stop_running': stopRunning});
+
+  /// v2.4: a step's session again (the design, the intake, the plan…).
+  Future<String> flowRedo(String pcId, TorchFeature f, int step) => _flowCmd(pcId, 'flow_redo', {'feature': f.key, 'workspace': f.workspace, 'step': step, 'name': settings.signerName});
+
+  Future<String> flowSet(String pcId, TorchFeature f, bool autopilot) => _flowCmd(pcId, 'flow_set', {'feature': f.key, 'workspace': f.workspace, 'autopilot': autopilot});
+
+  Future<String> estimate(String pcId, TorchFeature f, String role, double days, String assumptions) =>
+      _flowCmd(pcId, 'estimate', {'feature': f.key, 'workspace': f.workspace, 'role': role, 'name': settings.signerName, 'days': days, 'assumptions': assumptions});
+
+  Future<String> estimatesDone(String pcId, TorchFeature f) => _flowCmd(pcId, 'estimates_done', {'feature': f.key, 'workspace': f.workspace});
+
+  Future<String> exportHandoff(String pcId, TorchFeature f) => _flowCmd(pcId, 'export_handoff', {'feature': f.key, 'workspace': f.workspace});
+
+  Future<Map<String, dynamic>> uatUser(String pcId, TorchFeature f, String user, String role, bool unaided, String notes) async {
+    final r = await policy(pcId, 'uat_user', {'feature': f.key, 'workspace': f.workspace, 'user': user, 'role': role, 'unaided': unaided, 'notes': notes});
+    if (r['ok'] == true) Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return r;
+  }
+
+  Future<String> release(String pcId, TorchFeature f) => _flowCmd(pcId, 'release', {'feature': f.key, 'workspace': f.workspace, 'name': settings.signerName});
+
+  Future<Map<String, dynamic>> closeBranches(String pcId, TorchFeature f) async {
+    final r = await policy(pcId, 'close_branches', {'feature': f.key, 'workspace': f.workspace});
+    Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return r;
+  }
+
+  Future<Map<String, dynamic>> newFeature(String pcId, String workspace, String app, String slug, bool light) async {
+    final r = await policy(pcId, 'new_feature', {'workspace': workspace, 'app': app, 'slug': slug, 'light': light});
+    if (r['ok'] == true) Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return r;
+  }
+
+  // ---- Plane (v2.1) ----
+
+  final Map<String, List<MineItem>> _mine = <String, List<MineItem>>{};
+
+  List<MineItem> mineOf(String pcId) => _mine[pcId] ?? const <MineItem>[];
+
+  /// Everything assigned to me in Plane, across PCs.
+  List<(String, MineItem)> get allMine => [for (final e in _mine.entries) for (final m in e.value) (e.key, m)];
+
+  /// Signs in with a Plane personal token on every PC that has Plane; the
+  /// PC remembers this phone as that person. Returns the display name.
+  Future<String> planeSignin(String token) async {
+    String name = '';
+    String error = '';
+    for (final pc in pcs) {
+      if (!(featuresOf(pc.id)?.plane.configured ?? false)) continue;
+      final r = await policy(pc.id, 'plane_signin', {'token': token});
+      if (r['ok'] == true) {
+        name = '${(r['me'] as Map?)?['display'] ?? ''}';
+      } else {
+        error = '${r['error'] ?? ''}';
+      }
+    }
+    if (name.isEmpty) throw StateError(error.isEmpty ? 'No PC has Plane connected yet (console → PLANE)' : error);
+    if (name != settings.signerName) await updateSettings(settings.copyWith(signerName: name));
+    unawaited(refreshMine());
+    unawaited(refreshFeatures());
+    return name;
+  }
+
+  Future<void> refreshMine() async {
+    for (final pc in pcs) {
+      if (!(featuresOf(pc.id)?.plane.configured ?? false)) continue;
+      final r = await policy(pc.id, 'plane_mine', {});
+      if (r['ok'] == true && r['items'] is List) {
+        _mine[pc.id] = [for (final i in r['items'] as List) if (i is Map) MineItem.fromJson(Map<String, dynamic>.from(i))];
+      } else {
+        _mine.remove(pc.id);
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<List<PlaneTask>> planeTasks(String pcId, TorchFeature f, int n) async {
+    final r = await policy(pcId, 'plane_tasks', {'feature': f.key, 'workspace': f.workspace, 'n': n});
+    if (r['ok'] != true) throw StateError('${r['error'] ?? 'Could not read the tasks'}');
+    return [for (final t in (r['tasks'] as List? ?? const [])) if (t is Map) PlaneTask.fromJson(Map<String, dynamic>.from(t))];
+  }
+
+  Future<String> planeTaskAdd(String pcId, TorchFeature f, int n, String name) async {
+    final r = await policy(pcId, 'plane_task_add', {'feature': f.key, 'workspace': f.workspace, 'n': n, 'name': name});
+    return r['ok'] == true ? '' : '${r['error'] ?? 'Could not add it'}';
+  }
+
+  Future<String> planeTaskDone(String pcId, String id, bool done) async {
+    final r = await policy(pcId, 'plane_task_done', {'id': id, 'done': done});
+    return r['ok'] == true ? '' : '${r['error'] ?? 'Could not change it'}';
+  }
+
+  /// Removes a signature from a gate (v1.9): precisely, even one made by hand.
+  Future<String> unsign(String pcId, TorchFeature f, TorchGate g, String role) => _flowCmd(pcId, 'unsign', {'feature': f.key, 'workspace': f.workspace, 'gate': g.id, 'role': role});
+
+  /// Rolls back one of the flow's writes (v1.9). Returns the PC's notes.
+  Future<Map<String, dynamic>> rollback(String pcId, TorchFeature f, int id) async {
+    final r = await policy(pcId, 'rollback', {'feature': f.key, 'workspace': f.workspace, 'id': id});
+    Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return r;
+  }
+
+  /// v2.2: the PRD families a feature can follow: `(list, file in use, error)`.
+  Future<(List<PrdChoice>, String, String)> prds(String pcId, TorchFeature f) async {
+    final r = await policy(pcId, 'prds', {'feature': f.key, 'workspace': f.workspace});
+    if (r['ok'] != true) return (const <PrdChoice>[], '', '${r['error'] ?? 'The PC could not list them'}');
+    final list = <PrdChoice>[
+      if (r['prds'] is List)
+        for (final p in r['prds'] as List)
+          if (p is Map) PrdChoice.fromJson(Map<String, dynamic>.from(p)),
+    ];
+    return (list, '${r['prd'] ?? ''}', '');
+  }
+
+  /// v2.2: points the feature at a PRD family; empty goes back to the name match.
+  Future<String> setPrd(String pcId, TorchFeature f, String stem) => _flowCmd(pcId, 'set_prd', {'feature': f.key, 'workspace': f.workspace, 'prd': stem});
+
+  /// v2.3: the design system the feature follows; an empty name means Glare.
+  /// Returns `(error, notes)`: the notes say what the PC did about the checkout.
+  Future<(String, List<String>)> setDesign(String pcId, TorchFeature f, {required String name, required String repo, required String dir, required String reference}) async {
+    final r = await policy(pcId, 'set_design', {'feature': f.key, 'workspace': f.workspace, 'name': name, 'repo': repo, 'dir': dir, 'reference': reference});
+    if (r['ok'] != true) return ('${r['error'] ?? 'The PC could not save it'}', const <String>[]);
+    Timer(const Duration(milliseconds: 600), refreshFeatures);
+    return ('', <String>[for (final n in (r['notes'] is List ? r['notes'] as List : const <dynamic>[])) '$n']);
+  }
+
+  /// Claims a role for the signer of this phone (the PC fills in the phone).
+  Future<String> setRole(String pcId, String workspace, String role, String name) => _flowCmd(pcId, 'set_role', {'workspace': workspace, 'role': role, 'name': name, 'phone': ''});
+
+  /// The self-check scan of a session's changes.
+  Future<ScanReport> scan(String pcId, String sessionId) async {
+    final r = await policy(pcId, 'get_scan', {'session_id': sessionId});
+    final report = ScanReport.fromJson(r);
+    _scans[sessionKey(pcId, sessionId)] = report;
+    notifyListeners();
+    return report;
+  }
+
+  /// One line of a session's self-check; the session push brings it back.
+  Future<void> setCheck(String pcId, String sessionId, int index, bool checked) async {
+    await policy(pcId, 'set_check', {'session_id': sessionId, 'index': index, 'checked': checked});
+  }
+
+  // ---- artifacts (v1.6) ----
+
+  /// The files of [a] from [pcId], saved under the temp folder. Throws a
+  /// [StateError] with the reason when they do not come.
+  Future<ArtifactBundle> fetchArtifact(String pcId, String sessionId, SessionArtifact a) async {
+    if (!await _isRunning()) throw StateError('The background service is stopped. Start it on Home.');
+    final clientId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final tmp = await getTemporaryDirectory();
+    final dir = Directory('${tmp.path}/mewo-artifacts/$pcId/${a.id.isEmpty ? clientId : a.id}');
+    if (await dir.exists()) await dir.delete(recursive: true);
+    await dir.create(recursive: true);
+    final fetch = _ArtifactFetch(dir.path);
+    _artifactFetches[clientId] = fetch;
+    try {
+      sendToTask(jsonEncode({'cmd': 'get_artifact', 'pc_id': pcId, 'client_id': clientId, 'session_id': sessionId, 'url': a.url, 'id': a.id, 'entry': a.entry, 'title': a.title}));
+    } catch (_) {
+      _artifactFetches.remove(clientId);
+      throw StateError('Could not reach the background service');
+    }
+    try {
+      return await fetch.done.future.timeout(
+        const Duration(seconds: 90),
+        onTimeout: () => throw StateError('No answer from ${pcNameFor(pcId)}'),
+      );
+    } finally {
+      _artifactFetches.remove(clientId);
+    }
+  }
+
+  void _onArtifactFrame(Map<String, dynamic> msg) {
+    final fetch = _artifactFetches['${msg['client_id']}'];
+    if (fetch == null) return;
+    if (msg['type'] == 'artifact_file') {
+      final path = '${msg['path'] ?? ''}';
+      if (path.isEmpty || path.startsWith('/') || path.split('/').any((p) => p.isEmpty || p == '..')) return;
+      final count = msg['parts'] is int && (msg['parts'] as int) > 0 ? msg['parts'] as int : 1;
+      final part = msg['part'] is int ? msg['part'] as int : 0;
+      final parts = fetch.parts.putIfAbsent(path, () => List<String?>.filled(count, null));
+      if (part < 0 || part >= parts.length) return;
+      parts[part] = '${msg['data'] ?? ''}';
+      if (parts.any((p) => p == null)) return;
+      final joined = parts.join();
+      fetch.parts.remove(path);
+      final bytes = msg['encoding'] == 'base64' ? base64Decode(joined) : utf8.encode(joined);
+      fetch.writes.add(File('${fetch.dir}/$path').create(recursive: true).then((f) => f.writeAsBytes(bytes)).then((_) {}));
+      return;
+    }
+    if (fetch.done.isCompleted) return;
+    if (msg['ok'] != true) {
+      final e = msg['error'];
+      fetch.done.completeError(StateError(e is String && e.isNotEmpty ? e : 'The PC could not send it'));
+      return;
+    }
+    Future.wait(fetch.writes).then((_) {
+      if (fetch.done.isCompleted) return;
+      fetch.done.complete(ArtifactBundle(
+        dir: fetch.dir,
+        entry: '${msg['entry'] ?? ''}',
+        kind: '${msg['kind'] ?? ''}',
+        title: '${msg['title'] ?? ''}',
+      ));
+    }, onError: (Object _) {
+      if (!fetch.done.isCompleted) fetch.done.completeError(StateError('Could not save the files'));
+    });
+  }
+
+  // ---- new sessions (v1.6) ----
+
+  /// Asks [pcId] to start a Claude Code session in Claude Desktop with
+  /// [prompt] as its first message, in [cwd] when given. Resolves to an
+  /// empty string, or the reason it did not happen.
+  Future<String> newSession(String pcId, {String cwd = '', required String prompt}) async {
+    if (prompt.trim().isEmpty) return 'Write the first message';
+    if (!await _isRunning()) return 'The background service is stopped. Start it on Home.';
+    final clientId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final c = Completer<String>();
+    _newSessions[clientId] = c;
+    try {
+      sendToTask(jsonEncode({'cmd': 'new_session', 'pc_id': pcId, 'client_id': clientId, 'cwd': cwd, 'prompt': prompt.trim()}));
+    } catch (_) {
+      _newSessions.remove(clientId);
+      return 'Could not reach the background service';
+    }
+    final result = await c.future.timeout(const Duration(seconds: 20), onTimeout: () => 'No answer from ${pcNameFor(pcId)}');
+    _newSessions.remove(clientId);
+    if (result.isEmpty) {
+      // Desktop sends the prompt; the hooks bring the session here.
+      Timer(const Duration(seconds: 4), refreshSessions);
+      Timer(const Duration(seconds: 12), refreshSessions);
+    }
+    return result;
+  }
+
+  // ---- pull requests (v1.6) ----
+
+  PrList? prsOf(String pcId, String sessionId) => _prs[sessionKey(pcId, sessionId)];
+
+  /// Asks the PC for the open pull requests of the session's repository.
+  Future<void> refreshPrs(String pcId, String sessionId) async {
+    final key = sessionKey(pcId, sessionId);
+    final current = _prs[key] ?? const PrList();
+    if (current.loading) return;
+    _prs[key] = current.copyWith(loading: true);
+    notifyListeners();
+    _prsTimeouts[key]?.cancel();
+    _prsTimeouts[key] = Timer(const Duration(seconds: 30), () {
+      final c = _prs[key];
+      if (c == null || !c.loading) return;
+      _prs[key] = c.copyWith(loading: false, error: c.loaded ? c.error : 'No answer from ${pcNameFor(pcId)}');
+      notifyListeners();
+    });
+    if (!await _isRunning()) {
+      _prs[key] = current.copyWith(loading: false);
+      notifyListeners();
+      return;
+    }
+    try {
+      sendToTask(jsonEncode({'cmd': 'get_prs', 'pc_id': pcId, 'session_id': sessionId}));
+    } catch (_) {
+      _prs[key] = current.copyWith(loading: false);
+      notifyListeners();
+    }
+  }
+
+  void _onPrs(Map<String, dynamic> msg) {
+    final key = sessionKey('${msg['pc_id']}', '${msg['session_id']}');
+    _prsTimeouts.remove(key)?.cancel();
+    final fresh = PrList.fromJson(msg);
+    final old = _prs[key];
+    // A failed refresh keeps what was known, with the reason.
+    _prs[key] = fresh.error.isNotEmpty && old != null && old.loaded && fresh.prs.isEmpty
+        ? old.copyWith(loading: false, error: fresh.error)
+        : fresh;
+    notifyListeners();
   }
 
   void _scheduleChatRefresh(String pcId, String sessionId) {
@@ -797,6 +1245,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// session list, fetched chats and images, and the status of messages sent
   /// from here. The PCs are asked for their sessions again.
   Future<void> clearChats() async {
+    _prs.clear();
     _chats.clear();
     _images.clear();
     for (final t in _imageTimeouts.values) {
@@ -826,4 +1275,26 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       await Store.saveEvents(<HistoryEntry>[]);
     }
   }
+}
+
+/// An artifact's files, fetched from the PC into a folder of the temp dir
+/// (v1.6). [entry] is what to open inside it.
+class ArtifactBundle {
+  const ArtifactBundle({required this.dir, required this.entry, required this.kind, required this.title});
+
+  final String dir;
+  final String entry;
+  final String kind;
+  final String title;
+}
+
+class _ArtifactFetch {
+  _ArtifactFetch(this.dir);
+
+  final String dir;
+
+  /// Chunks per file until all of them are there.
+  final Map<String, List<String?>> parts = <String, List<String?>>{};
+  final List<Future<void>> writes = <Future<void>>[];
+  final Completer<ArtifactBundle> done = Completer<ArtifactBundle>();
 }

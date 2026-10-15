@@ -140,6 +140,15 @@ run `mewo install` again. It adds the `listen` Stop hook and the
 The app fetches chats when you open them and does not store them on the phone.
 If the PC is offline, a message waits up to a minute for it to reconnect.
 
+## Pull requests
+
+While a chat is open, the open pull requests of that session's repository
+sit above the message box, like Claude Desktop's: number, repository, branch,
+`+added −removed` and a CI pill. Tap one for its checks, the GitHub link, or
+(when CI fails) a ready-made message asking Claude to fix it. The × hides one
+until you open the chat again. The PC needs the GitHub CLI logged in
+(`gh auth login`); without it the strip says so once.
+
 ## Battery and OEM notes
 
 Some phones stop background apps even when they run a foreground service.

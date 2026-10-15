@@ -1,16 +1,19 @@
 //! Claude Code transcript (JSONL) → chat items (PROTOCOL.md v1.2
 //! "Transcript → chat items"). Blocking file IO: call from spawn_blocking.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ask::truncate_chars;
+use crate::artifacts;
 use crate::suggest;
 
 /// Only the tail of the transcript is read.
@@ -48,10 +51,43 @@ pub struct ImageRef {
     pub id: String,
 }
 
+/// Something Claude published with its Artifact tool (v1.6): a design
+/// canvas, a document, a page… `kind` is `design`, `document`, `page` or
+/// `artifact` when the files did not say.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Artifact {
+    pub url: String,
+    pub title: String,
+    pub kind: String,
+    pub ts: u64,
+    /// The last segment of the url: the folder of the daemon's copy.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// The daemon has the files: `get_artifact` can hand them to a phone.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub local: bool,
+    /// What to open in the copy: a design's `canvas.json`, a page, a
+    /// document (`.md`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub entry: String,
+}
+
+/// At most this many artifacts are kept per session (the newest).
+const MAX_ARTIFACTS: usize = 20;
+
 #[derive(Debug, Default)]
 pub struct Transcript {
     /// The last `limit` items, oldest first.
     pub items: Vec<ChatItem>,
+    /// Artifacts published in this transcript, oldest first (v1.6).
+    pub artifacts: Vec<Artifact>,
+    /// Where each artifact's files were published from, by url.
+    pub artifact_sources: HashMap<String, Vec<artifacts::Source>>,
+    /// The model of the last assistant line (v1.7).
+    pub model: String,
+    /// The first user message, for matching a session to its plan (v1.7).
+    pub first_prompt: String,
     /// Last `custom-title` entry's `customTitle` (a session renamed by the
     /// user; the Claude desktop app writes its titles this way too), else the
     /// last `ai-title` entry's `aiTitle`.
@@ -74,8 +110,186 @@ pub fn file_key(path: &str) -> Option<FileKey> {
 /// unreadable file gives an empty transcript.
 pub fn read(path: &str, limit: usize) -> Transcript {
     match read_tail(Path::new(path)) {
-        Ok(bytes) => parse(&bytes, limit),
+        Ok(bytes) => {
+            let mut tr = parse(&bytes, limit);
+            // Keep the published files while they exist (v1.6).
+            artifacts::snapshot_all(&mut tr.artifacts, &tr.artifact_sources);
+            tr
+        }
         Err(_) => Transcript::default(),
+    }
+}
+
+/// v2.11: one step of a session as the console's live view shows it: a
+/// message, or a tool call with what it was asked and, once it came back,
+/// what it returned.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Step {
+    pub id: String,
+    pub ts: u64,
+    /// `user`, `assistant` or `tool`.
+    pub kind: String,
+    /// The message, or the tool call's one-liner.
+    pub text: String,
+    /// The tool's name, for a tool call.
+    pub tool: String,
+    /// The call's input in full: a command, an edit as removed and added
+    /// lines, a path.
+    pub input: String,
+    pub result: String,
+    /// The result came back.
+    pub done: bool,
+    pub error: bool,
+}
+
+/// Input and result of a tool call are cut here, for the console.
+const MAX_STEP_CHARS: usize = 4000;
+
+/// The last `limit` steps of the transcript at `path`; empty when it cannot
+/// be read.
+pub fn steps(path: &str, limit: usize) -> Vec<Step> {
+    // The console asks every second or two; an unchanged file is not parsed again.
+    static LAST: Mutex<Option<(String, FileKey, usize, Vec<Step>)>> = Mutex::new(None);
+    let key = file_key(path);
+    if let (Some(k), Ok(last)) = (key, LAST.lock()) {
+        if let Some((p, lk, ll, s)) = last.as_ref() {
+            if p == path && *lk == k && *ll == limit {
+                return s.clone();
+            }
+        }
+    }
+    let s = read_tail(Path::new(path)).map(|bytes| parse_steps(&bytes, limit)).unwrap_or_default();
+    if let (Some(k), Ok(mut last)) = (key, LAST.lock()) {
+        *last = Some((path.to_string(), k, limit, s.clone()));
+    }
+    s
+}
+
+fn parse_steps(bytes: &[u8], limit: usize) -> Vec<Step> {
+    let mut out: Vec<Step> = Vec::new();
+    // tool_use id → its step, for the tool_result that comes back later.
+    let mut calls: HashMap<String, usize> = HashMap::new();
+    let mut last_ts: u64 = 0;
+    for (n, line) in bytes.split(|&b| b == b'\n').enumerate() {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let Ok(v) = serde_json::from_slice::<Value>(line) else { continue };
+        let kind = str_of(&v, "type");
+        if !matches!(kind, "user" | "assistant") || flag(&v, "isSidechain") || flag(&v, "isMeta") {
+            continue;
+        }
+        if let Some(ts) = v.get("timestamp").and_then(Value::as_str).and_then(parse_ts) {
+            last_ts = ts;
+        }
+        let base = match v.get("uuid").and_then(Value::as_str) {
+            Some(u) if !u.is_empty() => u.to_string(),
+            _ => format!("line-{n}"),
+        };
+        let content = v.get("message").and_then(|m| m.get("content"));
+        let step = |id: String, kind: &str, text: String| Step { id, ts: last_ts, kind: kind.to_string(), text: truncate_chars(&text, MAX_ITEM_CHARS), ..Step::default() };
+        if kind == "user" {
+            if let Some((text, _)) = user_text(content, &mut HashSet::new()) {
+                out.push(step(base.clone(), "user", text));
+            }
+            for b in content.and_then(Value::as_array).into_iter().flatten() {
+                if str_of(b, "type") != "tool_result" {
+                    continue;
+                }
+                if let Some(&i) = calls.get(str_of(b, "tool_use_id")) {
+                    let s = &mut out[i];
+                    s.result = truncate_chars(&result_text(b.get("content")), MAX_STEP_CHARS);
+                    s.done = true;
+                    s.error = flag(b, "is_error");
+                }
+            }
+            continue;
+        }
+        let blocks: Vec<&Value> = match content {
+            Some(Value::String(_)) => content.into_iter().collect(),
+            Some(Value::Array(a)) => a.iter().collect(),
+            _ => Vec::new(),
+        };
+        for (i, b) in blocks.into_iter().enumerate() {
+            let id = if i == 0 { base.clone() } else { format!("{base}:{i}") };
+            // What Claude said, without the suggestion line meant for the phone's buttons.
+            let said = match b {
+                Value::String(s) => suggest::split(s.trim()).0,
+                _ if str_of(b, "type") == "text" => suggest::split(str_of(b, "text").trim()).0,
+                _ => String::new(),
+            };
+            if !said.trim().is_empty() {
+                out.push(step(id, "assistant", said.trim().to_string()));
+                continue;
+            }
+            match str_of(b, "type") {
+                "tool_use" => {
+                    let name = str_of(b, "name");
+                    let input = b.get("input").unwrap_or(&Value::Null);
+                    calls.insert(str_of(b, "id").to_string(), out.len());
+                    out.push(Step { tool: name.to_string(), input: truncate_chars(&tool_input(name, input), MAX_STEP_CHARS), ..step(id, "tool", tool_line(name, input)) });
+                }
+                _ => {}
+            }
+        }
+    }
+    let excess = out.len().saturating_sub(limit);
+    out.drain(..excess);
+    out
+}
+
+/// A tool call's input in full, as the console shows it when opened.
+fn tool_input(name: &str, input: &Value) -> String {
+    let field = |k: &str| str_of(input, k).to_string();
+    let edit = |old: &str, new: &str| {
+        let mut lines: Vec<String> = old.lines().map(|l| format!("- {l}")).collect();
+        lines.extend(new.lines().map(|l| format!("+ {l}")));
+        lines.join("\n")
+    };
+    match name {
+        "Bash" => field("command"),
+        "Read" => {
+            let range = match (input.get("offset").and_then(Value::as_u64), input.get("limit").and_then(Value::as_u64)) {
+                (Some(o), Some(l)) => format!(" (lines {o} to {})", o + l),
+                (Some(o), None) => format!(" (from line {o})"),
+                _ => String::new(),
+            };
+            format!("{}{range}", field("file_path"))
+        }
+        "Edit" => format!("{}\n{}", field("file_path"), edit(str_of(input, "old_string"), str_of(input, "new_string"))),
+        "MultiEdit" => {
+            let edits = input.get("edits").and_then(Value::as_array).map(|a| a.iter().map(|e| edit(str_of(e, "old_string"), str_of(e, "new_string"))).collect::<Vec<_>>().join("\n…\n")).unwrap_or_default();
+            format!("{}\n{edits}", field("file_path"))
+        }
+        "Write" => format!("{}\n{}", field("file_path"), field("content")),
+        "Grep" | "Glob" => [("pattern", ""), ("path", "in "), ("glob", "files "), ("output_mode", "")].iter().filter(|(k, _)| !str_of(input, k).is_empty()).map(|(k, p)| format!("{p}{}", str_of(input, k))).collect::<Vec<_>>().join(" · "),
+        "TodoWrite" => input
+            .get("todos")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(|t| format!("{} {}", match str_of(t, "status") { "completed" => "[x]", "in_progress" => "[~]", _ => "[ ]" }, str_of(t, "content"))).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default(),
+        "Agent" | "Task" => format!("{}\n\n{}", field("description"), field("prompt")),
+        "WebFetch" => format!("{}\n{}", field("url"), field("prompt")),
+        "WebSearch" => field("query"),
+        _ => serde_json::to_string_pretty(input).unwrap_or_default(),
+    }
+}
+
+/// What a tool_result says: its text, an image as `[image]`.
+fn result_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .map(|b| match str_of(b, "type") {
+                "text" => str_of(b, "text").to_string(),
+                "image" => "[image]".to_string(),
+                _ => String::new(),
+            })
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
     }
 }
 
@@ -116,6 +330,12 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
     // role-user item.
     let mut open_agents: HashSet<String> = HashSet::new();
     let mut last_ts: u64 = 0;
+    // v1.6: Artifact tool calls whose url only the tool_result tells.
+    let mut pending_artifacts: HashMap<String, (String, String, Vec<artifacts::Source>)> = HashMap::new();
+    let mut artifacts: Vec<Artifact> = Vec::new();
+    let mut artifact_sources: HashMap<String, Vec<artifacts::Source>> = HashMap::new();
+    let mut model = String::new();
+    let mut first_prompt = String::new();
 
     for (n, line) in bytes.split(|&b| b == b'\n').enumerate() {
         if line.iter().all(u8::is_ascii_whitespace) {
@@ -158,6 +378,7 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
         // found again by `image`.
         let mut images: Vec<ImageRef> = Vec::new();
         if kind == "user" {
+            artifact_results(content, &mut pending_artifacts, &mut artifacts, &mut artifact_sources, last_ts);
             if let Some((text, blocks)) = user_text(content, &mut open_agents) {
                 open_agents.clear();
                 found.push(("user", text, None));
@@ -171,7 +392,17 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
                 }
             }
         } else {
+            artifact_calls(content, &mut pending_artifacts, &mut artifacts, &mut artifact_sources, str_of(&v, "cwd"), last_ts);
             assistant_items(content, &mut found, &mut open_agents);
+            let m = v.get("message").map(|m| str_of(m, "model")).unwrap_or("");
+            if !m.is_empty() && !m.starts_with('<') {
+                model = m.to_string();
+            }
+        }
+        if first_prompt.is_empty() {
+            if let Some((_, text, _)) = found.iter().find(|f| f.0 == "user") {
+                first_prompt = truncate_chars(text, 400);
+            }
         }
 
         if limit == 0 {
@@ -209,9 +440,216 @@ fn parse(bytes: &[u8], limit: usize) -> Transcript {
 
     Transcript {
         items: items.into_iter().collect(),
+        artifacts,
+        artifact_sources,
+        model,
+        first_prompt,
         title: custom_title.or(ai_title),
         agents_running: !open_agents.is_empty(),
     }
+}
+
+/// What an Artifact tool call's input says the artifact is.
+fn artifact_kind(input: &Value) -> &'static str {
+    let mut names: Vec<String> = Vec::new();
+    if let Some(p) = input.get("file_path").and_then(Value::as_str) {
+        names.push(p.to_string());
+    }
+    if let Some(files) = input.get("files") {
+        match files {
+            Value::Object(m) => names.extend(m.keys().cloned()),
+            Value::Array(a) => names.extend(a.iter().filter_map(Value::as_str).map(str::to_string)),
+            _ => {}
+        }
+    }
+    if names.iter().any(|n| n.ends_with(".dc.html") || n.ends_with("canvas.json")) {
+        "design"
+    } else if names.iter().any(|n| n.ends_with(".md")) {
+        "document"
+    } else if names.iter().any(|n| n.ends_with(".html")) {
+        "page"
+    } else {
+        "artifact"
+    }
+}
+
+/// The first claude.ai artifact url in [text].
+fn artifact_url_in(text: &str) -> Option<String> {
+    let mut rest = text;
+    while let Some(i) = rest.find("https://claude.ai/") {
+        let tail = &rest[i..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || c == ')' || c == '"' || c == '\'' || c == ',')
+            .unwrap_or(tail.len());
+        let url = &tail[..end];
+        if url.contains("/artifact/") {
+            return Some(url.trim_end_matches('.').to_string());
+        }
+        rest = &tail[1..];
+    }
+    None
+}
+
+fn upsert_artifact(list: &mut Vec<Artifact>, url: String, title: String, kind: &str, ts: u64) {
+    if let Some(a) = list.iter_mut().find(|a| a.url == url) {
+        a.ts = ts;
+        if a.title.is_empty() && !title.is_empty() {
+            a.title = title;
+        }
+        if a.kind == "artifact" && kind != "artifact" {
+            a.kind = kind.to_string();
+        }
+        return;
+    }
+    list.push(Artifact { url, title, kind: kind.to_string(), ts, ..Artifact::default() });
+    while list.len() > MAX_ARTIFACTS {
+        list.remove(0);
+    }
+}
+
+/// Assistant line: `Artifact` tool_use blocks. A call naming its `url`
+/// counts at once; a create (`type_url`) or a first publish waits for the
+/// url in its tool_result.
+fn artifact_calls(
+    content: Option<&Value>,
+    pending: &mut HashMap<String, (String, String, Vec<artifacts::Source>)>,
+    out: &mut Vec<Artifact>,
+    sources: &mut HashMap<String, Vec<artifacts::Source>>,
+    cwd: &str,
+    ts: u64,
+) {
+    let Some(Value::Array(blocks)) = content else { return };
+    for b in blocks {
+        if str_of(b, "type") != "tool_use" || str_of(b, "name") != "Artifact" {
+            continue;
+        }
+        let null = Value::Null;
+        let input = b.get("input").unwrap_or(&null);
+        if matches!(
+            str_of(input, "action"),
+            "read" | "list" | "delete" | "open" | "pin" | "unpin" | "quickstart"
+        ) || flag(input, "asset")
+        {
+            continue;
+        }
+        let title = str_of(input, "title").trim().to_string();
+        let kind = artifact_kind(input);
+        let url = str_of(input, "url");
+        let files = call_sources(input, cwd);
+        if url.contains("/artifact/") {
+            upsert_artifact(out, url.to_string(), title, kind, ts);
+            add_sources(sources, url, files);
+        } else {
+            let id = str_of(b, "id");
+            if !id.is_empty() {
+                pending.insert(id.to_string(), (title, kind.to_string(), files));
+            }
+        }
+    }
+}
+
+/// User line: tool_results of pending Artifact calls carry the url.
+fn artifact_results(
+    content: Option<&Value>,
+    pending: &mut HashMap<String, (String, String, Vec<artifacts::Source>)>,
+    out: &mut Vec<Artifact>,
+    sources: &mut HashMap<String, Vec<artifacts::Source>>,
+    ts: u64,
+) {
+    let Some(Value::Array(blocks)) = content else { return };
+    for b in blocks {
+        if str_of(b, "type") != "tool_result" {
+            continue;
+        }
+        let Some((title, kind, files)) = pending.remove(str_of(b, "tool_use_id")) else { continue };
+        let text: String = match b.get("content") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(parts)) => parts.iter().map(|p| str_of(p, "text")).collect::<Vec<_>>().join(" "),
+            _ => String::new(),
+        };
+        if let Some(url) = artifact_url_in(&text) {
+            add_sources(sources, &url, files);
+            upsert_artifact(out, url, title, &kind, ts);
+        }
+    }
+}
+
+fn add_sources(sources: &mut HashMap<String, Vec<artifacts::Source>>, url: &str, files: Vec<artifacts::Source>) {
+    if files.is_empty() {
+        return;
+    }
+    let list = sources.entry(url.to_string()).or_default();
+    for f in files {
+        list.retain(|s| s.published != f.published);
+        list.push(f);
+    }
+}
+
+/// The files an Artifact tool call publishes and where it took them from:
+/// `file_path` is the page itself (`index.html` / `index.md`), or, under
+/// `root`, a data file at its path relative to root; `files` maps the
+/// published paths to sources relative to root or the session's cwd.
+fn call_sources(input: &Value, cwd: &str) -> Vec<artifacts::Source> {
+    let cwd = Path::new(cwd);
+    let abs = |p: &str| -> PathBuf {
+        let p = Path::new(p);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            cwd.join(p)
+        }
+    };
+    let root: Option<PathBuf> = Some(str_of(input, "root")).filter(|r| !r.is_empty()).map(abs);
+    let base = root.clone().unwrap_or_else(|| cwd.to_path_buf());
+    let from_base = |p: &str| -> PathBuf {
+        let p = Path::new(p);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base.join(p)
+        }
+    };
+    let mut out = Vec::new();
+    let fp = str_of(input, "file_path");
+    if !fp.is_empty() {
+        let from = abs(fp);
+        let published = root
+            .as_ref()
+            .and_then(|r| from.strip_prefix(r).ok())
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| if fp.ends_with(".md") { "index.md" } else { "index.html" }.to_string());
+        out.push(artifacts::Source { published, from, main: true });
+    }
+    match input.get("files") {
+        Some(Value::Object(m)) => {
+            for (published, v) in m {
+                let from = match v {
+                    Value::String(s) => from_base(s),
+                    Value::Object(o) => match o.get("from").and_then(Value::as_str) {
+                        Some(s) => from_base(s),
+                        None => continue, // copied from another artifact, or removed
+                    },
+                    _ => continue,
+                };
+                out.push(artifacts::Source { published: published.clone(), from, main: false });
+            }
+        }
+        Some(Value::Array(a)) => {
+            for e in a {
+                let p = match e {
+                    Value::String(s) => s.as_str(),
+                    Value::Object(o) => o.get("path").and_then(Value::as_str).unwrap_or(""),
+                    _ => continue,
+                };
+                if !p.is_empty() {
+                    out.push(artifacts::Source { published: p.to_string(), from: from_base(p), main: false });
+                }
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 /// The visible text of a user line and the indexes of its image blocks
@@ -501,4 +939,30 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steps_pair_each_tool_call_with_its_result() {
+        let lines = [
+            r#"{"type":"user","uuid":"u1","timestamp":"2026-10-13T10:00:00Z","message":{"content":"Build session 18"}}"#,
+            r#"{"type":"assistant","uuid":"a1","timestamp":"2026-10-13T10:00:05Z","message":{"content":[{"type":"text","text":"Checking the branch."},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git branch --show-current\ngit status"}}]}}"#,
+            r#"{"type":"user","uuid":"u2","timestamp":"2026-10-13T10:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"feature/x-s18"}]}}"#,
+            r#"{"type":"assistant","uuid":"a2","isSidechain":true,"message":{"content":[{"type":"text","text":"a subagent's own step"}]}}"#,
+            r#"{"type":"assistant","uuid":"a3","timestamp":"2026-10-13T10:00:09Z","message":{"content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"src/a.ts","old_string":"left","new_string":"start"}}]}}"#,
+        ]
+        .join("\n");
+        let steps = parse_steps(lines.as_bytes(), 100);
+        let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["user", "assistant", "tool", "tool"]);
+        assert_eq!((steps[2].tool.as_str(), steps[2].text.as_str()), ("Bash", "git branch --show-current"));
+        assert_eq!(steps[2].input, "git branch --show-current\ngit status");
+        assert_eq!((steps[2].result.as_str(), steps[2].done, steps[2].error), ("feature/x-s18", true, false));
+        assert_eq!(steps[3].input, "src/a.ts\n- left\n+ start");
+        assert!(!steps[3].done, "an edit without its result yet is still running");
+        assert_eq!(parse_steps(lines.as_bytes(), 2).len(), 2);
+    }
 }

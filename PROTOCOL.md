@@ -462,3 +462,698 @@ Claude itself:
   the session is not `working` or `ended`, and nothing was sent after it. A
   tap puts the text in the message box (the watch asks, then sends).
 
+# v1.6 — pull requests
+
+The open pull requests of a session's repository, as Claude Desktop pins
+them above its input. The PC reads them with the GitHub CLI (`gh`, logged in
+by the user) in the session's folder; the phone asks while a chat is open.
+
+## Wire frames (after `auth`)
+
+- Phone → PC: `{"type":"get_prs","session_id":"…"}`.
+- PC → phone: `{"type":"prs","session_id":"…","repo":"owner/name","branch":"<checked out>",
+  "prs":[…],"error":""}`. `error` is a sentence for the user when nothing
+  could be read ("GitHub CLI (gh) is not installed on the PC", "Not a git
+  repository", …); `prs` is empty then.
+- One pull request: `{"number":65,"title":"…","branch":"feature/…","url":"https://…",
+  "additions":87,"deletions":0,"draft":false,"review":"approved|changes|required|",
+  "ci":"pass|fail|pending|none","checks":[{"name":"build","state":"pass|fail|pending"}],
+  "author":"login","updated":"<ISO 8601>","current":true}`. `current`: its
+  branch is the one checked out in the session's folder; those come first.
+
+## Daemon
+
+- `gh repo view --json nameWithOwner`, then `gh pr list --state open --limit 20
+  --json number,title,headRefName,additions,deletions,url,isDraft,reviewDecision,
+  statusCheckRollup,updatedAt,author`, run in the session's `cwd`; `gh` is looked
+  for in the usual places because launchd/systemd give the daemon a short PATH.
+- `ci` rolls `statusCheckRollup` up: any failed check → `fail`, else any
+  running → `pending`, else `pass`; no checks → `none`.
+- Answers are kept 45 s per folder; a `gh` call is given 25 s.
+
+## Phone
+
+- Asks on opening a chat, every 2 minutes while it is open, and 3 s after a
+  `stop` event of that session (Claude may have pushed or opened one).
+- Shows up to two above the input ("Show N more" for the rest): number,
+  repository, branch, `+adds −dels`, a CI pill. Tapping one lists the checks
+  and offers the GitHub link and, when CI fails, a message to Claude asking
+  it to fix the failures. The × hides one until the chat is opened again.
+
+
+
+## Session `desktop` (optional)
+
+A session that runs inside Claude Desktop carries `"desktop": "local_…"`,
+the app's own id of it, taken by the hooks from
+`CLAUDE_CODE_HOST_SESSION_ID` in their environment. Absent for sessions in
+a terminal. `claude://claude.ai/epitaxy/<desktop>` opens the session in the
+app; the operations console does that on a click. On macOS the console also
+reads the app's own records (`~/Library/Application Support/Claude/
+claude-code-sessions`) for sessions the hooks did not tag.
+\n
+
+## Session `artifacts` (optional)
+
+What the session made with Claude's Artifact tool, read from the transcript
+(a tool_use named `Artifact`; the url from its input, or from the
+tool_result of a create): `"artifacts": [{"url": "https://claude.ai/artifact/…",
+"title": "Onboarding", "kind": "design|document|page|artifact", "ts": <unix ms>}]`,
+oldest first, at most 20. `kind` comes from the files the call sent
+(`.dc.html`/`canvas.json` → design, `.md` → document, `.html` → page). The
+phone shows them above the chat input and opens them; the console lists them
+on a session's card.
+
+## New session (v1.6)
+
+- Phone → PC: `{"type":"new_session","client_id":"…","cwd":"<folder or empty>","prompt":"<first message>"}`.
+- PC → phone: `{"type":"new_session_result","client_id":"…","ok":true|false,"error":"…"}`.
+- Control socket: `{"cmd":"new_session","cwd","prompt"}` → `{"ok", "error"}`.
+
+The daemon opens `claude://code/new?q=<prompt>&folder=<cwd>&source=mewo` with
+`open`; Claude Desktop creates the session and sends the prompt itself. The
+session then reaches the phone through the hooks like any other, a few
+seconds later. macOS with Claude Desktop only; a Linux PC answers with an
+error. Whether Desktop honours `folder` is its own business: when it does
+not, the session opens in the project Desktop has in front.
+
+## Artifact files (v1.6)
+
+A session's `artifacts` entries carry, when the daemon kept a copy of the
+published files, `id` (the last segment of the url), `local: true` and
+`entry`: what to open in the copy (`…/canvas.json` for a design, the page,
+or the `.md` of a document). The copy lives under
+`~/.local/state/mewo-on-fire/artifacts/<id>/`; a design's boards have their
+`{{prop}}` placeholders filled with the props' defaults so they render on
+their own, and a document has a `<name>.md.html` page beside it.
+
+- Phone → PC: `{"type":"get_artifact","client_id":"…","session_id":"…","url":"…"}`.
+- PC → phone: one `{"type":"artifact_file","client_id","path","part","parts","encoding":"text"|"base64","data"}`
+  per chunk (under 600 KB each), then
+  `{"type":"artifact_end","client_id","ok":true,"id","kind","entry","title"}`,
+  or `{"type":"artifact_end","client_id","ok":false,"error":"…"}` when the
+  files are gone.
+- `mewo dashboard` serves the copies at `/artifact/<id>/<path>`; the Mac
+  console reads them through its `mewo-artifact://a/<id>/<path>` scheme.
+
+## The TORCH flow (v1.7)
+
+Support for the TORCH Agentic Development Policy: a *workspace* is a folder
+with `app-notebooks/` and `context/templates/SESSION_PLAN.md`; the daemon
+remembers every workspace a session ran in (`workspaces.json` in its
+state folder) and reads each feature's records from
+`app-notebooks/{app}/features/{slug}/`.
+
+### Session additions
+
+`branch` (from the hook, `git branch --show-current` in `cwd`), `model`
+and `tier` (1 strongest, 3 lightest, from the transcript), `feature`
+(`app/slug`, from a `feature/{app}-{slug}` or `fix/{app}-{slug}` branch),
+`plan_session` (the plan's session whose prompt the first message
+matches), `checks` (the owner's self-check, Checklist F).
+
+### Frames (phone ↔ PC)
+
+- `get_features` → `features {ok, features: [...], workspaces, self_check,
+  review_check, warning}`. A feature carries `key, app, slug, branch,
+  light, workspace, dir, step (1..12), step_label, released, gates,
+  plan, handoff_files, handoff_id, open_questions, repos, prd,
+  prd_signed, warnings, sessions_merged, sessions_total`. A gate: `id`
+  (`handoff1`, `handoff2`, `intake`, `plan`, `staging`, `uat`,
+  `production`, `light`), `checklist` (D, E, I, J, K, L), `title`,
+  `step`, `file`, `items [{text, checked}]`, `roles`, `signatures
+  [{role, name}]`, `date`, `signed`, `present`. A plan session: the
+  template's fields plus `effective` (`merged`, `review`, `progress`,
+  `blocked`, `waiting`, `ready`), `note`, `running`, `attempts`, `live`,
+  `pr_state`, `pr_url`, `pr_number`, `warnings`.
+- `sign {client_id, feature, workspace, gate, role, name, checks:[bool]}`
+  → `sign_result {ok, file, committed, signed, note, error}`. Ticks the
+  confirmed items and writes the name and date into the record's
+  signature table; commits when the workspace is on the feature branch.
+- `plan_status {feature, n, status, pr}` → `plan_status_result`.
+- `start_session {feature, n}` → `start_session_result`: Claude Desktop
+  starts the plan's session with its prompt in its repository, and the
+  plan's table says "In progress".
+- `request_sign {feature, gate, role, name}` → `request_sign_result`,
+  and a `signoff` event to every phone.
+- `get_scan {session_id}` → `scan_result {ok, base, files, additions,
+  deletions, findings [{rule, file, line, text}], counts}`: the session's
+  changes against the feature branch (or main) checked for leftover
+  TODOs, debug output, commented-out code, placeholder text, new
+  dependencies, hardcoded colours, swallowed errors, large files and
+  weakened tests (Checklists F and H).
+- `set_check {session_id, index, checked}` → `set_check_result`; the
+  session push carries `checks`.
+- `get_artifact` also takes `id` (+ `entry`, `title`) for a folder the
+  daemon exposed itself: a feature's handoff (`handoff_id`).
+
+### Events
+
+`warning` (a guard rail: a commit or push to main of a code repository
+refused by the PreToolUse hook, or a session on main / an off-pattern
+branch at SessionStart) and `signoff` (a signature asked for; `detail`
+is `feature|gate|role`).
+
+### Hooks
+
+`mewo install` adds `SessionStart` (async) and `PreToolUse` with matcher
+`Bash` (blocking, 10 s): the latter answers
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":…}}`
+for a `git commit`, `merge`, `cherry-pick`, `revert` on main, a switch to
+main followed by one, or a push to main, inside a workspace's code
+repository.
+
+### Control socket
+
+`features`, `sign`, `plan_status`, `start_session`, `request_sign`,
+`scan {session_id | dir, base}`, `set_check`, with the same fields.
+`mewo dashboard` forwards them from `POST /api/daemon`; the Mac console
+through its `daemon` message. On macOS the daemon needs Files and
+Folders access to the workspace; while macOS holds it out, `features`
+answers with the last known records and `warning` says so.
+
+## The flow runner (v1.8)
+
+The daemon drives a feature through the policy's twelve steps: Claude's
+work runs as Claude Desktop sessions it starts with the right prompt and
+skill (prd-writer, the design, handoff-intake, session-plan, the
+planned build sessions), people's decisions come back as signatures.
+Per feature, `flow.json` in the state folder keeps `autopilot`, the
+runs (`step`, `started`), what was asked of whom and when, the
+estimates and a short log.
+
+A feature now carries `flow: {autopilot, estimates, estimates_done, log,
+released_at, closed_at, action}`. `action` is what the flow does next:
+`kind` (`run`, `ask`, `estimates`, `export`, `start`, `release`,
+`close`, `wait`, `done`), `step`, `title`, `detail`, `gate`, `roles`,
+`session`, `auto` (autopilot may do it by itself). The PRD's signature
+is a gate of its own (`id: prd`, roles `[CEO]`): `sign` with gate `prd`
+writes the newest draft as `…_PRD_V1.0.md` (status Signed, changelog
+row) and the Register's §2 row. Step 2 (estimates) shows while the
+three estimates are missing or not yet in the PRD.
+
+`features` also returns `workspaces`, `roles` (workspace →
+`[{role, name, phone}]`, from `context/roles.md`), `apps` (workspace →
+notebooks) and `role_names`. A `signoff` event for a role whose row
+names a phone carries `to: <device name>` and reaches that phone only.
+
+Frames and control commands, all answered as `<name>_result`:
+
+- `flow_next {feature, workspace, name}`: does the next action now.
+- `flow_set {feature, autopilot}`: autopilot on or off. With it on, the
+  daemon does every `auto` action every half minute, asking each role
+  at most once a day.
+- `estimate {feature, role, name, days, assumptions}` (design, FE or BE
+  lead) and `estimates_done {feature}` (the estimates are in the PRD).
+- `export_handoff {feature}`: the feature's design artifacts (the
+  daemon's rendered copies) become `handoff/<board>.html` and the README.
+- `uat_user {feature, user, role, unaided, notes}`: a row of RELEASE.md's
+  UAT table and the pass-bar line; answers `{total, unaided, percent,
+  pass}`.
+- `release {feature, name}`: PRD status Released, changelog row, the
+  Register's "Released on".
+- `close_branches {feature}`: merges the feature branch into main in
+  torch-main and every fetched code repository on it, pushes, deletes it.
+- `new_feature {workspace, app, slug, light}`: `new-feature.sh`, or the
+  same work done by the daemon when the Mac's bash is too old for it.
+- `set_role {workspace, role, name, phone}`: a row of `context/roles.md`;
+  from a phone, an empty `phone` means that phone.
+
+## Rollback (v1.9)
+
+Every write the flow makes lands in the feature's journal, `flow.history`
+(newest first): `{id, ts, kind, title, files, commit, undoable, undone}`.
+`kind` is `sign`, `prd`, `release`, `export`, `uat`, `estimate`,
+`estimates_done`, `plan_status`, `run`, `start`, `new_feature` or
+`close`; `commit` is the hash when the write was committed.
+
+`rollback {feature, workspace, id}` → `rollback_result {ok, notes,
+error}`: a committed entry is reverted with `git revert` on the feature
+branch (a conflict is reported, nothing is forced); an uncommitted one
+has its files restored from their last commit, or removed when they were
+new; a `run` or `start` is forgotten so the flow offers the step again;
+an `estimate` is dropped; `estimates_done` and `release` are unset; a
+`new_feature` whose branch holds nothing but its start commit is
+deleted with its folder. `close` (merged branches) is not undoable.
+
+## The network (v2.0)
+
+A daemon can pair with other PCs' daemons the way a phone does and stay
+connected to them: it is then the hub of its network, and the console
+that talks to it shows every PC. Peers live in `peers.json` (mode 600)
+in the config folder: `pc_id, name, hosts, port, fp, token, device_id`.
+The hub connects over the LAN with the certificate pinned by `fp`, sends
+`auth {token, since}`, and keeps the peer's `sessions`, `session`
+pushes, `event`s, `request`s and its `features` (asked every 30 s).
+
+- The mDNS advertisement's TXT now carries `fp` next to `id`, so a hub
+  can pair with the 8-character code from `mewo pair` alone.
+- `hello` and `status` carry `account`: the Claude account's display
+  name on that PC.
+
+Control commands: `peers` → `{pc_id, name, account, peers: [{pc_id,
+name, hosts, port, connected, error, host, last_seen, latency_ms,
+account, sessions, working, waiting, events, requests, features}]}`;
+`peer_scan {seconds}` → `{found: [{id, name, hosts, port, fp}]}`;
+`peer_pair {payload}` (the line `mewo pair` prints, or `{id, name,
+hosts, port, fp, code}`); `peer_remove {pc_id}`.
+
+Any control command or phone frame that carries another PC's `pc_id` is
+forwarded to that peer by the hub and answered with the peer's reply
+(`client_id` and `pc_id` restored). `features` returns the peers'
+features too, each with `pc_id` and `pc_name`, and the `peers` summary.
+A feature carries `sync {remote, ahead, behind, local}` for its branch
+in torch-main and `branches`, the fetched code repositories that have
+the branch. Records are pulled (`--rebase --autostash`) before a write
+and pushed after a commit; the hub fetches every workspace every 90 s.
+
+`context/roles.md` has a fourth column, `PC`. When a plan session's
+owner maps to a role whose PC is a connected peer that has the feature
+with its branch ready, the flow starts that session there.
+
+## Plane (v2.1)
+
+The daemon mirrors the flow onto a Plane project: one work item per
+feature (the parent), and under it one per sign-off (`Sign-off: …
+(Checklist X)`), the PRD signature, the estimates, and each plan
+session (`S2: …`). States move forward with the flow (backlog, todo
+when the step is reached, in progress when asked or running, done when
+signed or merged) and never back; a state someone sets in Plane stays.
+Assignees come from `context/roles.md` (its new fifth column, the Plane
+user id) and from the people who signed in; an assignee changed in
+Plane wins, and a signature request then goes to that person's phone.
+Every journal entry becomes a comment on the item. The sync runs every
+minute and stays under Plane's 60 requests a minute. The markdown
+records stay the truth: Done in Plane does not sign.
+
+`plane.json` in the config folder (mode 600): `base_url, app_url,
+workspace, project_id, project_name, token, items_path (work-items or
+issues), states {group: id}, people [{plane_id, display, email, phone,
+since}]`. `plane-map.json` in the state folder: which item is which.
+
+Control commands (also phone frames where noted): `plane_test
+{base_url, workspace, token}` → `{me, projects, members}`;
+`plane_config {base_url, app_url, workspace, project_id, project_name,
+token}` (an empty token keeps the saved one); `plane_status` →
+`{config (no token), last_sync, last_error, items, members}`;
+`plane_members`; `plane_sync`; `plane_disconnect`; `plane_signin
+{token}` (phone frame: the PC fills `phone` in) → `{me}`; `plane_mine`
+(phone frame) → the items assigned to that phone's person;
+`plane_tasks {feature, n}` → the tasks under the session's item;
+`plane_task_add {feature, n, name}` (assigned to the phone's person);
+`plane_task_done {id, done}`. `features` carries `plane` (the
+connection, no token) and each feature `plane: {parent, parent_url,
+items: {key: {id, url, group, assignees, sequence_id}}}`.
+
+# v2.2 — which PRD a feature follows
+
+A feature's PRD is found by name: the file the session plan names, else
+the newest `{App}_{Feature}_PRD_V…`, else the app's own
+`{App}_App_PRD_V…`. When the PRD is named differently (a module PRD
+such as `Contact_Center_Conversation_PRD_V1.0.md` for a feature called
+`contacts-ui`), the feature can be pointed at a PRD *family*: the part
+of the file name before `_PRD_V`. The newest version of that family
+counts, so the pick survives the rename to V1.0 at signature.
+
+Control commands (also phone frames): `prds {feature, workspace}` →
+`{prd (file in use), source, prds: [{stem, display, file, folder,
+version, signed, app, current}]}`, the app's own families first;
+`set_prd {feature, workspace, prd}` with a stem or a file name (cut at
+`_PRD_V`), empty to go back to the name match. The pick lives in the
+flow state, is journaled as `prd_pick` (rolls back to the previous
+pick) and shows in `features` as `prd_source: "picked"`.
+
+# v2.3 — the design system a feature follows
+
+The policy's default is Glare. A feature can follow another system (a
+template such as `TORCH-Corp/tauri-templete`): the record is
+`DESIGN_SYSTEM.md` in the feature folder, a `| Field | Value |` table
+with System, Repository, Checkout (under the workspace, like
+`code/tauri-templete`) and Reference (what to read first), committed on
+the feature branch so every session and every PC reads the same. The
+design prompt (step 4) draws on that system's shell, components and
+tokens instead of Glare, the intake prompt (step 7) maps values to its
+tokens, the session-plan prompt (step 8) names it, and the self-check
+accepts its name and checkout folder in a line with a colour as it
+accepts "glare".
+
+Control command (also a phone frame): `set_design {feature, workspace,
+name, repo, dir, reference}`; an empty name or "Glare" removes the
+record. A missing checkout is cloned from `repo` when the daemon can;
+otherwise the reply's `notes` say what to run. Journaled as `design`
+(rolls back by reverting the commit). `features` carries each
+feature's `design: {name, repo, dir, reference, present, checked_out,
+glare}` and a warning when the checkout is missing.
+
+# v2.4 — a step's session again
+
+`flow_redo {feature, workspace, step, name, dry}` (also a phone frame)
+starts a new Claude session with the step's prompt as it stands now
+(steps 1, 2, 4, 7, 8), whatever the flow offers at the moment: a changed
+PRD or design system reaches it this way. With `dry: true` the reply
+only carries the `action` (its `prompt` included). For step 4 the flow
+remembers `design_since`: boards made before it no longer count, so the
+export takes the new ones; journaled as `redo`, which rolls back.
+
+`session_forget {session_id}` (control socket; a prefix of the id
+works) drops a session from the daemon for good with its feed events,
+after its transcript under `~/.claude/projects/` was deleted; the
+phones learn on their next list.
+
+# v2.5 — review notes on a design
+
+Notes pinned on a design's boards, the way a product team reviews with
+a designer, kept per artifact under `<state>/notes/<artifact>.json`:
+`{id, board, board_title, x, y (fractions of the board), text, status
+open|sent|done, by, ts, sent_ts}`. Control commands: `notes {artifact}`;
+`note_add {artifact, board, board_title, x, y, text, by}`; `note_set
+{artifact, id, text?, status?}`; `note_remove {artifact, id}`;
+`notes_send {artifact, ids?, title?, url?, dry?}` sends the open notes
+as one review message to the session that made the design (the
+phone's send path: `how` is `delivered` or `queued`), or opens a new
+session with them when that session is gone (`how: new_session`), and
+marks them `sent`; `dry: true` only returns the `message`. The console
+draws the pins over the boards (NOTES, or N) with a rail of the notes
+and the designer's latest word.
+
+# v2.6 — the build autopilot
+
+One button: every session of the plan runs by itself. `build_set
+{feature, workspace, on, parallel?, review?}` (also a phone frame) turns
+it on or off; on, it turns the flow's autopilot on too. Every 30 s the
+daemon then, for the feature: writes Merged and In review into the plan
+as GitHub says; starts a reviewer session for each open pull request
+(Checklists G and H, lint, types, tests, the done-when items; it merges
+with `gh pr merge --squash` into the feature branch, or fixes, or says
+BLOCKED), at most two reviews per pull request, then a warning to the
+phones; reminds a session that finished without a pull request through
+the session's own chat, runs it again when it is gone or the reminder
+went unanswered for 30 minutes (attempt 3 one tier up), and marks it
+Blocked after three attempts with a warning; starts ready sessions,
+`parallel` at a time across the network, one every tick. When every
+session is merged it turns itself off and sends "Build done". `features`
+carries `flow.build: {on, parallel, review}`; journal kinds `build`
+(rolls back), `review`, `review_stuck`, `blocked`, `build_done`.
+
+The build autopilot runs its sessions headless with the Claude Code
+command (`claude -p … --dangerously-skip-permissions`, the Mewo guard
+hook still refusing pushes to main; Tier 2 on Sonnet, Tier 3 on Haiku,
+Tier 1 on the account's default), their output under `<state>/runs/`.
+Claude Desktop's deep link only types a prompt in and waits for Enter,
+so it serves the manual Start only. `build_set on` refuses, and the loop
+stops with a warning, when the command is missing or not signed in
+(the login keychain item "Claude Code-credentials").
+
+`github_user {user}` pins the GitHub account (a `gh auth login` user)
+the daemon, its git and gh commands and its headless sessions act as:
+its token from gh's store goes into their environment as `GH_TOKEN`,
+so another session switching gh's active account on the computer
+changes nothing for the build. `github_status` → `{user, signed_in}`.
+Kept in config.json as `github_user`; empty means the active account.
+
+`session_detail {feature, workspace, n}` (also a phone frame) → one plan
+session in full: `session` (goal, repo, tier, dependencies, status,
+pull request, attempts, done-when), `run` (the headless run: pid,
+alive, exit, elapsed, the log's tail), `review` (the reviewer session),
+`live` (its Claude sessions with their last steps), `timing`
+(started, in review, merged, elapsed, `typical_s` for the tier from
+the sessions finished so far or a default, `eta_s` while it runs, and a
+rough `build_remaining_s`). `session_stop {feature, workspace, n}`
+ends its headless run and review with SIGTERM.
+
+# v2.7 — pausing the build, and work hours
+
+`build_set {on: false, resume_next_work: true}` pauses: what runs
+finishes, nothing new starts, and the loop turns the build back on by
+itself at the next work hours (`flow.build.resume_at`); with
+`stop_running: true` the running sessions and reviews are ended too
+(SIGTERM) and run again from their branches on resume; `resume_at` (ms)
+sets the time directly; `on: true` resumes now. `work_hours {hours:
+"09:00-18:00", days: [1..7]}` (local time, 1 = Monday; empty = always,
+every day) is kept in config.json; outside them the build autopilot
+starts nothing and reviews nothing, and the flow notes the change.
+`features` carries `work: {hours, days, within, next_start}` and each
+feature's `flow.build.within_hours`.
+
+# v2.8 — every session in its own worktree
+
+A build session runs in a git worktree of its repository,
+`code/.worktrees/<repo>-S<n>` on `feature/<app>-<slug>-s<n>` made from
+the feature branch (origin's copy when it has one); a review runs in
+`code/.worktrees/<repo>-S<n>-review` on the pull request's branch. So
+sessions of one repository run side by side, and the only limit is the
+autopilot's "at a time". The worktrees are removed when the session is
+merged; `code/.worktrees/` is in torch-main's local exclude. The
+prompt tells the session where it is and where the workspace root is.
+`session_detail.run.folder` says which folder a run used.
+
+# v2.9 — merge on pass
+
+`build_set {merge_on_pass: true}` (per feature, off by default, a
+setting of the owner): when a pull request's review session ended with
+the word PASS, the daemon marks the pull request ready and merges it
+(squash) itself; GitHub records no approval, the reviewer's comment is
+the record. A failed merge is journaled (`merge_failed`) and warned
+once. The reviewer's brief asks for a closing PASS or BLOCKED line.
+`flow.build.merge_on_pass` carries the setting.
+
+While any build autopilot is on, the daemon keeps the Mac from idle
+sleep (`caffeinate -i` tied to its pid); a closed lid still sleeps a
+MacBook. A headless session's brief says it runs unattended: where the
+plan says to ask or to run grill-me, it takes the most reasonable
+reading, records the choice in OPEN_QUESTIONS.md, and continues.
+
+# v3.0 — build with me
+
+`build_set {attended: true}` (with `on: true`; the console's BUILD WITH
+ME button) runs the same build autopilot, but each session opens in a
+window of its own on the PC, running Claude Code interactively in its
+worktree with the session's prompt as its first message, on the tier's
+model, permissions skipped as for a headless run. On Linux it is the
+Mewo Session window (`pc/console/linux/mewo-session`, GTK 3 and VTE for
+Python; built into the binary and written to `<state>/mewo-session`),
+started in a systemd scope of its own so a restart of the service leaves
+it open: its header shows the session's number, goal, worktree branch
+and model, its state (working, needs you, finished, closed, from the
+daemon's `sessions`) and its plan status and pull request (from
+`session_detail`); it asks before closing a running session. Elsewhere
+(macOS, or Linux without VTE for Python) it is a terminal in the
+console's colours: Terminal on macOS; on Linux the desktop's default
+terminal through `xdg-terminal-exec`, else the first known one. Its brief says someone is watching:
+where the plan says to ask or to run grill-me, it asks and waits, and
+the hooks bring the question to the phones too. A small script under
+`<state>/runs/` records the pid and then becomes Claude Code, so the run
+is tracked like a headless one: while its window is open nothing reminds
+or restarts it, Stop now ends it, and a window closed without a pull
+request is run again. Once its pull request is open, an open window no
+longer counts against "at a time". Reviews stay headless.
+Under systemd every session, review and window the daemon starts runs in
+a scope of its own (`systemd-run --user --scope`, which becomes the
+program, so the pid is the program's): stopping a service ends every
+process in its cgroup, whatever its process group, and `mewo install`
+restarts the service. Under launchd the run's own process group is
+enough. So an update of the daemon leaves the build's runs going.
+`attended: false` (BUILD EVERYTHING) goes back to headless sessions;
+leaving it out (resume, pause, merge on pass) keeps the setting.
+`flow.build.attended` carries it.
+
+# v3.1 — the session chat
+
+A "Build with me" session now opens as a chat in the Mewo Session
+window, drawn the way the Claude Code extension draws a conversation:
+your messages, Claude's text as it is written, each tool call with its
+input and output (a command with IN and OUT, an edit as a diff, todos as
+a list, an agent with its own steps under it), and a composer with the
+model, the permission mode, "@" for a file and "/" for a command. The
+page is `pc/console/linux/mewo-session-chat.html`, built into the binary
+beside the window and written to `<state>/mewo-session-chat.html`.
+
+Under it Claude Code runs in its stream mode: the run script's `chat`
+argument is `claude -p --input-format stream-json --output-format
+stream-json --verbose --include-partial-messages --permission-prompt-tool
+stdio --dangerously-skip-permissions [--model …]`, JSON lines on stdin
+and stdout. The window sends the session's prompt as the first user
+message (`prompt_file` in its info file) and every later one, images
+included; a message sent while Claude works is queued. It asks Claude
+Code for its commands and models at the start (`initialize`), stops a
+turn with `interrupt`, and changes the model and the permission mode
+with `set_model` and `set_permission_mode`. The pid in the pid file is
+Claude Code's own, as before, so the build tracks the run the same way.
+
+A question (`AskUserQuestion`), a plan to approve and, outside bypass
+mode, a permission prompt reach the window as a `can_use_tool` request
+and show as a card with the options as buttons; the answer goes back as
+its `control_response`. So that the phones keep their part, the window
+also hands each request to `mewo ask` (a PermissionRequest payload on
+its stdin): the phones get it as they get a terminal session's prompt,
+the first answer wins, and answering in the window ends that `mewo ask`,
+which takes the request off the phones. Claude Code's own Notification
+hook still says "needs you" after a few seconds, and its Stop hook still
+reports each reply.
+
+The window's info file gains `mode` (`chat`, or `terminal` when
+config.json has `"session_terminal": true`), `prompt_file` and `model`.
+Without WebKitGTK for Python (`gir1.2-webkit2-4.1`) the window opens
+its terminal body (VTE) instead; without that too, a terminal app.
+
+A session in a build worktree is on `<feature branch>-s<n>`: it is
+matched to its feature and to plan session `n` by that branch (before
+v3.1 it matched nothing, so a plan session's attempts stayed at zero and
+its dead runs were never noticed); a review, in `…-S<n>-review`, gets
+the feature and no plan session. A plan session with an open pull
+request no longer draws the "failed twice" hint. On its first start
+after the computer restarted (the boot id kept in `<state>/boot`), the
+daemon closes the sessions it still holds as working or waiting: the
+restart ended them and none of them said so. A session of an earlier
+attempt is checked against that attempt's process, not the latest one.
+
+# v3.2 — show the session
+
+A Mewo Session window keeps `<state>/windows/<pid>.json` (`pid`,
+`folder`, `session_id` once Claude Code gave it, `n`, `feature`) while it
+is open and comes forward on SIGUSR1. `mewo dashboard` sets `window`
+(that pid) on the sessions that have one (by the session id; for a
+terminal window, on the live session in its folder), and the console
+shows SHOW THE SESSION on such a session: on its card in the network,
+on its row in the plan and in its detail. In the Linux console app the
+click goes to the app as `mewo-session:show?pid=…`: the shell only lets
+a program raise another's window on proof a person asked, so the app
+makes an activation token from the click, leaves it in
+`<state>/windows/<pid>.token` and sends the signal; the window activates
+itself with the token. In a browser, `POST /api/show_session {pid}`
+sends the signal without a token, and the shell may only mark the window
+as wanting attention. Only a pid with an entry that is a Mewo Session
+window is ever signalled. A window told to quit closes as on its close
+button, and Claude Code ends with its window whatever ends it
+(`setpriv --pdeathsig`), so the build sees the run end and starts it
+again.
+
+# v3.3 — one window, a tab per session
+
+On Linux every "Build with me" chat now opens as a tab of one Mewo
+Session window, the way the Claude Code extension shows its
+conversations, and the session no longer belongs to the window. The
+daemon starts a host for it (`pc/console/linux/mewo-session-host`, built
+into the binary and written to `<state>/mewo-session-host`) with the
+session's info file, in a scope of its own as before. The host runs the
+run script's `chat` (Claude Code in its stream mode, `setpriv
+--pdeathsig` tying it to the host), sends the first prompt, asks for the
+commands and models (`initialize`), answers the host requests nothing
+supports, hands each `can_use_tool` request to `mewo ask` for the phones,
+and keeps what a window draws in `<base>.events.jsonl` beside the info
+file (not the streamed text, which the finished message repeats). It
+serves the session on `$XDG_RUNTIME_DIR/mewo-sessions/<pid>.sock`: a
+window that connects gets `{"type": "mewo", "kind": "host", "info": …}`,
+the session so far, `{"kind": "live"}`, then each event as it comes; it
+sends `{"t": "send", "text", "images"}`, `respond`, `interrupt`,
+`set_model`, `set_mode`, `cancel_retry` and `stop`. What reaches Claude
+is echoed as `{"kind": "said", "text", "images", "quiet"}` before the
+reply, so every window, and one that connects later, draws it in its
+place; an answer is `{"kind": "resolved", "by": "window" | "phone"}`.
+A turn that failed because another Claude Code was renewing the sign-in
+("Failed to refresh OAuth token: another Claude Code process is
+refreshing it") is tried again by the host after 30, 60, 120 and 240
+seconds (`{"kind": "retrying", "in"}` comes just before the failed
+result, so the session does not show as finished; `retry_cancelled` when
+Esc stops it; a message you send takes its place).
+
+The host keeps `<state>/windows/<pid>.json` (with `socket`), so SHOW THE
+SESSION signals the host, which brings its tab forward with the click's
+token (`{"kind": "show", "token"}`) or opens the window again when none
+is open. The window (`mewo-session --attach [<host socket>]`) listens on
+`$XDG_RUNTIME_DIR/mewo-session-window.sock`: a host hands it the session
+(`{"attach": <host socket>, "token"}`) or, when nothing answers, starts
+it, with its output in `<state>/mewo-session-window.log`. A window that
+opens takes every live host in `<state>/windows/` as a tab, so a window
+that froze, was force quit or was closed with "Keep them running" leaves
+the sessions working, and the next one shows them again with their whole
+conversation. Closing a tab, or the window with "Stop them", ends the
+session (`stop`): the build sees the run end as before. A new session
+takes a tab without taking the one in front; a tab's dot follows its
+session (working, needs you, finished, closed) and the header shows the
+tab in front. A tab whose plan session is merged (`effective` in
+`session_detail`) closes by itself a minute after Claude has finished,
+ending its session, unless Claude works again or something is written in
+its message box in that minute; a tab kept open that way stays open.
+Every tab's page runs in one WebKit web process, and
+WebKit draws without the GPU (`WEBKIT_DISABLE_DMABUF_RENDERER`,
+`WEBKIT_DISABLE_COMPOSITING_MODE`): with a few sessions open, WebKitGTK
+drawing through an NVIDIA GPU under Wayland hung the windows. A
+terminal session (`session_terminal`, or no WebKitGTK) still opens a
+window of its own, with Claude Code ending with it.
+
+`build_set` also takes a run's own instructions, each kept until changed:
+`note` (text every session the build starts gets after its plan prompt,
+re-runs included; empty clears it), `hold` (session numbers the build
+never starts), `order` (the order sessions start in when more are ready
+than "at a time" allows, the rest following the plan's order) and `fresh`
+(sessions resumed on purpose: their attempts count again from the next
+tick, so earlier attempts neither block them nor move them a tier up).
+The answer carries them as `run`. A plan status that starts with
+"Blocked:" counts as blocked, as "Blocked" did.
+
+`console_get` and `console_set {prefs}` (control socket, this daemon
+only, also through the console's allowlist) keep the operations
+console's own settings in `<state>/console.json` (mode 600): `{v: 1,
+hidden: {<session id>: <ms>}, feed_cleared_at, filters: {status,
+projects, pcs, range}}`. `console_get` answers `{ok, prefs}`, the
+defaults when the file is missing or unreadable; `console_set` replaces
+the whole document with any JSON object up to 256 KB, else `{ok: false,
+error}`. Hiding a session there touches neither the daemon's sessions
+and events nor Claude Code.
+
+The plan's Status cell is read by its status word, the text before the
+first ":" ("Merged: <link>" is merged, "In review: <link>" in review,
+"Blocked: <reason>" blocked). The daemon corrects a status only when that
+word disagrees with GitHub, and writes "Merged: <link>" or "In review:
+<link>", leaving a "**Pull request:**" line that already holds a link as
+it is. Every status the daemon writes (a correction, In progress when a
+session starts, Blocked after three attempts, a change from the console, a
+rollback) is a commit pushed to the feature branch, made from origin's
+copy of the plan with git's plumbing (`records(<app>): Session N …`): the
+workspace's working copy, index and branch are never written. Until the
+working copy is pulled, the daemon shows what it committed.
+
+# v3.4 — answering the open questions
+
+The console's OPEN QUESTIONS badge on a feature asks them one by one.
+`open_questions {feature, workspace}` → `{file, questions: [{n,
+question, raised_by, owner, due, blocks}]}`: the rows of the feature's
+`OPEN_QUESTIONS.md` without an answer, columns found by the table's
+header. `blocks` lists the plan sessions, not merged yet, whose Status
+or Depends on cell names the question (`OQ 28`, `question 28`); those
+come first, then by number.
+
+`answer_question {feature, workspace, n, answer, name}` writes the
+answer (line breaks as `<br>`, a pipe escaped) and today's date into
+the question's row, never over an answer already there, and journals it
+as `answer` with the name. Like a plan status, the file is written, not
+committed. A plan session whose Status starts with `Blocked` and names
+this question, in its Status or its Depends on, goes back to `Not
+started` once every question it names has an answer; the reply lists
+them in `unblocked`, and the build autopilot picks them up.
+
+# v3.5 — a session as it happens
+
+The console's session panel shows the session live, as a Claude Desktop
+conversation: its messages, and each tool call with what it ran and what
+came back. `session_live {session, limit}` (a session id or its prefix,
+the last `limit` steps, 300 by default) → `{session, steps: [{id, ts,
+kind (user | assistant | tool), text, tool, input, result, done,
+error}]}`. A tool call's `text` is its one-liner, `input` the call in
+full (a command, an edit as `- ` and `+ ` lines, a path), `result` what
+came back, cut at 4000 characters; `done` once it came back. Subagent
+steps (sidechains) are left out. The console asks every 1.5 seconds and
+updates only the steps that changed.
+
+`session_detail`'s `live` now lists the session's runs (`kind: "run"`)
+and its reviewers (`kind: "review"`): the sessions briefed "Review the
+pull request <its url>", wherever they run, and those in its review
+worktree. A run is tied to its plan session by its `-s<N>` branch (v3.1);
+a reviewer, in its `…-review` worktree or briefed "Review the pull
+request" anywhere, belongs to the feature but is not an attempt.
+
+A pull request belongs to one session: the one the plan names, else the
+one on the session's own branch; a title or description that says
+"Session N" only counts in the session's own repository, for a pull
+request no other session has.

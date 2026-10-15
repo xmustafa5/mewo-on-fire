@@ -11,8 +11,8 @@ use crate::net;
 
 pub const SERVICE_TYPE: &str = "_ccnotify._tcp.local.";
 
-pub fn advertise(cfg: &Config) -> Option<ServiceDaemon> {
-    match try_advertise(cfg) {
+pub fn advertise(cfg: &Config, fp: &str) -> Option<ServiceDaemon> {
+    match try_advertise(cfg, fp) {
         Ok(daemon) => {
             eprintln!(
                 "mewo: mDNS advertising \"{}\" as {} on port {}",
@@ -51,7 +51,7 @@ fn host_label(s: &str) -> String {
     }
 }
 
-fn try_advertise(cfg: &Config) -> Result<ServiceDaemon> {
+fn try_advertise(cfg: &Config, fp: &str) -> Result<ServiceDaemon> {
     let daemon = ServiceDaemon::new().map_err(|e| anyhow!("starting mDNS daemon: {e}"))?;
 
     // Only advertise IPv4 on real LAN interfaces (hosts in the QR are IPv4 too).
@@ -73,6 +73,8 @@ fn try_advertise(cfg: &Config) -> Result<ServiceDaemon> {
     );
     let mut props: HashMap<String, String> = HashMap::new();
     props.insert("id".to_string(), cfg.pc_id.clone());
+    // v2.0: the certificate fingerprint, so another PC can pair with the code alone.
+    props.insert("fp".to_string(), fp.to_string());
 
     let info = ServiceInfo::new(SERVICE_TYPE, &cfg.name, &host, "", cfg.port, props)
         .map_err(|e| anyhow!("building mDNS service info: {e}"))?

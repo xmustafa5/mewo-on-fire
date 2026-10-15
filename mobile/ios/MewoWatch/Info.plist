@@ -31,6 +31,8 @@
 			<string>CC Notify</string>
 		</dict>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Records the voice messages you send to Claude.</string>
 	<key>WKApplication</key>

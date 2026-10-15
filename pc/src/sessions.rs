@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 use crate::ask::truncate_chars;
 use crate::config::{now_ms, random_hex};
 use crate::hook;
+use crate::policy;
 use crate::paths;
 use crate::transcript::{self, ChatItem, FileKey, ImageRef};
 use crate::uploads;
@@ -55,6 +56,40 @@ pub struct Session {
     pub last_ts: u64,
     pub last_text: String,
     pub queued: usize,
+    /// v1.6: Claude Desktop's id of the session (`local_…`), when the
+    /// session runs inside the desktop app; empty otherwise.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub desktop: String,
+    /// v1.6: what the session published with the Artifact tool (designs,
+    /// documents, pages), oldest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<transcript::Artifact>,
+    /// v1.7 (TORCH policy): the git branch of `cwd`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub branch: String,
+    /// v1.7: the model of the last reply, and its policy tier (1 strongest,
+    /// 3 lightest, 0 unknown).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub tier: u8,
+    /// v1.7: the feature (`app/slug`) the session works on, from its
+    /// branch, and the plan session it runs (0 when unmatched).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub feature: String,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub plan_session: u32,
+    /// v1.7: the owner's self-check (Checklist F), one flag per line.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<bool>,
+}
+
+fn is_zero_u8(n: &u8) -> bool {
+    *n == 0
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 /// Private session facts from the hooks (`emit`, `session_state`, `listen`).
@@ -65,6 +100,10 @@ pub struct Meta {
     pub cwd: String,
     pub transcript_path: String,
     pub effort: String,
+    /// `CLAUDE_CODE_HOST_SESSION_ID` in the hook's environment (v1.6).
+    pub desktop: String,
+    /// The git branch of `cwd`, read by the hook (v1.7).
+    pub branch: String,
 }
 
 impl Meta {
@@ -83,6 +122,8 @@ impl Meta {
             cwd: s("cwd"),
             transcript_path: s("transcript_path"),
             effort: s("effort"),
+            desktop: s("host_session_id"),
+            branch: s("branch"),
         }
     }
 }
@@ -164,6 +205,9 @@ pub struct ScanResult {
     pub key: FileKey,
     pub title: Option<String>,
     pub agents_running: bool,
+    pub artifacts: Vec<transcript::Artifact>,
+    pub model: String,
+    pub first_prompt: String,
 }
 
 /// Blocking (spawn_blocking): stat each target's transcript and re-read the
@@ -182,6 +226,9 @@ pub fn scan(targets: Vec<ScanTarget>) -> Vec<ScanResult> {
                 key,
                 title: tr.title,
                 agents_running: tr.agents_running,
+                artifacts: tr.artifacts,
+                model: tr.model,
+                first_prompt: tr.first_prompt,
             })
         })
         .collect()
@@ -206,6 +253,11 @@ struct Entry {
     agents_running: bool,
     /// When queued messages were last handed to a `listen`.
     flushed_at: Option<Instant>,
+    /// The first user message of the transcript (v1.7, plan matching).
+    first_prompt: String,
+    /// The feature match is stale (folder, branch or first prompt changed);
+    /// the daemon's match loop redoes it off the lock.
+    needs_match: bool,
 }
 
 impl Entry {
@@ -225,11 +277,14 @@ impl Entry {
             scan_key: None,
             agents_running: false,
             flushed_at: None,
+            first_prompt: String::new(),
+            needs_match: false,
         }
     }
 
     fn apply_meta(&mut self, meta: &Meta) {
         if !meta.cwd.is_empty() && meta.cwd != self.session.cwd {
+            self.needs_match = true;
             let project = hook::project_name(&meta.cwd);
             // The title falls back to the project name until the transcript has one.
             if self.session.title.is_empty() || self.session.title == self.session.project {
@@ -242,8 +297,15 @@ impl Entry {
             self.transcript_path = meta.transcript_path.clone();
             self.scan_key = None;
         }
+        if !meta.desktop.is_empty() {
+            self.session.desktop = meta.desktop.clone();
+        }
         if !meta.effort.is_empty() {
             self.session.effort = meta.effort.clone();
+        }
+        if !meta.branch.is_empty() && meta.branch != self.session.branch {
+            self.session.branch = meta.branch.clone();
+            self.needs_match = true;
         }
     }
 
@@ -332,6 +394,8 @@ impl Sessions {
                         }
                         // No listener survives a restart.
                         entry.sync();
+                        // One that no feature claimed is looked at again (the match learned worktree branches in v3.1).
+                        entry.needs_match = entry.session.feature.is_empty() && !entry.session.branch.is_empty();
                         entries.insert(entry.session.id.clone(), entry);
                     }
                 }
@@ -676,6 +740,87 @@ impl Sessions {
             .collect()
     }
 
+    /// v1.7: the sessions whose feature match is stale: `(id, cwd, branch,
+    /// first prompt)`. Clears the flags.
+    pub fn take_matches(&mut self) -> Vec<(String, String, String, String)> {
+        let mut out = Vec::new();
+        for e in self.entries.values_mut() {
+            if e.needs_match && !e.session.cwd.is_empty() {
+                e.needs_match = false;
+                out.push((e.session.id.clone(), e.session.cwd.clone(), e.session.branch.clone(), e.first_prompt.clone()));
+            }
+        }
+        out
+    }
+
+    /// v2.11: the reviewer sessions of a pull request, wherever they run:
+    /// those briefed "Review the pull request <url>".
+    pub fn reviewers_of(&self, pr_url: &str) -> Vec<String> {
+        if pr_url.is_empty() {
+            return Vec::new();
+        }
+        let brief = format!("Review the pull request {pr_url} ");
+        self.entries.values().filter(|e| e.first_prompt.contains(&brief)).map(|e| e.session.id.clone()).collect()
+    }
+
+    /// v1.7: the result of a match. Returns the snapshot when it changed.
+    pub fn set_match(&mut self, id: &str, feature: String, n: u32) -> Option<Session> {
+        let entry = self.entries.get_mut(id)?;
+        if entry.session.feature == feature && entry.session.plan_session == n {
+            return None;
+        }
+        entry.session.feature = feature;
+        entry.session.plan_session = n;
+        let snapshot = entry.session.clone();
+        self.persist();
+        Some(snapshot)
+    }
+
+    /// v2.9: a session the hooks still call working whose headless process
+    /// is gone (its Stop was lost in a daemon restart): idle, which the
+    /// console and the phones show as finished.
+    pub fn mark_idle(&mut self, id: &str) -> Option<Session> {
+        let entry = self.entries.get_mut(id)?;
+        if entry.session.state != "working" {
+            return None;
+        }
+        entry.session.state = "idle".to_string();
+        let snapshot = entry.session.clone();
+        self.persist();
+        Some(snapshot)
+    }
+
+    /// v3.1: the computer restarted. Nothing that was at work or waiting
+    /// for you survived it, and none of it said so: closed. Returns how many.
+    pub fn close_unfinished(&mut self) -> usize {
+        let mut closed = 0;
+        for e in self.entries.values_mut() {
+            if matches!(e.session.state.as_str(), "working" | "waiting") {
+                e.session.state = "ended".to_string();
+                closed += 1;
+            }
+        }
+        if closed > 0 {
+            self.persist();
+        }
+        closed
+    }
+
+    /// v1.7: one line of the owner's self-check, from a phone.
+    pub fn set_check(&mut self, session_id: &str, index: usize, checked: bool) -> Option<Session> {
+        let entry = self.entries.get_mut(session_id)?;
+        if index >= policy::SELF_CHECK.len() {
+            return None;
+        }
+        while entry.session.checks.len() < policy::SELF_CHECK.len() {
+            entry.session.checks.push(false);
+        }
+        entry.session.checks[index] = checked;
+        let snapshot = entry.session.clone();
+        self.persist();
+        Some(snapshot)
+    }
+
     /// Store a scan's title / agents running. Returns the snapshot when it
     /// changed.
     pub fn apply_scan(&mut self, r: ScanResult) -> Option<Session> {
@@ -685,6 +830,15 @@ impl Sessions {
         entry.agents_running = r.agents_running;
         if let Some(title) = r.title {
             entry.session.title = title;
+        }
+        entry.session.artifacts = r.artifacts;
+        if !r.model.is_empty() {
+            entry.session.model = r.model;
+            entry.session.tier = policy::tier_of(&entry.session.model);
+        }
+        if !r.first_prompt.is_empty() && r.first_prompt != entry.first_prompt {
+            entry.first_prompt = r.first_prompt;
+            entry.needs_match = true;
         }
         entry.sync();
         if entry.session == before {
@@ -717,6 +871,16 @@ impl Sessions {
             }
         }
         self.entries.len() != before
+    }
+
+    /// v2.4: drops a session for good (its transcript was deleted); the
+    /// phones learn on the next list.
+    pub fn forget(&mut self, id: &str) -> bool {
+        let had = self.entries.remove(id).is_some();
+        if had {
+            self.persist();
+        }
+        had
     }
 
     pub fn prune_and_persist(&mut self) {

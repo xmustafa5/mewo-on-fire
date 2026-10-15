@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../models.dart';
 import 'chat_screen.dart';
+import 'features_tab.dart';
+import 'flow_sheets.dart';
+import 'new_session_sheet.dart';
 import 'history_tab.dart' show relativeTime;
 import 'home_screen.dart' show EmberTabBar;
 import 'theme/ember.dart';
@@ -21,6 +24,17 @@ class SessionsTab extends StatefulWidget {
 
 class _SessionsTabState extends State<SessionsTab> {
   Timer? _tick;
+  Timer? _featureTick;
+  bool _features = false;
+
+  void _setMode(bool features) {
+    setState(() => _features = features);
+    _featureTick?.cancel();
+    if (features) {
+      AppState.instance.refreshFeatures();
+      _featureTick = Timer.periodic(const Duration(seconds: 20), (_) => AppState.instance.refreshFeatures());
+    }
+  }
 
   @override
   void initState() {
@@ -34,6 +48,7 @@ class _SessionsTabState extends State<SessionsTab> {
   @override
   void dispose() {
     _tick?.cancel();
+    _featureTick?.cancel();
     super.dispose();
   }
 
@@ -63,28 +78,68 @@ class _SessionsTabState extends State<SessionsTab> {
             color: Ember.amber,
             backgroundColor: Ember.surface2,
             edgeOffset: MediaQuery.paddingOf(context).top + 8,
-            onRefresh: state.refreshSessions,
+            onRefresh: () async {
+              await state.refreshSessions();
+              if (_features) await state.refreshFeatures();
+            },
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
               slivers: [
                 SliverToBoxAdapter(
                   child: ScreenHeader(
-                    title: 'Sessions',
+                    title: _features ? 'Features' : 'Sessions',
                     subtitle: AnimatedSwitcher(
                       duration: Motion.base,
                       transitionBuilder: fadeUpTransition,
                       child: Text(summary, key: ValueKey<String>(summary)),
                     ),
-                    actions: [
-                      GhostIconButton(
-                        icon: Icons.refresh_rounded,
-                        tooltip: 'Refresh',
-                        onPressed: state.refreshSessions,
-                      ),
-                    ],
+                    actions: _features
+                        ? [
+                            GhostIconButton(
+                              icon: Icons.badge_outlined,
+                              tooltip: 'Roles',
+                              onPressed: state.pcs.isEmpty ? null : () => showRolesSheet(context),
+                            ),
+                            GhostIconButton(
+                              icon: Icons.refresh_rounded,
+                              tooltip: 'Refresh',
+                              onPressed: state.refreshFeatures,
+                            ),
+                            GhostIconButton(
+                              icon: Icons.add_rounded,
+                              tooltip: 'New feature',
+                              color: Ember.amber,
+                              onPressed: state.pcs.isEmpty ? null : () => showNewFeatureSheet(context),
+                            ),
+                          ]
+                        : [
+                            GhostIconButton(
+                              icon: Icons.refresh_rounded,
+                              tooltip: 'Refresh',
+                              onPressed: state.refreshSessions,
+                            ),
+                            GhostIconButton(
+                              icon: Icons.add_rounded,
+                              tooltip: 'New session',
+                              color: Ember.amber,
+                              onPressed: state.pcs.isEmpty ? null : () => showNewSessionSheet(context),
+                            ),
+                          ],
                   ),
                 ),
-                if (sessions.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                    child: SegmentedGlass<bool>(
+                      segments: const <(bool, String)>[(false, 'Sessions'), (true, 'Features')],
+                      value: _features,
+                      onChanged: _setMode,
+                    ),
+                  ),
+                ),
+                if (_features)
+                  ...featureSlivers(context, state)
+                else if (sessions.isEmpty)
                   SliverToBoxAdapter(
                     child: EmptyState(
                       flame: true,
@@ -93,6 +148,14 @@ class _SessionsTabState extends State<SessionsTab> {
                           ? 'Your Claude Code sessions show up here once a PC is paired.'
                           : 'They appear here as soon as Claude Code runs on a paired PC. '
                               'If a PC was set up before sessions existed, run `mewo install` on it again.',
+                      action: state.pcs.isEmpty
+                          ? null
+                          : EmberButton(
+                              label: 'Start a session',
+                              icon: Icons.add_rounded,
+                              shimmer: true,
+                              onPressed: () => showNewSessionSheet(context),
+                            ),
                     ),
                   )
                 else
@@ -191,6 +254,28 @@ class _SessionCard extends StatelessWidget {
                       Text(relativeTime(s.time), style: t.labelSmall?.copyWith(color: Ember.text3)),
                     ],
                     const Spacer(),
+                    if (s.artifacts.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Container(
+                          padding: const EdgeInsets.fromLTRB(7, 2, 8, 2),
+                          decoration: BoxDecoration(
+                            color: Ember.amber.withValues(alpha: 0.13),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Ember.amber.withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.brush_rounded, size: 11, color: Ember.amber),
+                              const SizedBox(width: 4),
+                              Text(
+                                s.artifacts.length == 1 ? '1 artifact' : '${s.artifacts.length} artifacts',
+                                style: t.labelSmall?.copyWith(color: Ember.amber),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     if (s.queued > 0)
                       Container(
                         padding: const EdgeInsets.fromLTRB(7, 2, 8, 2),

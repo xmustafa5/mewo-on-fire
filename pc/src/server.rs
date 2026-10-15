@@ -25,6 +25,9 @@ use crate::sessions::Session;
 use crate::store::Event;
 use crate::transcript;
 use crate::uploads;
+use crate::artifacts;
+use crate::control;
+use crate::desktop;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
 type WsSink = SplitSink<Ws, Message>;
@@ -239,6 +242,7 @@ async fn handle_auth(
             "name": state.config.name,
             "last_id": sub.last_id,
             "hosts": state.hosts(),
+            "account": crate::daemon::account_name(),
         }),
     )
     .await?;
@@ -275,6 +279,9 @@ async fn subscriber_loop(
     } = sub;
     let mut last_sent = since.min(last_id);
     for ev in backlog {
+        if !ev.to.is_empty() && ev.to != device.name {
+            continue;
+        }
         send_event(sink, &ev).await?;
         last_sent = ev.id;
     }
@@ -292,8 +299,11 @@ async fn subscriber_loop(
                 match received {
                     Ok(Push::Event(ev)) => {
                         if ev.id > last_sent {
-                            send_event(sink, &ev).await?;
                             last_sent = ev.id;
+                            // v1.8: an event for one phone goes to that phone only.
+                            if ev.to.is_empty() || ev.to == device.name {
+                                send_event(sink, &ev).await?;
+                            }
                         }
                     }
                     Ok(Push::Request(req)) => send_request(sink, &req).await?,
@@ -348,7 +358,8 @@ async fn subscriber_loop(
 }
 
 /// A text frame from a subscribed phone: `answer` (v1.1), `sessions`,
-/// `get_chat`, `send` (v1.2), `get_image` (v1.3). Other frames are ignored.
+/// `get_chat`, `send` (v1.2), `get_image` (v1.3), `get_prs` (v1.6). Other
+/// frames are ignored.
 async fn handle_frame(
     state: &AppState,
     device: &Device,
@@ -369,8 +380,171 @@ async fn handle_frame(
         "get_chat" => handle_get_chat(state, sink, &msg).await,
         "get_image" => handle_get_image(state, sink, &msg).await,
         "send" => handle_send(state, device, sink, &msg).await,
+        "get_prs" => handle_get_prs(state, sink, &msg).await,
+        "get_artifact" => handle_get_artifact(state, sink, &msg).await,
+        "new_session" => handle_new_session(device, sink, &msg).await,
+        // v1.7: the TORCH flow.
+        "get_features" => {
+            let mut v = state.features_json().await;
+            if let Some(o) = v.as_object_mut() {
+                o.insert("type".to_string(), json!("features"));
+            }
+            send_json(sink, &v).await
+        }
+        "sign" | "plan_status" | "start_session" | "request_sign" | "get_scan" | "set_check"
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" | "session_detail" | "session_stop" | "work_hours"
+        | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_status" => handle_policy(state, device, sink, &msg).await,
         _ => Ok(()),
     }
+}
+
+/// `new_session` → `new_session_result` (v1.6): a new Claude Code session in
+/// Claude Desktop on this PC, with the phone's text as its first message.
+async fn handle_new_session(device: &Device, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    let cwd = str_field(msg, "cwd").to_string();
+    let prompt = str_field(msg, "prompt").to_string();
+    let client_id = str_field(msg, "client_id").to_string();
+    let result = tokio::task::block_in_place(|| desktop::open_new_session(&cwd, &prompt));
+    match &result {
+        Ok(()) => eprintln!("mewo: device {} ({}) started a session", device.id, device.name),
+        Err(e) => eprintln!("mewo: device {} ({}) could not start a session: {e}", device.id, device.name),
+    }
+    send_json(
+        sink,
+        &json!({
+            "type": "new_session_result",
+            "client_id": client_id,
+            "ok": result.is_ok(),
+            "error": result.err().unwrap_or_default(),
+        }),
+    )
+    .await
+}
+
+/// `get_prs` → `prs` (v1.6): the open pull requests of the session's
+/// repository, from `gh` on this PC.
+async fn handle_get_prs(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    let session_id = str_field(msg, "session_id");
+    let cwd = state
+        .session_list()
+        .into_iter()
+        .find(|s| s.id == session_id)
+        .map(|s| s.cwd)
+        .unwrap_or_default();
+    let mut v = state.prs.list(&cwd).await;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("type".to_string(), json!("prs"));
+        obj.insert("session_id".to_string(), json!(session_id));
+    }
+    send_json(sink, &v).await
+}
+
+/// The policy frames (v1.7): each answers with the same shape as the
+/// control command, typed `<frame>_result` and carrying `client_id` back.
+async fn handle_policy(state: &AppState, device: &Device, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    let frame = str_field(msg, "type").to_string();
+    let client_id = str_field(msg, "client_id").to_string();
+    // v2.0: a frame for another PC of the network goes through this hub.
+    let pc_id = str_field(msg, "pc_id").to_string();
+    if !pc_id.is_empty() && pc_id != state.config.pc_id && state.peers.is_peer(&pc_id) {
+        let mut v = state.peers.forward(&pc_id, msg.clone()).await;
+        if let Some(o) = v.as_object_mut() {
+            o.insert("type".to_string(), json!(format!("{}_result", frame.trim_start_matches("get_"))));
+            o.insert("client_id".to_string(), json!(client_id));
+            o.insert("pc_id".to_string(), json!(pc_id));
+        }
+        return send_json(sink, &v).await;
+    }
+    let mut req = msg.clone();
+    if let Some(o) = req.as_object_mut() {
+        let cmd = match frame.as_str() {
+            "get_scan" => "scan",
+            other => other,
+        };
+        o.insert("cmd".to_string(), json!(cmd));
+        // A role set from a phone reaches that phone (v1.8).
+        if (frame == "set_role" || frame.starts_with("plane_")) && str_field(msg, "phone").is_empty() {
+            o.insert("phone".to_string(), json!(device.name));
+        }
+    }
+    let mut v = tokio::task::block_in_place(|| if frame.starts_with("plane_") { control::plane_request(state, &req) } else { control::policy_request(state, &req) });
+    if frame == "set_check" {
+        // The session push carries the checks; a small ack is enough.
+        v = json!({"ok": v.get("ok").and_then(Value::as_bool).unwrap_or(false)});
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.insert("type".to_string(), json!(format!("{}_result", frame.trim_start_matches("get_"))));
+        o.insert("client_id".to_string(), json!(client_id));
+    }
+    send_json(sink, &v).await
+}
+
+/// `get_artifact` → the files of an artifact the daemon kept a copy of:
+/// one `artifact_file` per chunk, then `artifact_end` (v1.6).
+async fn handle_get_artifact(state: &AppState, sink: &mut WsSink, msg: &Value) -> Result<()> {
+    use base64::Engine as _;
+    let client_id = str_field(msg, "client_id").to_string();
+    let session_id = str_field(msg, "session_id");
+    let url = str_field(msg, "url");
+    let by_id = str_field(msg, "id").to_string();
+    let found = if !by_id.is_empty() && by_id == artifacts::id_of(&format!("x/{by_id}")) && artifacts::dir(&by_id).is_dir() {
+        // A folder the daemon exposed itself (a feature's handoff, v1.7).
+        Some(transcript::Artifact { id: by_id.clone(), local: true, entry: str_field(msg, "entry").to_string(), kind: "page".to_string(), title: str_field(msg, "title").to_string(), ..transcript::Artifact::default() })
+    } else {
+        state
+            .session_list()
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .and_then(|s| s.artifacts.into_iter().find(|a| a.url == url))
+            .filter(|a| a.local && !a.id.is_empty())
+    };
+    let Some(a) = found else {
+        let v = json!({"type": "artifact_end", "client_id": client_id, "ok": false, "error": "The files are no longer on the PC"});
+        return send_json(sink, &v).await;
+    };
+    let id = a.id.clone();
+    let files = tokio::task::spawn_blocking(move || artifacts::files(&id)).await.unwrap_or_default();
+    if files.is_empty() {
+        let v = json!({"type": "artifact_end", "client_id": client_id, "ok": false, "error": "The files are no longer on the PC"});
+        return send_json(sink, &v).await;
+    }
+    for (path, bytes) in files {
+        let text = if artifacts::is_text(&path) { String::from_utf8(bytes.clone()).ok() } else { None };
+        let (encoding, payload) = match text {
+            Some(t) => ("text", t),
+            None => ("base64", base64::engine::general_purpose::STANDARD.encode(&bytes)),
+        };
+        let parts = chunks(&payload, ARTIFACT_CHUNK);
+        let n = parts.len();
+        for (i, data) in parts.into_iter().enumerate() {
+            let v = json!({"type": "artifact_file", "client_id": client_id, "path": path, "part": i, "parts": n, "encoding": encoding, "data": data});
+            send_json(sink, &v).await?;
+        }
+    }
+    let v = json!({"type": "artifact_end", "client_id": client_id, "ok": true, "id": a.id, "kind": a.kind, "entry": a.entry, "title": a.title});
+    send_json(sink, &v).await
+}
+
+/// Bytes per `artifact_file` frame: under the relay's message limit.
+const ARTIFACT_CHUNK: usize = 600_000;
+
+/// `s` in pieces of at most `max` bytes, on char boundaries; one empty
+/// piece for an empty string.
+fn chunks(s: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < s.len() {
+        let mut end = (start + max).min(s.len());
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.push(s[start..end].to_string());
+        start = end;
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
 }
 
 fn str_field<'a>(msg: &'a Value, key: &str) -> &'a str {

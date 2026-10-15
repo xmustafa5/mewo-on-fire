@@ -5,12 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_state.dart';
 import '../models.dart';
 import '../requests.dart' show Answers;
 import '../voice_input.dart';
 import 'answer_screen.dart';
+import 'artifact_screen.dart';
 import 'history_tab.dart' show SheetAction;
 import 'keyboard_hide_button.dart';
 import 'theme/ember.dart';
@@ -27,7 +29,8 @@ import 'theme/motion.dart';
 ///
 /// Messages are Markdown and can carry images (v1.3). A long press on one
 /// opens its options (reply, copy, select text); the input bar can attach up
-/// to four pictures.
+/// to four pictures. The open pull requests of the session's repository
+/// (v1.6) sit above the input, like Claude Desktop's.
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.pcId, required this.sessionId});
 
@@ -605,10 +608,16 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _replyTo = _ReplyTarget(role: role, text: text));
   }
 
+  /// A link in a message opens; a link that cannot be opened is copied.
   void _copyLink(String? href) {
     if (href == null || href.isEmpty) return;
-    Clipboard.setData(ClipboardData(text: href));
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Link copied')));
+    final uri = Uri.tryParse(href);
+    if (uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')) {
+      Clipboard.setData(ClipboardData(text: href));
+      _toast('Link copied');
+      return;
+    }
+    unawaited(_openUrl(href));
   }
 
   @override
@@ -619,11 +628,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final outgoing = _state.outgoingOf(widget.pcId, widget.sessionId);
     final pending = _pendingRequests();
     final waiting = pending.any((r) => !r.answered && !_sent.contains(r.key));
+    final prs = _state.prsOf(widget.pcId, widget.sessionId);
 
     final title = session?.displayTitle ??
         ((chat?.title.isNotEmpty ?? false) ? chat!.title : 'Session ${_short(widget.sessionId)}');
     final sub = <String>[
       if (session != null && session.project.isNotEmpty) session.project,
+      if (session != null && session.planSession > 0) 'S${session.planSession}',
+      if (session != null && session.tier > 0) 'Tier ${session.tier}',
       entry?.pcName ?? _state.pcNameFor(widget.pcId),
     ].join(' · ');
 
@@ -670,6 +682,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               _StatusStrip(session: session, hasCards: pending.isNotEmpty),
+              if (session != null && session.artifacts.isNotEmpty)
+                _ArtifactStrip(artifacts: session.artifacts, onOpen: _openArtifact, onCopy: _copyArtifactLink),
+              if (prs != null) _PrStrip(list: prs, onOpen: _showPr),
               if (pending.isNotEmpty) _requestCards(pending, box.maxHeight * 0.45),
               _inputBar(
                 context,
@@ -685,6 +700,170 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   static String _short(String id) => id.length > 8 ? id.substring(0, 8) : id;
+
+  /// In place when the PC kept the files, else on claude.ai.
+  Future<void> _openArtifact(SessionArtifact a) async {
+    if (!a.local) return _openUrl(a.url);
+    HapticFeedback.selectionClick();
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => ArtifactScreen(pcId: widget.pcId, sessionId: widget.sessionId, artifact: a)),
+    );
+  }
+
+  void _copyArtifactLink(String url) {
+    Clipboard.setData(ClipboardData(text: url));
+    _toast('Link copied');
+  }
+
+  // ---- pull requests (v1.6) ----
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    try {
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) _toast('Could not open the link');
+    } catch (_) {
+      _toast('Could not open the link');
+    }
+  }
+
+  /// The checks of a pull request, and what to do about it.
+  Future<void> _showPr(PullRequest pr) async {
+    final list = _state.prsOf(widget.pcId, widget.sessionId);
+    final t = Theme.of(context).textTheme;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.call_merge_rounded, size: 22, color: _PrStrip.colorOf(pr.ci)),
+                  const SizedBox(width: 8),
+                  Text(
+                    '#${pr.number}',
+                    style: t.titleMedium?.copyWith(fontFamily: Ember.mono(context), color: Ember.text2),
+                  ),
+                  if (pr.draft) ...[
+                    const SizedBox(width: 10),
+                    Text('Draft', style: t.labelMedium?.copyWith(color: Ember.text3)),
+                  ],
+                  const Spacer(),
+                  if (pr.review.isNotEmpty) _ReviewPill(review: pr.review),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(pr.title, style: t.titleMedium),
+              const SizedBox(height: 6),
+              Text(
+                '${list?.repo ?? ''} · ${pr.branch}',
+                style: t.bodySmall?.copyWith(color: Ember.text3, fontFamily: Ember.mono(context), fontSize: 12),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  _Diff(additions: pr.additions, deletions: pr.deletions, size: 13),
+                  if (pr.author.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    Text('by ${pr.author}', style: t.bodySmall?.copyWith(color: Ember.text3)),
+                  ],
+                  if (pr.current) ...[
+                    const SizedBox(width: 12),
+                    Text('checked out here', style: t.bodySmall?.copyWith(color: Ember.amber)),
+                  ],
+                ],
+              ),
+              if (pr.checks.isNotEmpty) ...[
+                const SizedBox(height: 18),
+                Text(
+                  'CHECKS',
+                  style: t.labelSmall?.copyWith(color: Ember.text3, letterSpacing: 1.4),
+                ),
+                const SizedBox(height: 8),
+                GlassCard(
+                  padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
+                  radius: 16,
+                  fill: Ember.surface2.withValues(alpha: 0.8),
+                  child: Column(
+                    children: [
+                      for (final c in pr.checks.take(8))
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            children: [
+                              GlowDot(color: _PrStrip.colorOf(c.state), size: 8, live: c.state == 'pending'),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.bodySmall?.copyWith(color: Ember.text)),
+                              ),
+                              Text(
+                                c.state == 'pass' ? 'passed' : c.state == 'fail' ? 'failed' : 'running',
+                                style: t.labelSmall?.copyWith(color: _PrStrip.colorOf(c.state)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (pr.checks.length > 8)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Text('+${pr.checks.length - 8} more', style: t.labelSmall?.copyWith(color: Ember.text3)),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+              _SelfCheck(pcId: widget.pcId, sessionId: widget.sessionId),
+              const SizedBox(height: 18),
+              if (pr.ci == 'fail') ...[
+                EmberButton(
+                  label: 'Ask Claude to fix the checks',
+                  icon: Icons.auto_fix_high_rounded,
+                  expand: true,
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _useSuggestion(
+                        'The checks on PR #${pr.number} (${pr.title}) are failing. Look at the failures and fix the cause.');
+                  },
+                ),
+                const SizedBox(height: 10),
+              ],
+              EmberButton(
+                label: 'Open on GitHub',
+                icon: Icons.open_in_new_rounded,
+                style: pr.ci == 'fail' ? EmberButtonStyle.secondary : EmberButtonStyle.blue,
+                expand: true,
+                onPressed: pr.url.isEmpty
+                    ? null
+                    : () {
+                        Navigator.pop(ctx);
+                        _openUrl(pr.url);
+                      },
+              ),
+              const SizedBox(height: 10),
+              EmberButton(
+                label: 'Copy link',
+                icon: Icons.link_rounded,
+                style: EmberButtonStyle.ghost,
+                expand: true,
+                onPressed: pr.url.isEmpty
+                    ? null
+                    : () {
+                        Navigator.pop(ctx);
+                        Clipboard.setData(ClipboardData(text: pr.url));
+                        _toast('Link copied');
+                      },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   /// Pending requests of the session, pinned above the input bar (newest
   /// last); scrollable when they need more than [maxHeight].
@@ -2208,6 +2387,427 @@ class _RequestCard extends StatelessWidget {
   }
 }
 
+/// What the session made with Claude's Artifact tool (v1.6): designs,
+/// documents, pages. Tap to open it on the phone; hold to copy the link.
+class _ArtifactStrip extends StatefulWidget {
+  const _ArtifactStrip({required this.artifacts, required this.onOpen, required this.onCopy});
+
+  final List<SessionArtifact> artifacts;
+  final Future<void> Function(SessionArtifact artifact) onOpen;
+  final void Function(String url) onCopy;
+
+  static (IconData, Color) look(String kind) {
+    switch (kind) {
+      case 'design':
+        return (Icons.brush_rounded, Ember.amber);
+      case 'document':
+        return (Icons.article_outlined, Ember.mewoSoft);
+      case 'page':
+        return (Icons.web_rounded, Ember.ok);
+      default:
+        return (Icons.auto_awesome_rounded, Ember.text2);
+    }
+  }
+
+  @override
+  State<_ArtifactStrip> createState() => _ArtifactStripState();
+}
+
+class _ArtifactStripState extends State<_ArtifactStrip> {
+  static const int _fold = 2;
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    // Newest first.
+    final all = widget.artifacts.reversed.toList();
+    final shown = _expanded ? all : all.take(_fold).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < shown.length; i++)
+          FadeSlideIn(
+            key: ValueKey<String>(shown[i].url),
+            delay: Motion.stagger(i, step: 50),
+            offset: const Offset(0, 10),
+            child: _ArtifactRow(
+              artifact: shown[i],
+              onTap: () => widget.onOpen(shown[i]),
+              onLongPress: () => widget.onCopy(shown[i].url),
+            ),
+          ),
+        if (all.length > _fold)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: PressScale(
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(
+                  _expanded ? 'Show less' : 'Show ${all.length - _fold} more',
+                  style: t.labelMedium?.copyWith(color: Ember.text2),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ArtifactRow extends StatelessWidget {
+  const _ArtifactRow({required this.artifact, required this.onTap, required this.onLongPress});
+
+  final SessionArtifact artifact;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final (icon, color) = _ArtifactStrip.look(artifact.kind);
+    final title = artifact.title.isEmpty ? 'Claude ${artifact.kindLabel.toLowerCase()}' : artifact.title;
+    return GlassCard(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
+      radius: 14,
+      fill: Ember.surface2.withValues(alpha: 0.92),
+      borderColor: color.withValues(alpha: 0.35),
+      glow: artifact.kind == 'design' ? color : null,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: Row(
+        children: [
+          IconTile(icon: icon, color: color, size: 34, iconSize: 17),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.titleSmall?.copyWith(fontSize: 13.5)),
+                const SizedBox(height: 2),
+                Text(
+                  '${artifact.kindLabel} · made by Claude${artifact.ts > 0 ? ' · ${_clock(artifact.ts)}' : ''}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: t.labelSmall?.copyWith(color: Ember.text3),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: color.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              children: [
+                Icon(artifact.local ? Icons.visibility_rounded : Icons.open_in_new_rounded, size: 13, color: color),
+                const SizedBox(width: 5),
+                Text(artifact.local ? 'View' : 'Open', style: t.labelMedium?.copyWith(color: color, fontSize: 12)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The open pull requests of the session's repository (v1.6), pinned above
+/// the input like Claude Desktop's: number, repository, branch, the size of
+/// the change and whether CI is green. Tap one for its checks and links; the
+/// × hides it until the chat is opened again.
+class _PrStrip extends StatefulWidget {
+  const _PrStrip({required this.list, required this.onOpen});
+
+  final PrList list;
+  final void Function(PullRequest pr) onOpen;
+
+  static Color colorOf(String state) {
+    switch (state) {
+      case 'pass':
+        return Ember.ok;
+      case 'fail':
+        return Ember.danger;
+      case 'pending':
+        return Ember.amber;
+      default:
+        return Ember.text2;
+    }
+  }
+
+  /// Errors that are just "this is not that kind of session": no note.
+  static bool quiet(String error) =>
+      error.isEmpty || error.startsWith('Not a git') || error.contains('folder is not on');
+
+  @override
+  State<_PrStrip> createState() => _PrStripState();
+}
+
+class _PrStripState extends State<_PrStrip> {
+  static const int _fold = 2;
+  bool _expanded = false;
+  final Set<int> _hidden = <int>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final list = widget.list;
+    final prs = <PullRequest>[
+      for (final p in list.prs)
+        if (!_hidden.contains(p.number)) p,
+    ];
+    final t = Theme.of(context).textTheme;
+    Widget child;
+    if (prs.isEmpty) {
+      child = (list.loaded && !_PrStrip.quiet(list.error) && list.error.isNotEmpty)
+          ? Padding(
+              key: const ValueKey<String>('pr-error'),
+              padding: const EdgeInsets.fromLTRB(20, 2, 20, 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.call_merge_rounded, size: 14, color: Ember.text3),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text('Pull requests: ${list.error}', style: t.labelSmall?.copyWith(color: Ember.text3)),
+                  ),
+                ],
+              ),
+            )
+          : const SizedBox.shrink(key: ValueKey<String>('pr-none'));
+    } else {
+      final shown = _expanded ? prs : prs.take(_fold).toList();
+      child = Column(
+        key: const ValueKey<String>('pr-list'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < shown.length; i++)
+            FadeSlideIn(
+              key: ValueKey<int>(shown[i].number),
+              delay: Motion.stagger(i, step: 50),
+              offset: const Offset(0, 10),
+              child: _PrRow(
+                pr: shown[i],
+                repo: list.repo,
+                onTap: () => widget.onOpen(shown[i]),
+                onHide: () => setState(() => _hidden.add(shown[i].number)),
+              ),
+            ),
+          if (prs.length > _fold)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: PressScale(
+                onTap: () => setState(() => _expanded = !_expanded),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: Text(
+                    _expanded ? 'Show less' : 'Show ${prs.length - _fold} more',
+                    style: t.labelMedium?.copyWith(color: Ember.text2),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+    return AnimatedSize(
+      duration: Motion.base,
+      curve: Motion.easeOut,
+      alignment: Alignment.bottomCenter,
+      child: AnimatedSwitcher(
+        duration: Motion.base,
+        transitionBuilder: fadeUpTransition,
+        child: child,
+      ),
+    );
+  }
+}
+
+class _PrRow extends StatelessWidget {
+  const _PrRow({required this.pr, required this.repo, required this.onTap, required this.onHide});
+
+  final PullRequest pr;
+  final String repo;
+  final VoidCallback onTap;
+  final VoidCallback onHide;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final color = _PrStrip.colorOf(pr.ci);
+    final name = repo.contains('/') ? repo.substring(repo.indexOf('/') + 1) : repo;
+    final mono = Ember.mono(context);
+    return GlassCard(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 7, 4, 8),
+      radius: 14,
+      fill: Ember.surface2.withValues(alpha: 0.92),
+      borderColor: pr.ci == 'fail'
+          ? Ember.danger.withValues(alpha: 0.4)
+          : pr.current
+              ? Ember.amber.withValues(alpha: 0.35)
+              : null,
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.call_merge_rounded, size: 18, color: color),
+              const SizedBox(width: 8),
+              Text(
+                '#${pr.number}',
+                style: t.labelMedium?.copyWith(color: Ember.text2, fontFamily: mono, fontSize: 12.5),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  name.isEmpty ? pr.title : name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: t.titleSmall?.copyWith(fontSize: 13),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _Diff(additions: pr.additions, deletions: pr.deletions),
+              if (pr.ci != 'none') ...[
+                const SizedBox(width: 8),
+                _CiChip(state: pr.ci),
+              ],
+              GhostIconButton(
+                icon: Icons.close_rounded,
+                tooltip: 'Hide this pull request here',
+                filled: false,
+                size: 30,
+                iconSize: 15,
+                onPressed: onHide,
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(26, 0, 8, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    pr.branch,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.labelSmall?.copyWith(
+                      color: Ember.text3,
+                      fontFamily: mono,
+                      fontWeight: FontWeight.w400,
+                      letterSpacing: 0,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                if (pr.draft)
+                  Text('Draft', style: t.labelSmall?.copyWith(color: Ember.text3))
+                else if (pr.review.isNotEmpty)
+                  Text(
+                    pr.review == 'approved'
+                        ? 'Approved'
+                        : pr.review == 'changes'
+                            ? 'Changes requested'
+                            : 'Review needed',
+                    style: t.labelSmall?.copyWith(
+                      color: pr.review == 'approved'
+                          ? Ember.ok
+                          : pr.review == 'changes'
+                              ? Ember.danger
+                              : Ember.text3,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// `+87 −0`.
+class _Diff extends StatelessWidget {
+  const _Diff({required this.additions, required this.deletions, this.size = 12});
+  final int additions;
+  final int deletions;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(
+      fontFamily: Ember.mono(context),
+      fontSize: size,
+      fontWeight: FontWeight.w600,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Text.rich(
+      TextSpan(children: [
+        TextSpan(text: '+$additions', style: style.copyWith(color: Ember.ok)),
+        TextSpan(text: ' −$deletions', style: style.copyWith(color: Ember.danger)),
+      ]),
+    );
+  }
+}
+
+class _CiChip extends StatelessWidget {
+  const _CiChip({required this.state});
+  final String state;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _PrStrip.colorOf(state);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(7, 3, 8, 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (state == 'pending')
+            SizedBox(width: 9, height: 9, child: CircularProgressIndicator(strokeWidth: 1.5, color: color))
+          else
+            Icon(state == 'pass' ? Icons.check_rounded : Icons.close_rounded, size: 11, color: color),
+          const SizedBox(width: 4),
+          Text('CI', style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color, fontSize: 10.5)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReviewPill extends StatelessWidget {
+  const _ReviewPill({required this.review});
+  final String review;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (review) {
+      'approved' => ('Approved', Ember.ok),
+      'changes' => ('Changes requested', Ember.danger),
+      _ => ('Review needed', Ember.amber),
+    };
+    return Container(
+      padding: const EdgeInsets.fromLTRB(9, 3, 9, 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.13),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(label, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color)),
+    );
+  }
+}
+
 class _ErrorBanner extends StatelessWidget {
   const _ErrorBanner({required this.text, required this.onRetry});
 
@@ -2234,6 +2834,160 @@ class _ErrorBanner extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The owner's self-check (policy Checklist F) and the scan of the
+/// session's changes (v1.7), on the pull request sheet.
+class _SelfCheck extends StatefulWidget {
+  const _SelfCheck({required this.pcId, required this.sessionId});
+
+  final String pcId;
+  final String sessionId;
+
+  @override
+  State<_SelfCheck> createState() => _SelfCheckState();
+}
+
+class _SelfCheckState extends State<_SelfCheck> {
+  final AppState _state = AppState.instance;
+  bool _scanning = false;
+  bool _review = false;
+
+  Future<void> _scan() async {
+    if (_scanning) return;
+    setState(() => _scanning = true);
+    try {
+      await _state.scan(widget.pcId, widget.sessionId);
+    } finally {
+      if (mounted) setState(() => _scanning = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: _state,
+      builder: (context, _) {
+        final t = Theme.of(context).textTheme;
+        final session = _state.findSession(widget.pcId, widget.sessionId)?.session;
+        final data = _state.featuresOf(widget.pcId);
+        final lines = (data?.selfCheck.isNotEmpty ?? false) ? data!.selfCheck : kSelfCheck;
+        final review = (data?.reviewCheck.isNotEmpty ?? false) ? data!.reviewCheck : kReviewCheck;
+        final checks = session?.checks ?? const <bool>[];
+        final done = checks.where((c) => c).length;
+        final scan = _state.scanOf(widget.pcId, widget.sessionId);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Text('SELF-CHECK · CHECKLIST F', style: t.labelSmall?.copyWith(color: Ember.text3, letterSpacing: 1.4)),
+                const Spacer(),
+                Text('$done/${lines.length}', style: t.labelSmall?.copyWith(color: done == lines.length ? Ember.ok : Ember.text3)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            GlassCard(
+              padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
+              radius: 16,
+              fill: Ember.surface2.withValues(alpha: 0.8),
+              child: Column(
+                children: [
+                  for (var i = 0; i < lines.length; i++)
+                    CheckboxListTile(
+                      value: i < checks.length && checks[i],
+                      onChanged: (v) {
+                        HapticFeedback.selectionClick();
+                        _state.setCheck(widget.pcId, widget.sessionId, i, v ?? false);
+                      },
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      activeColor: Ember.ok,
+                      title: Text(lines[i], style: t.bodySmall?.copyWith(color: Ember.text, fontSize: 12.5)),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (scan != null && scan.ok) ...[
+              Row(
+                children: [
+                  Icon(scan.findings.isEmpty ? Icons.check_circle_outline_rounded : Icons.search_rounded, size: 16, color: scan.findings.isEmpty ? Ember.ok : Ember.amber),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      scan.findings.isEmpty
+                          ? 'Nothing found against ${scan.base}: ${scan.files} files, +${scan.additions} −${scan.deletions}.'
+                          : '${scan.findings.length} finding${scan.findings.length == 1 ? '' : 's'} against ${scan.base}: ${scan.counts.map((c) => '${c.$2} ${c.$1.toLowerCase()}').join(', ')}.',
+                      style: t.bodySmall?.copyWith(color: Ember.text2),
+                    ),
+                  ),
+                ],
+              ),
+              for (final f in scan.findings.take(6))
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, left: 22),
+                  child: Text(
+                    '${f.file}${f.line > 0 ? ':${f.line}' : ''} · ${f.text}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.labelSmall?.copyWith(color: Ember.text3, fontFamily: Ember.mono(context), fontWeight: FontWeight.w400, letterSpacing: 0),
+                  ),
+                ),
+              if (scan.findings.length > 6)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, left: 22),
+                  child: Text('+${scan.findings.length - 6} more on the console', style: t.labelSmall?.copyWith(color: Ember.text3)),
+                ),
+              const SizedBox(height: 10),
+            ] else if (scan != null && scan.error.isNotEmpty) ...[
+              Text('Scan: ${scan.error}', style: t.bodySmall?.copyWith(color: Ember.text3)),
+              const SizedBox(height: 10),
+            ],
+            EmberButton(
+              label: scan == null ? 'Scan my changes for slop' : 'Scan again',
+              icon: Icons.search_rounded,
+              style: EmberButtonStyle.secondary,
+              expand: true,
+              busy: _scanning,
+              onPressed: _scanning ? null : _scan,
+            ),
+            const SizedBox(height: 14),
+            PressScale(
+              onTap: () => setState(() => _review = !_review),
+              child: Row(
+                children: [
+                  Text('REVIEW · CHECKLISTS G AND H', style: t.labelSmall?.copyWith(color: Ember.text3, letterSpacing: 1.4)),
+                  const Spacer(),
+                  Icon(_review ? Icons.expand_less_rounded : Icons.expand_more_rounded, size: 18, color: Ember.text3),
+                ],
+              ),
+            ),
+            if (_review) ...[
+              const SizedBox(height: 6),
+              Text('By another developer, never the session owner.', style: t.labelSmall?.copyWith(color: Ember.text3)),
+              const SizedBox(height: 6),
+              for (final line in review)
+                Padding(
+                  padding: const EdgeInsets.only(top: 5),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(padding: EdgeInsets.only(top: 3), child: Icon(Icons.circle, size: 5, color: Ember.amber)),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(line, style: t.bodySmall?.copyWith(color: Ember.text2, fontSize: 12.5))),
+                    ],
+                  ),
+                ),
+            ],
+          ],
+        );
+      },
     );
   }
 }

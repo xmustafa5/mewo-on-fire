@@ -190,6 +190,65 @@ Logs: `journalctl --user -u mewo-on-fire -f` on Linux, `tail -f ~/Library/Logs/m
 Restart the daemon: `systemctl --user restart mewo-on-fire` on Linux,
 `launchctl kickstart -k gui/$(id -u)/com.torchcorp.mewo-on-fire` on macOS.
 
+## Operations console (`mewo dashboard`)
+
+```sh
+mewo dashboard            # opens http://127.0.0.1:47824 in your browser
+mewo dashboard 5050       # another port; --no-open to just print the URL
+```
+
+A page for your screen, Iron Man style: every session as a node around
+your PC, lit by state (working, needs you, finished, closed), with activity
+flowing along the edges; counts, phones, relay and the live feed of events
+and requests beside it. It is served by that command on this machine only
+(nothing listens beyond localhost) and reads the daemon over the control
+socket, so it also works with a daemon from before the rename, just without
+the feed. Honours the system's Reduce Motion setting.
+
+**As a Mac app** (no browser, no server): [`console/`](console/) wraps the
+same page in a window of its own, with a Dock icon and full screen, fed
+straight from the daemon's socket.
+
+```sh
+pc/console/install.sh      # builds and installs "~/Applications/Mewo Console.app", then opens it
+```
+
+**On Linux** the same script installs [`console/linux/`](console/linux/): a
+GTK + WebKitGTK window (needs `python3-gi` and `gir1.2-webkit2-4.1`, there on a
+stock Ubuntu desktop) that runs `mewo dashboard` on a free localhost port for
+itself and shows its page. It lands in the application menu as "Mewo Console"
+and as `mewo-console`; the tray's **Open Console** opens it (or the browser
+page when it is not installed). Ctrl+R reloads, F11 is full screen.
+
+**Build with me** (beside Build everything on a feature's build) opens each
+session of the plan in a Mewo Session window of its own, where you watch
+Claude work and answer its questions. On Linux the window is a chat in the
+look of the Claude Code extension: Claude's text as it is written, every
+tool call with its input and output, edits as diffs, questions and
+permission prompts as buttons (your phone gets them too; the first answer
+wins), and a composer with the model, the permission mode, `@` for a file,
+`/` for a command, pasted images, Enter to send and Esc to stop. A file
+Claude names opens in VS Code at its line. Every session is a tab of one
+window (Ctrl+W closes a tab, Ctrl+Page Up / Page Down move between them),
+and each runs on its own: if the window freezes or is closed with **Keep
+them running**, the sessions go on, and the window shows them again, whole
+conversation included, the next time it opens. A session that is merged
+closes its tab by itself a minute after it has finished (write in its
+message box in that minute to keep it). On the console, a session
+that has a window or tab gets **Show the session**, which brings it
+forward (and opens the window when it is closed).
+It needs GTK 3 and WebKitGTK for
+Python (`python3-gi`, `gir1.2-webkit2-4.1`: what the console itself needs).
+Without WebKitGTK, or with `"session_terminal": true` in
+`~/.config/mewo-on-fire/config.json`, the window shows Claude Code in a
+terminal instead (`gir1.2-vte-2.91`); on a Mac the session opens in
+Terminal in the console's colours.
+
+Claude Desktop for Linux works like the Mac app: sessions are tagged from
+`~/.config/Claude/claude-code-sessions`, **Open** and **New session** go
+through its `claude://` handler (`xdg-open`), and the build autopilot's
+headless runs count `~/.claude/.credentials.json` as signed in.
+
 ## Firewall
 
 The phone connects to TCP port `47821`; discovery uses mDNS (UDP 5353).
@@ -228,6 +287,15 @@ suggested next messages; the app shows them as buttons. It costs a few dozen
 tokens per reply and applies to every Claude Code session on this PC, from
 the next prompt on. In a plain terminal the line is visible as
 `[next]: # "…"`.
+
+## Pull requests in the chat
+
+With the [GitHub CLI](https://cli.github.com) installed and logged in on the
+PC (`gh auth login`), a session's chat on the phone shows the open pull
+requests of its repository above the input, with the size of the change and
+whether CI passes; one tap lists the checks or asks Claude to fix them.
+Nothing to configure: the daemon runs `gh` in the session's folder when a
+phone asks.
 
 ## Away from the local network
 

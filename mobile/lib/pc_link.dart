@@ -68,6 +68,18 @@ typedef LinkChatCallback = Future<void> Function(PcLink link, Map<String, dynami
 typedef LinkImageCallback = Future<void> Function(PcLink link, Map<String, dynamic> image);
 
 /// Called for every `send_result`; [status] is `delivered`, `queued` or `rejected`.
+/// `prs` (v1.6): the open pull requests of a session's repository.
+typedef LinkPrsCallback = Future<void> Function(PcLink link, Map<String, dynamic> prs);
+
+/// `features` and the `*_result` frames of the policy commands (v1.7).
+typedef LinkPolicyCallback = Future<void> Function(PcLink link, Map<String, dynamic> msg);
+
+/// `artifact_file` / `artifact_end` (v1.6): the frame as is.
+typedef LinkArtifactCallback = Future<void> Function(PcLink link, Map<String, dynamic> msg);
+
+/// `new_session_result` (v1.6).
+typedef LinkNewSessionCallback = Future<void> Function(PcLink link, String clientId, bool ok, String error);
+
 typedef LinkSendResultCallback = Future<void> Function(
     PcLink link, String clientId, String status, String reason);
 
@@ -90,6 +102,10 @@ class PcLink {
     required this.onChat,
     required this.onImage,
     required this.onSendResult,
+    required this.onPrs,
+    required this.onNewSessionResult,
+    required this.onArtifact,
+    required this.onPolicy,
   });
 
   final PairedPc pc;
@@ -103,6 +119,10 @@ class PcLink {
   final LinkChatCallback onChat;
   final LinkImageCallback onImage;
   final LinkSendResultCallback onSendResult;
+  final LinkPrsCallback onPrs;
+  final LinkNewSessionCallback onNewSessionResult;
+  final LinkArtifactCallback onArtifact;
+  final LinkPolicyCallback onPolicy;
 
   static const Duration _minBackoff = Duration(seconds: 1);
   static const Duration _maxBackoff = Duration(seconds: 60);
@@ -212,6 +232,23 @@ class PcLink {
 
   /// Asks for all sessions (reply → [onSessions]). False if not connected.
   bool requestSessions() => _sendFrame({'type': 'sessions'});
+
+  /// v1.6: the pull requests of the session's repository → `prs`.
+  bool getPrs(String sessionId) => _sendFrame({'type': 'get_prs', 'session_id': sessionId});
+
+  /// v1.7: a policy frame as is (`get_features`, `sign`, `plan_status`,
+  /// `start_session`, `request_sign`, `get_scan`, `set_check`).
+  bool sendPolicy(Map<String, dynamic> frame) => _sendFrame(frame);
+
+  /// v1.6: the files of an artifact the PC kept a copy of, as
+  /// `artifact_file` frames then `artifact_end`.
+  bool getArtifact(String clientId, String sessionId, String url, {String id = '', String entry = '', String title = ''}) =>
+      _sendFrame({'type': 'get_artifact', 'client_id': clientId, 'session_id': sessionId, 'url': url, if (id.isNotEmpty) 'id': id, if (entry.isNotEmpty) 'entry': entry, if (title.isNotEmpty) 'title': title});
+
+  /// v1.6: a new Claude Code session in Claude Desktop on the PC, with
+  /// [prompt] as its first message → `new_session_result`.
+  bool newSession(String clientId, String cwd, String prompt) =>
+      _sendFrame({'type': 'new_session', 'client_id': clientId, 'cwd': cwd, 'prompt': prompt});
 
   /// Asks for a session's chat (reply → [onChat]). False if not connected.
   bool getChat(String sessionId, {int limit = 100}) =>
@@ -500,6 +537,26 @@ class PcLink {
           if (id is! String || id.isEmpty) continue;
           try {
             await onChat(this, msg);
+          } catch (_) {}
+        } else if (type == 'features' || type.endsWith('_result') && type != 'new_session_result') {
+          try {
+            await onPolicy(this, msg);
+          } catch (_) {}
+        } else if (type == 'artifact_file' || type == 'artifact_end') {
+          try {
+            await onArtifact(this, msg);
+          } catch (_) {}
+        } else if (type == 'new_session_result') {
+          final id = msg['client_id'];
+          if (id is! String || id.isEmpty) continue;
+          try {
+            await onNewSessionResult(this, id, msg['ok'] == true, msg['error'] is String ? msg['error'] as String : '');
+          } catch (_) {}
+        } else if (type == 'prs') {
+          final id = msg['session_id'];
+          if (id is! String || id.isEmpty) continue;
+          try {
+            await onPrs(this, msg);
           } catch (_) {}
         } else if (type == 'image') {
           final id = msg['image_id'];

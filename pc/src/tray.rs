@@ -100,6 +100,8 @@ enum Action {
     CancelPairing,
     Revoke(String),
     Test,
+    /// The operations console: its app window, else `mewo dashboard`.
+    Console,
     Service { restart: bool },
     ToggleAutostart,
     Quit,
@@ -393,6 +395,7 @@ impl ksni::Tray for Tray {
             menu.extend(view.sessions.iter().map(session_menu));
 
             menu.push(MenuItem::Separator);
+            menu.push(item("Open Console", || Action::Console));
             menu.push(item("Send Test Notification", || Action::Test));
             menu.push(item("Restart Service", || Action::Service { restart: true }));
         }
@@ -975,6 +978,20 @@ impl App {
                     (true, 0) => "Sent, but no phone is connected right now".to_string(),
                     (true, n) => format!("Test notification sent to {n} phone(s)"),
                 };
+            }
+            Action::Console => {
+                let app = paths::home().join(".local/bin/mewo-console");
+                let url = format!("http://127.0.0.1:{}", crate::dashboard::DEFAULT_PORT);
+                let opened = if app.exists() {
+                    spawn_helper(&app.to_string_lossy(), &[])
+                } else if std::net::TcpStream::connect(("127.0.0.1", crate::dashboard::DEFAULT_PORT)).is_ok() {
+                    spawn_helper("xdg-open", &[&url])
+                } else {
+                    spawn_helper(&tray_binary().to_string_lossy(), &["dashboard"])
+                };
+                if !opened {
+                    self.view.notice = "Could not open the console".to_string();
+                }
             }
             Action::Service { restart } => {
                 let verb = if restart { "restart" } else { "start" };

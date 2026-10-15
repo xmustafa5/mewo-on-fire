@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use qrcode::render::unicode::Dense1x2;
 use qrcode::{EcLevel, QrCode};
 use serde_json::{json, Value};
@@ -551,4 +551,55 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// `mewo demo`: a sample Claude Code session (with its chat) and a finished
+/// event, so the app has something to show without Claude Code running —
+/// for a first look, and for App Review. `mewo test-ask` adds a permission
+/// prompt to answer from the phone.
+pub fn demo() -> Result<()> {
+    let dir = paths::state_dir().join("demo");
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let session_id = "de3a0000-0000-4000-8000-00000000d3a0";
+    let cwd = dir.join("shop");
+    std::fs::create_dir_all(&cwd)?;
+    let transcript = dir.join("shop.jsonl");
+    let lines = [
+        json!({"type":"user","uuid":"d1","timestamp":"2026-10-07T15:02:10.000Z","sessionId":session_id,"cwd":cwd,
+            "message":{"role":"user","content":"The checkout total is wrong when a coupon is applied twice. Can you find the bug and fix it?"}}),
+        json!({"type":"assistant","uuid":"d2","timestamp":"2026-10-07T15:02:18.000Z","sessionId":session_id,
+            "message":{"role":"assistant","content":[
+                {"type":"text","text":"I'll look at how coupons are applied in the cart first."},
+                {"type":"tool_use","id":"t1","name":"Grep","input":{"pattern":"applyCoupon","path":"src"}},
+                {"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"src/cart/total.ts"}},
+                {"type":"tool_use","id":"t3","name":"Bash","input":{"command":"npm test -- cart","description":"Run the cart tests"}}]}}),
+        json!({"type":"user","uuid":"d3","timestamp":"2026-10-07T15:02:40.000Z","sessionId":session_id,
+            "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"12 passing, 1 failing"}]}}),
+        json!({"type":"assistant","uuid":"d4","timestamp":"2026-10-07T15:03:05.000Z","sessionId":session_id,
+            "message":{"role":"assistant","content":[
+                {"type":"text","text":"Found it. `applyCoupon` pushes the coupon onto `cart.coupons` without checking whether it is already there, so the discount is counted twice.\n\nThe fix is a guard at the top of the function:\n\n```ts\nexport function applyCoupon(cart: Cart, code: string) {\n  if (cart.coupons.includes(code)) return cart;\n  cart.coupons.push(code);\n  return recalc(cart);\n}\n```\n\nI also added a test, **applies a coupon only once**, which fails before the change and passes after it."},
+                {"type":"tool_use","id":"t4","name":"Edit","input":{"file_path":"src/cart/coupon.ts","old_string":"cart.coupons.push(code);","new_string":"if (cart.coupons.includes(code)) return cart;\n  cart.coupons.push(code);"}},
+                {"type":"tool_use","id":"t5","name":"Bash","input":{"command":"npm test -- cart","description":"Run the cart tests again"}}]}}),
+        json!({"type":"user","uuid":"d5","timestamp":"2026-10-07T15:03:30.000Z","sessionId":session_id,
+            "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t5","content":"13 passing"}]}}),
+        json!({"type":"assistant","uuid":"d6","timestamp":"2026-10-07T15:03:41.000Z","sessionId":session_id,
+            "message":{"role":"assistant","content":[{"type":"text","text":"All 13 tests pass now. The double-discount is gone and the change is a one-line guard in `coupon.ts`.\n\nDo you want me to commit it?\n\n[next]: # \"Yes, commit it | Show me the diff first\""}]}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    paths::write_atomic(&transcript, text.as_bytes(), 0o644)?;
+
+    let cwd_s = cwd.to_string_lossy().into_owned();
+    let tp = transcript.to_string_lossy().into_owned();
+    call(&json!({
+        "cmd": "session_state", "session_id": session_id, "cwd": cwd_s, "transcript_path": tp, "state": "working",
+    }))?;
+    let message = "All 13 tests pass now. The double-discount is gone and the change is a one-line guard in coupon.ts.\n\nDo you want me to commit it?";
+    let event = json!({
+        "kind": "stop", "project": "shop", "cwd": cwd_s, "session": &session_id[..8],
+        "message": message, "detail": "", "session_id": session_id,
+    });
+    call(&json!({"cmd": "emit", "event": event, "session_id": session_id, "transcript_path": tp}))?;
+    println!("Demo session \"shop\" is in the app: Sessions → shop shows the chat, History shows the event.");
+    println!("Run `mewo test-ask` for a permission prompt to answer from the phone, `mewo test` for a notification.");
+    Ok(())
 }

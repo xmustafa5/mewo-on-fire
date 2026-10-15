@@ -1,19 +1,33 @@
 //! Mewo on Fire — Claude Code notifications to your phone over the LAN.
 //! See ../PROTOCOL.md for the wire contract.
 
+mod artifacts;
 mod ask;
 mod cli;
+mod clock;
 mod config;
+mod console_prefs;
 mod control;
 mod daemon;
+mod dashboard;
+mod desktop;
+mod flow;
+mod github;
 mod hook;
 mod install;
 mod listen;
 mod mdns;
 mod net;
+mod notes;
 mod paths;
+mod peers;
+mod plane;
+mod policy;
+mod prs;
 mod relay;
 mod requests;
+mod runner;
+mod windows;
 mod server;
 mod sessions;
 mod store;
@@ -35,9 +49,14 @@ Commands:
   devices        List paired phones
   revoke <id>    Unpair a phone
   status         Show daemon status
+  dashboard [port]
+                 Operations console in your browser: sessions as a live network,
+                 counts, feed (on this machine only; default port 47824)
   sessions       List Claude Code sessions (state, listening, queued phone messages)
   chat <session> Show the last 20 chat items of a session (id prefix from `sessions`)
   test           Send a test notification
+  demo           Put a sample session (with its chat) and event in the app, for a
+                 first look without Claude Code running
   test-ask       Send a test permission request and print the phone's answer
   relay <url>    Use a relay so phones also connect away from the LAN (`relay off`
                  to stop; see relay/ for the relay itself)
@@ -92,6 +111,14 @@ fn main() {
             }
         },
         "status" => cli::status(),
+        "dashboard" => {
+            let port = args
+                .iter()
+                .skip(1)
+                .find_map(|a| a.parse::<u16>().ok())
+                .unwrap_or(dashboard::DEFAULT_PORT);
+            dashboard::run(port, !args.iter().any(|a| a == "--no-open"))
+        }
         "sessions" => cli::sessions(),
         "chat" => match args.get(1) {
             Some(prefix) => cli::chat(prefix),
@@ -101,6 +128,7 @@ fn main() {
             }
         },
         "test" => cli::test(),
+        "demo" => cli::demo(),
         "test-ask" => cli::test_ask(),
         "relay" => match args.get(1) {
             Some(url) => cli::relay(url),

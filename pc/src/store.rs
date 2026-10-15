@@ -24,6 +24,9 @@ pub struct Event {
     pub message: String,
     pub detail: String,
     pub session_id: String,
+    /// v1.8: the one phone (device name) this is for; empty for every phone.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub to: String,
 }
 
 #[derive(Deserialize)]
@@ -105,6 +108,17 @@ impl Store {
             .filter(|e| e.id > since)
             .cloned()
             .collect()
+    }
+
+    /// v2.4: the events of a forgotten session go with it.
+    pub fn forget_session(&mut self, session_id: &str) -> usize {
+        let before = self.events.len();
+        self.events.retain(|e| e.session_id != session_id);
+        let n = before - self.events.len();
+        if n > 0 {
+            let _ = self.persist();
+        }
+        n
     }
 
     fn persist(&self) -> std::io::Result<()> {

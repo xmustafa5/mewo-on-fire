@@ -77,6 +77,10 @@ class _HistoryTabState extends State<HistoryTab> {
         return Icons.check_rounded;
       case EventKind.sessionEnd:
         return Icons.stop_rounded;
+      case EventKind.warning:
+        return Icons.warning_amber_rounded;
+      case EventKind.signoff:
+        return Icons.draw_rounded;
       default:
         return Icons.notifications_rounded;
     }
