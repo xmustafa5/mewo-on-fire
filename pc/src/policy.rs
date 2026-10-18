@@ -387,6 +387,11 @@ pub struct Feature {
     pub step: u8,
     pub step_label: String,
     pub released: bool,
+    /// Steps the work moved past without their gate passed (items left
+    /// open): `{step, title, detail}`, in step order.
+    pub carried: Vec<Value>,
+    /// The PRD has an estimates table and every effort cell in it is empty.
+    pub estimates_empty: bool,
     pub gates: Vec<Gate>,
     pub plan: Option<Plan>,
     pub handoff_files: Vec<String>,
@@ -497,7 +502,21 @@ fn signature_table(lines: &[&str]) -> Option<(Vec<String>, Vec<String>, usize, u
     None
 }
 
-fn gate_from(lines: &[&str], id: &str, checklist: &str, title: &str, step: u8, file: &str, present: bool) -> Gate {
+/// `Name (Role), date` of a `**Signed:**` line.
+fn parse_signed(v: &str) -> Option<(String, String, String)> {
+    let (name, rest) = v.split_once(" (")?;
+    let (role, date) = rest.split_once(')')?;
+    let name = clean(name);
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, role.trim().to_string(), clean(date.trim_start_matches(',').trim())))
+}
+
+/// `roles` are asked of a checklist without a signature table of its own
+/// (Checklist D part 1, Checklist E): its signatures are `**Signed:**`
+/// lines under the items, and it is signed once every role has one.
+fn gate_from(lines: &[&str], id: &str, checklist: &str, title: &str, step: u8, file: &str, present: bool, roles: &[&str]) -> Gate {
     let items: Vec<GateItem> = checkboxes(lines)
         .into_iter()
         .map(|(_, text, checked)| GateItem { text, checked })
@@ -526,7 +545,16 @@ fn gate_from(lines: &[&str], id: &str, checklist: &str, title: &str, step: u8, f
         }
         gate.signed = !gate.roles.is_empty() && gate.signatures.len() == gate.roles.len();
     } else {
-        gate.signed = present && !gate.items.is_empty() && gate.items.iter().all(|i| i.checked);
+        gate.roles = roles.iter().map(|r| r.to_string()).collect();
+        for i in 0..lines.len() {
+            if let Some((name, role, date)) = field_value(lines, i, "Signed").and_then(|v| parse_signed(&v)) {
+                gate.signatures.push(json!({"role": role, "name": name}));
+                gate.date = date;
+            }
+        }
+        let ticked = !gate.items.is_empty() && gate.items.iter().all(|i| i.checked);
+        let by_roles = !gate.roles.is_empty() && gate.roles.iter().all(|r| gate.signatures.iter().any(|s| s["role"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(r))));
+        gate.signed = present && (ticked || by_roles);
     }
     gate
 }
@@ -550,9 +578,9 @@ fn release_gates(dir: &Path, rel: &str) -> Vec<Gate> {
     };
     let file = format!("{rel}/RELEASE.md");
     vec![
-        gate_from(&find("staging"), "staging", "I", "Staging sign-off", 10, &file, present),
-        gate_from(&find("uat"), "uat", "J", "UAT sign-off", 11, &file, present),
-        gate_from(&find("production"), "production", "K", "Production release", 12, &file, present),
+        gate_from(&find("staging"), "staging", "I", "Staging sign-off", 10, &file, present, &[]),
+        gate_from(&find("uat"), "uat", "J", "UAT sign-off", 11, &file, present, &[]),
+        gate_from(&find("production"), "production", "K", "Production release", 12, &file, present, &[]),
     ]
 }
 
@@ -570,16 +598,13 @@ fn handoff_gates(dir: &Path, rel: &str) -> Vec<Gate> {
             .unwrap_or_default()
     };
     let file = format!("{rel}/HANDOFF_CHECKLIST.md");
-    let mut part1 = gate_from(&find("part 1"), "handoff1", "D", "Design proven", 5, &file, present);
-    // Part 1 has no table of its own in the template: the part 2 table
-    // covers both, so part 1 counts as signed once its items are ticked.
-    if part1.roles.is_empty() {
-        part1.signed = present && !part1.items.is_empty() && part1.items.iter().all(|i| i.checked);
-    }
+    // Part 1 and the intake have no table of their own in the template:
+    // signed once their items are ticked, or by a `**Signed:**` line from
+    // the role the flow asks.
     vec![
-        part1,
-        gate_from(&find("part 2"), "handoff2", "D", "Handoff session", 6, &file, present),
-        gate_from(&find("intake"), "intake", "E", "Handoff intake", 7, &file, present),
+        gate_from(&find("part 1"), "handoff1", "D", "Design proven", 5, &file, present, &["Product lead"]),
+        gate_from(&find("part 2"), "handoff2", "D", "Handoff session", 6, &file, present, &[]),
+        gate_from(&find("intake"), "intake", "E", "Handoff intake", 7, &file, present, &["FE lead", "BE lead"]),
     ]
 }
 
@@ -589,7 +614,7 @@ fn light_gate(dir: &Path, rel: &str) -> Gate {
     let text = read_lines(&path).unwrap_or_default();
     let present = !text.is_empty();
     let lines: Vec<&str> = text.lines().collect();
-    gate_from(&lines, "light", "L", "Light-path record", 12, &format!("{rel}/LIGHT_PATH.md"), present)
+    gate_from(&lines, "light", "L", "Light-path record", 12, &format!("{rel}/LIGHT_PATH.md"), present, &[])
 }
 
 fn field_value(lines: &[&str], i: usize, key: &str) -> Option<String> {
@@ -925,6 +950,26 @@ pub fn prd_signed(path: &Path, major: u32) -> bool {
             v.starts_with("signed") || v.starts_with("approved") || v.starts_with("released")
         }
     })
+}
+
+/// True when the PRD's estimates table (the template's "**Estimates**"
+/// with a person-days column) is there and no team has filled it in.
+/// False when it is filled, or when the PRD has no such table.
+pub fn estimates_empty(prd: &str) -> bool {
+    let lines: Vec<&str> = prd.lines().collect();
+    // A heading or a bold line that starts with the word: `**Estimates** (added once received)`.
+    let Some(at) = lines.iter().position(|l| {
+        let l = l.trim_start();
+        let t = l.trim_start_matches(['#', '*', ' ']);
+        (l.starts_with('#') || l.starts_with("**")) && t.get(..9).is_some_and(|w| w.eq_ignore_ascii_case("estimates"))
+    }) else {
+        return false;
+    };
+    let Some(head) = (at + 1..lines.len().min(at + 6)).find(|&i| cells(lines[i]).iter().any(|c| c.to_ascii_lowercase().contains("person-days"))) else {
+        return false;
+    };
+    let rows: Vec<Vec<String>> = lines[head + 1..].iter().take_while(|l| l.trim().starts_with('|')).filter(|l| !is_separator(l)).map(|l| cells(l)).collect();
+    !rows.is_empty() && rows.iter().all(|r| r.iter().skip(1).all(|c| clean(c).is_empty()))
 }
 
 /// Every `…_PRD_V….md` under torch-product: `(path, lowercased name,
@@ -1342,9 +1387,14 @@ fn read_features(ws: &Path) -> Vec<Feature> {
                 .unwrap_or(0);
             let named = plan.as_ref().map(|p| p.prd.clone()).unwrap_or_default();
             let pick = crate::flow::picked_prd(ws, &format!("{app}/{slug}"));
-            let (prd, prd_signed, prd_source) = match prd_file(ws, &app, &slug, &named, &pick) {
-                Some((path, major, _, source)) => (path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), prd_signed(&path, major), source.to_string()),
-                None => (String::new(), false, String::new()),
+            let (prd, prd_signed, prd_source, estimates_empty) = match prd_file(ws, &app, &slug, &named, &pick) {
+                Some((path, major, _, source)) => (
+                    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    prd_signed(&path, major),
+                    source.to_string(),
+                    read_lines(&path).is_some_and(|t| estimates_empty(&t)),
+                ),
+                None => (String::new(), false, String::new(), false),
             };
             let mut gates = Vec::new();
             if light {
@@ -1431,6 +1481,7 @@ fn read_features(ws: &Path) -> Vec<Feature> {
                 prd,
                 prd_signed,
                 prd_source,
+                estimates_empty,
                 design,
                 warnings,
                 diff_files: diff.0,
@@ -1446,7 +1497,8 @@ fn read_features(ws: &Path) -> Vec<Feature> {
     out
 }
 
-/// Where the feature stands: the first gate not passed (policy section 4).
+/// Where the feature stands: the first gate not passed (policy section 4)
+/// from where its records show the work got to.
 fn compute_step(f: &mut Feature) {
     let gate = |id: &str| f.gates.iter().find(|g| g.id == id).map(|g| g.signed).unwrap_or(false);
     if f.light {
@@ -1482,19 +1534,52 @@ fn compute_step(f: &mut Feature) {
         (11, gate("uat")),
         (12, gate("production")),
     ];
-    let mut step = 1u8;
-    let mut all = true;
+    // Where the records show the work got to: past every gate that is
+    // passed, at step 8 once a plan is written, at step 9 once a session
+    // has started. A gate the work moved past with items still open does
+    // not pull the feature back to it: it is carried, and shown as such.
+    let started = f.plan.as_ref().is_some_and(|p| p.sessions.iter().any(|s| matches!(status_word(&s.status).as_str(), "in progress" | "in review" | "merged")));
+    let mut reached = if started { 9 } else if total > 0 { 8 } else { 1 };
     for (s, ok) in checks {
         if ok {
-            step = s + 1;
-        } else {
-            all = false;
-            step = s;
-            break;
+            reached = reached.max(s + 1);
         }
     }
-    f.released = all;
-    f.step = step.min(12);
+    let open = checks.iter().find(|(s, ok)| !ok && *s >= reached).map(|(s, _)| *s);
+    let gate_detail = |step: u8| -> String {
+        let Some(g) = f.gates.iter().find(|g| g.step == step) else { return String::new() };
+        if !g.present {
+            return "No record file".to_string();
+        }
+        let mut parts = Vec::new();
+        if !g.items.is_empty() {
+            parts.push(format!("{} of {} items ticked", g.items.iter().filter(|i| i.checked).count(), g.items.len()));
+        }
+        if !g.roles.is_empty() {
+            parts.push(format!("{} of {} signatures", g.signatures.len(), g.roles.len()));
+        }
+        parts.join(", ")
+    };
+    let detail = |step: u8| -> String {
+        match step {
+            1 => "No PRD found".to_string(),
+            2 => "The PRD's estimates table is empty".to_string(),
+            3 => "The PRD is not signed".to_string(),
+            4 => "No handoff files".to_string(),
+            8 if f.plan.is_none() => "No session plan".to_string(),
+            8 => "Not reviewed by the tech lead".to_string(),
+            9 => format!("{merged} of {total} sessions merged"),
+            s => gate_detail(s),
+        }
+    };
+    let mut carried: Vec<u8> = checks.iter().filter(|(s, ok)| !ok && *s < open.unwrap_or(13)).map(|(s, _)| *s).collect();
+    if f.estimates_empty && open.unwrap_or(13) > 2 {
+        carried.push(2);
+        carried.sort_unstable();
+    }
+    f.carried = carried.into_iter().map(|s| json!({"step": s, "title": STEPS[(s - 1) as usize], "detail": detail(s)})).collect();
+    f.released = open.is_none();
+    f.step = open.unwrap_or(12);
     f.step_label = if f.released { "Released".to_string() } else { STEPS[(f.step - 1) as usize].to_string() };
 }
 
@@ -1670,6 +1755,7 @@ pub fn enrich(f: &mut Feature, sessions: &[Session], prs: &[Value]) {
         f.step = copy.step;
         f.step_label = copy.step_label;
         f.released = copy.released;
+        f.carried = copy.carried;
     }
 }
 
@@ -1822,14 +1908,58 @@ pub fn commit_files(ws: &Path, branch: &str, files: &[String], message: &str) ->
     Ok(hash)
 }
 
+/// `lines` with a `**Signed:** name (role), date` line in the section
+/// `a..b`: in place of that role's earlier line, else after the section's
+/// last line of text, with a blank line before it unless it follows
+/// another signature.
+fn with_signed_line(mut lines: Vec<String>, a: usize, b: usize, name: &str, role: &str, date: &str) -> Vec<String> {
+    let line = format!("**Signed:** {name} ({role}), {date}");
+    let b = b.min(lines.len());
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let signed_by = |i: usize| field_value(&refs, i, "Signed").and_then(|v| parse_signed(&v)).map(|(_, r, _)| r);
+    if let Some(i) = (a..b).find(|&i| signed_by(i).is_some_and(|r| r.eq_ignore_ascii_case(role))) {
+        lines[i] = line;
+        return lines;
+    }
+    let last = (a..b).rev().find(|&i| !refs[i].trim().is_empty());
+    let after_signature = last.is_some_and(|i| signed_by(i).is_some());
+    let at = last.map(|i| i + 1).unwrap_or(a);
+    lines.insert(at, line);
+    if !after_signature {
+        lines.insert(at, String::new());
+    }
+    lines
+}
+
+/// `lines` without the role's `**Signed:**` line in the section `a..b`
+/// (and the blank line written before it).
+fn without_signed_line(lines: &[String], a: usize, b: usize, role: &str) -> Vec<String> {
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    for (i, l) in lines.iter().enumerate() {
+        let mine = i >= a && i < b && field_value(&refs, i, "Signed").and_then(|v| parse_signed(&v)).is_some_and(|(_, r, _)| r.eq_ignore_ascii_case(role));
+        if !mine {
+            out.push(l.clone());
+            continue;
+        }
+        let blank_follows = lines.get(i + 1).is_none_or(|n| n.trim().is_empty());
+        if blank_follows && out.last().is_some_and(|p| p.trim().is_empty()) {
+            out.pop();
+        }
+    }
+    out
+}
+
 /// Signs a gate: ticks the items the signer confirmed (`checks`, by index)
-/// and writes the name and today's date into the signature table. The
+/// and writes the name and today's date into the signature table, or, for
+/// a checklist without one, as a `**Signed:**` line under its items. The
 /// file is committed when the workspace is on the feature branch.
 pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks: &[bool]) -> Result<Value, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("A name is needed for the signature".to_string());
     }
+    let mut role = role.trim().to_string();
     let f = find_feature(ws, key).ok_or_else(|| format!("No feature {key} in this workspace"))?;
     let gate = f.gates.iter().find(|g| g.id == gate_id).ok_or_else(|| format!("No gate {gate_id}"))?;
     let path = ws.join(&gate.file);
@@ -1868,7 +1998,7 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
         if let Some((head, mut row, _, row_i)) = signature_table(&refs2[a..b]) {
             let col = head
                 .iter()
-                .position(|h| h.eq_ignore_ascii_case(role))
+                .position(|h| h.eq_ignore_ascii_case(&role))
                 .ok_or_else(|| format!("This record has no '{role}' column (it asks for: {})", head.iter().filter(|h| !h.eq_ignore_ascii_case("date")).cloned().collect::<Vec<_>>().join(", ")))?;
             row[col] = name.to_string();
             if let Some(dc) = head.iter().position(|h| h.eq_ignore_ascii_case("date")) {
@@ -1883,7 +2013,14 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
             } else {
                 lines.insert(target, new_line);
             }
-        } else if gate_id != "intake" && gate_id != "handoff1" {
+        } else if gate_id == "intake" || gate_id == "handoff1" {
+            // No table of its own: the signature goes in as a line under the
+            // items, for the role named or the first one not signed yet.
+            let has = |r: &str| gate.signatures.iter().any(|s| s["role"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(r)));
+            let asked = if role.is_empty() { gate.roles.iter().find(|r| !has(r)).or(gate.roles.first()) } else { gate.roles.iter().find(|r| r.eq_ignore_ascii_case(&role)) };
+            role = asked.cloned().ok_or_else(|| format!("This checklist is signed as: {}", gate.roles.join(", ")))?;
+            lines = with_signed_line(lines, a, b, name, &role, &date);
+        } else {
             return Err("No signature table under this checklist".to_string());
         }
     }
@@ -1906,8 +2043,9 @@ pub fn sign(ws: &Path, key: &str, gate_id: &str, role: &str, name: &str, checks:
 }
 
 /// Removes a signature: the role's name out of the table (and the date
-/// when nobody is left), the items in `untick` back to open. With no
-/// table and no `untick`, every item of the gate goes back to open.
+/// when nobody is left) or the role's `**Signed:**` line, the items in
+/// `untick` back to open. With no table, no role and no `untick`, every
+/// item of the gate goes back to open.
 pub fn unsign(ws: &Path, key: &str, gate_id: &str, role: &str, untick: &[usize]) -> Result<Value, String> {
     let f = find_feature(ws, key).ok_or_else(|| format!("No feature {key} in this workspace"))?;
     let gate = f.gates.iter().find(|g| g.id == gate_id).ok_or_else(|| format!("No gate {gate_id}"))?;
@@ -1928,7 +2066,8 @@ pub fn unsign(ws: &Path, key: &str, gate_id: &str, role: &str, untick: &[usize])
     } else {
         let boxes = checkboxes(&refs[a..b]);
         let table = signature_table(&refs[a..b]);
-        let all_items = untick.is_empty() && table.is_none();
+        let no_table = table.is_none();
+        let all_items = untick.is_empty() && no_table && role.is_empty();
         for (i, (line, _, checked)) in boxes.iter().enumerate() {
             if *checked && (all_items || untick.contains(&i)) {
                 let l = &mut lines[a + line];
@@ -1957,6 +2096,11 @@ pub fn unsign(ws: &Path, key: &str, gate_id: &str, role: &str, untick: &[usize])
             } else if !role.is_empty() {
                 return Err(format!("This record has no '{role}' column"));
             }
+        }
+        if no_table && !role.is_empty() {
+            let kept = without_signed_line(&lines, a, b, role);
+            changed |= kept.len() != lines.len();
+            lines = kept;
         }
     }
     if !changed {
@@ -2530,5 +2674,176 @@ mod plan_status_tests {
         assert_eq!(sh(&ws, &["status", "--porcelain"]), status);
         assert_eq!(fs::read_to_string(ws.join("plan/SESSION_PLAN.md")).unwrap(), PLAN);
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::*;
+
+    fn gate(id: &str, step: u8, signed: bool) -> Gate {
+        Gate { id: id.to_string(), step, signed, present: true, ..Gate::default() }
+    }
+
+    fn items(ticked: &[bool]) -> Vec<GateItem> {
+        ticked.iter().enumerate().map(|(i, c)| GateItem { text: format!("item {i}"), checked: *c }).collect()
+    }
+
+    /// Marketing / part 1 as its records stood on 2026-10-18: PRD V0.2
+    /// signed with an empty estimates table, the design proven with two
+    /// items open, the handoff session signed, the intake with two items
+    /// open, the plan of 26 sessions written.
+    fn marketing(reviewed: bool, first_session: &str) -> Feature {
+        let mut part1 = gate("handoff1", 5, false);
+        part1.items = items(&[true, false, false]);
+        part1.roles = vec!["Product lead".to_string()];
+        let mut intake = gate("intake", 7, false);
+        intake.items = items(&[true, false, true, true, true, false]);
+        intake.roles = vec!["FE lead".to_string(), "BE lead".to_string()];
+        let sessions = (1..=26).map(|n| PlanSession { n, status: if n == 1 { first_session } else { "Not started" }.to_string(), ..PlanSession::default() }).collect();
+        Feature {
+            prd: "Marketing_App_PRD_V0.2.md".to_string(),
+            prd_signed: true,
+            estimates_empty: true,
+            handoff_files: vec!["campaigns-list.html".to_string()],
+            gates: vec![part1, gate("handoff2", 6, true), intake, gate("plan", 8, reviewed), gate("staging", 10, false), gate("uat", 11, false), gate("production", 12, false)],
+            plan: Some(Plan { sessions, ..Plan::default() }),
+            ..Feature::default()
+        }
+    }
+
+    fn carried(f: &Feature) -> Vec<u64> {
+        f.carried.iter().map(|c| c["step"].as_u64().unwrap()).collect()
+    }
+
+    #[test]
+    fn a_written_plan_puts_the_feature_at_session_planning_past_the_open_items() {
+        let mut f = marketing(false, "Not started");
+        compute_step(&mut f);
+        assert_eq!((f.step, f.step_label.as_str(), f.released), (8, "Session planning", false));
+        assert_eq!(carried(&f), [2, 5, 7]);
+        assert_eq!(f.carried[0]["detail"], "The PRD's estimates table is empty");
+        assert_eq!(f.carried[1]["title"], "Prototype and test");
+        assert_eq!(f.carried[1]["detail"], "1 of 3 items ticked, 0 of 1 signatures");
+        assert_eq!(f.carried[2]["detail"], "4 of 6 items ticked, 0 of 2 signatures");
+    }
+
+    #[test]
+    fn a_reviewed_plan_puts_it_at_the_build_sessions() {
+        let mut f = marketing(true, "Not started");
+        compute_step(&mut f);
+        assert_eq!((f.step, f.step_label.as_str()), (9, "Build sessions"));
+        assert_eq!(carried(&f), [2, 5, 7]);
+        assert_eq!((f.sessions_merged, f.sessions_total), (0, 26));
+    }
+
+    #[test]
+    fn a_started_session_puts_it_at_the_build_and_carries_the_review() {
+        let mut f = marketing(false, "In progress");
+        compute_step(&mut f);
+        assert_eq!(f.step, 9);
+        assert_eq!(carried(&f), [2, 5, 7, 8]);
+        assert_eq!(f.carried[3]["detail"], "Not reviewed by the tech lead");
+    }
+
+    #[test]
+    fn with_nothing_past_it_the_first_open_gate_is_the_step() {
+        let mut f = marketing(false, "Not started");
+        f.plan = None;
+        f.gates[1].signed = false;
+        compute_step(&mut f);
+        assert_eq!((f.step, f.step_label.as_str()), (5, "Prototype and test"));
+        assert_eq!(carried(&f), [2]);
+        // A PRD waiting for its signature carries an empty estimates table, and nothing once it is filled.
+        let mut early = Feature { prd: "X_PRD_V0.1.md".to_string(), estimates_empty: true, ..Feature::default() };
+        compute_step(&mut early);
+        assert_eq!((early.step, early.carried.len()), (3, 1));
+        early.estimates_empty = false;
+        compute_step(&mut early);
+        assert_eq!((early.step, early.carried.len()), (3, 0));
+    }
+
+    #[test]
+    fn every_gate_signed_is_released_with_nothing_carried() {
+        let mut f = marketing(true, "Merged");
+        for g in &mut f.gates {
+            g.signed = true;
+        }
+        for s in &mut f.plan.as_mut().unwrap().sessions {
+            s.status = "Merged".to_string();
+        }
+        f.estimates_empty = false;
+        compute_step(&mut f);
+        assert!(f.released);
+        assert_eq!((f.step, f.step_label.as_str()), (12, "Released"));
+        assert!(f.carried.is_empty());
+    }
+
+    const CHECKLIST: &str = "# Handoff checklist\n\n## Part 1: design proven\n\n- [x] Scope.\n- [ ] Internal users.\n- [ ] Estimate.\n\n## Part 2: handoff session\n\n- [x] Attended.\n\n| Design lead | FE lead | BE lead | Date |\n|---|---|---|---|\n| Ali Nameer | Ali Nameer | Ali Nameer | 2026-10-17 |\n\n## Intake (policy Checklist E)\n\n- [x] Mapped.\n- [ ] Committed.\n";
+
+    fn lines_of(text: &str) -> Vec<String> {
+        text.lines().map(str::to_string).collect()
+    }
+
+    fn range(lines: &[String], id: &str) -> (usize, usize) {
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        gate_range(&refs, id)
+    }
+
+    fn read_gate(lines: &[String], id: &str, roles: &[&str]) -> Gate {
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let (a, b) = gate_range(&refs, id);
+        gate_from(&refs[a..b], id, "D", "t", 5, "f", true, roles)
+    }
+
+    fn sign_line(lines: Vec<String>, id: &str, name: &str, role: &str, date: &str) -> Vec<String> {
+        let (a, b) = range(&lines, id);
+        with_signed_line(lines, a, b, name, role, date)
+    }
+
+    #[test]
+    fn a_checklist_without_a_table_keeps_its_signature_with_items_open() {
+        let before = lines_of(CHECKLIST);
+        let g = read_gate(&before, "handoff1", &["Product lead"]);
+        assert!(!g.signed);
+        assert_eq!(g.roles, ["Product lead"]);
+        let signed = sign_line(before.clone(), "handoff1", "Ali Nameer", "Product lead", "2026-10-18");
+        assert!(signed.join("\n").contains("- [ ] Estimate.\n\n**Signed:** Ali Nameer (Product lead), 2026-10-18\n\n## Part 2: handoff session"));
+        let g = read_gate(&signed, "handoff1", &["Product lead"]);
+        assert!(g.signed);
+        assert_eq!(g.signatures, [json!({"role": "Product lead", "name": "Ali Nameer"})]);
+        assert_eq!(g.date, "2026-10-18");
+        // Part 2's table is its own: the line does not reach it.
+        assert_eq!(read_gate(&signed, "handoff2", &[]).signatures.len(), 3);
+        // Signing again replaces the line; removing it gives the file back as it was.
+        let again = sign_line(signed.clone(), "handoff1", "The CEO", "product lead", "2026-10-19");
+        assert_eq!(again.iter().filter(|l| l.starts_with("**Signed:**")).count(), 1);
+        assert!(again.contains(&"**Signed:** The CEO (product lead), 2026-10-19".to_string()));
+        let (a, b) = range(&signed, "handoff1");
+        assert_eq!(without_signed_line(&signed, a, b, "Product lead"), before);
+    }
+
+    #[test]
+    fn the_intake_is_signed_once_both_leads_have_signed() {
+        let roles = ["FE lead", "BE lead"];
+        let fe = sign_line(lines_of(CHECKLIST), "intake", "Ali Nameer", "FE lead", "2026-10-18");
+        assert!(!read_gate(&fe, "intake", &roles).signed);
+        let both = sign_line(fe, "intake", "Ali Nameer", "BE lead", "2026-10-18");
+        // The second line goes right under the first, at the end of the file.
+        assert!(both.join("\n").ends_with("- [ ] Committed.\n\n**Signed:** Ali Nameer (FE lead), 2026-10-18\n**Signed:** Ali Nameer (BE lead), 2026-10-18"));
+        assert!(read_gate(&both, "intake", &roles).signed);
+        let (a, b) = range(&both, "intake");
+        let fe_only = without_signed_line(&both, a, b, "BE lead");
+        assert!(fe_only.join("\n").ends_with("- [ ] Committed.\n\n**Signed:** Ali Nameer (FE lead), 2026-10-18"));
+    }
+
+    #[test]
+    fn the_estimates_table_is_empty_until_a_team_fills_it() {
+        let empty = "**Estimates** (added once received)\n\n| Team | Effort (person-days) | Calendar duration | Key assumptions | Riskiest items |\n|---|---|---|---|---|\n| Design | | | | |\n| Front end | | | | |\n| Back end | | | | |\n\n**Key dependencies before launch**\n";
+        assert!(estimates_empty(empty));
+        assert!(estimates_empty(&empty.replace("**Estimates** (added once received)", "## Estimates")));
+        assert!(!estimates_empty(&empty.replace("| Front end | |", "| Front end | 6 |")));
+        assert!(!estimates_empty("# PRD\n\nEstimates are given later.\n"));
+        assert!(!estimates_empty("**Estimates**\n\nSee the plan.\n"));
     }
 }

@@ -467,6 +467,7 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 .steps i { flex: 1; height: 4px; border-radius: 2px; background: var(--fill-2); }
 .steps i.done { background: var(--done); }
 .steps i.now { background: var(--ready); }
+.steps i.carried { background: transparent; box-shadow: inset 0 0 0 1px var(--ready); }
 .steps i.late { background: var(--waiting); }
 #plist .f .st { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; font: 600 10.5px/1.4 var(--sans); letter-spacing: .02em; color: var(--text-2); }
 #plist .f .st .w { color: var(--waiting); }
@@ -482,11 +483,13 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 #pdetail .hd .m { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-top: 4px; font: 500 10.5px/1.6 var(--sans); letter-spacing: .02em; color: var(--text-2); }
 .sec, #pdetail .sec { display: flex; justify-content: space-between; gap: 10px; margin: 20px 0 8px; font: 600 10.5px/1.4 var(--sans); letter-spacing: .02em; color: var(--text-2); }
 .warn { margin-bottom: 8px; padding: 8px 10px; border-radius: 8px; background: var(--warn-bg); color: var(--waiting); font-size: 12.5px; }
+.warn.carried { background: var(--ready-bg); color: var(--ready); }
 /* Twelve steps in one row when there is room, else two rows of six. */
 .stepper { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(56px, calc((100% - 44px) / 12)), 1fr)); gap: 4px; }
 .stepper div { min-height: 44px; padding: 6px 3px; border-radius: 6px; background: var(--fill); color: var(--text-3); font: 500 9.5px/1.3 var(--sans); text-align: center; }
 .stepper div.done { background: var(--done-bg); color: var(--done); }
 .stepper div.now { background: var(--ready-bg); color: var(--ready); font-weight: 600; }
+.stepper div.carried { background: transparent; color: var(--ready); outline: 1px dashed var(--ready); outline-offset: -1px; }
 .srow {
   display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-bottom: 6px; padding: 9px 12px;
   border: .5px solid var(--sep); border-radius: var(--r-card); background: var(--bg-raised); cursor: pointer;
@@ -838,6 +841,14 @@ function cleanupTargets(kind, sessions, now) {
   return (sessions || []).filter(test);
 }
 
+// ---------- the twelve steps ----------
+// A step of a feature's flow: 'done', 'now', 'carried' (the work moved past it with items open) or '' (ahead).
+function stepState(f, n) {
+  if ((f.carried || []).some((c) => c.step === n)) return 'carried';
+  if (f.released || n < f.step) return 'done';
+  return n === f.step ? 'now' : '';
+}
+
 // ---------- graph model ----------
 // Nodes come out as computers, projects, sessions, features: each new one then finds a
 // placed neighbour to start next to (see setGraph).
@@ -999,7 +1010,7 @@ function createSim() {
 
 root.MewoCore = {
   STATES, ALPHA_MIN, defaultFilters, defaultPrefs, normPrefs, rangeStart, projectOf, matchesQuery, sessionPasses,
-  isHidden, hideIds, unhideIds, pruneHidden, eventPasses, facetCounts, cleanupTargets, buildGraph, createSim,
+  isHidden, hideIds, unhideIds, pruneHidden, eventPasses, facetCounts, cleanupTargets, buildGraph, createSim, stepState,
 };
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
@@ -1512,7 +1523,8 @@ function renderFeatureDetail() {
   $('fd-close').onclick = () => { fpicked = null; fdSig = ''; box.classList.remove('on'); };
   $('fd-pipe').onclick = () => { picked = f.key; setView('pipe'); };
 }
-const stepBar = (f) => `<div class="steps">${STEPS.map((_, i) => `<i class="${f.released || i + 1 < f.step ? 'done' : i + 1 === f.step ? 'now' : ''}"></i>`).join('')}</div>`;
+const stepBar = (f) => `<div class="steps">${STEPS.map((_, i) => `<i class="${MewoCore.stepState(f, i + 1)}"></i>`).join('')}</div>`;
+const carriedText = (c) => `${c.step} ${c.title}${c.detail ? ` (${c.detail})` : ''}`;
 let meta = { roles: {}, apps: {}, role_names: [], workspaces: [] };
 let openBox = '';
 function toolsHtml() {
@@ -1884,9 +1896,10 @@ function renderFeature() {
   const plLink = (k) => { const it = plItem(k); return it ? `<button class="plink" type="button" data-url="${esc(it.url)}" title="Open in Plane">PLANE${it.sequence_id ? ' #' + it.sequence_id : ''}${it.assignees && it.assignees.length ? ' · ASSIGNED' : ''}</button>` : ''; };
   h.push(`<div class="hd"><div><div class="t">${esc(f.app)} / ${esc(f.slug)}</div><div class="m">${esc(f.branch)} · ${f.light ? 'LIGHT PATH' : `STEP ${f.step} OF 12 · ${esc((f.step_label || '').toUpperCase())}`}${f.prd ? ` · PRD ${f.prd_signed ? 'SIGNED' : 'DRAFT'}${f.prd_source === 'picked' ? ' · PICKED' : ''}` : ' · NO PRD FOUND'} <button class="btn pickprd" type="button" title="${esc(f.prd || 'No PRD file matched')}" style="padding:2px 7px;min-height:20px;font-size:10px;margin-left:6px">PRD…</button><button class="btn design" type="button" title="${esc((f.design || {}).repo || 'The design system the feature follows')}" style="padding:2px 7px;min-height:20px;font-size:10px;margin-left:6px;${(f.design || {}).checked_out === false ? 'border-color:var(--amber);color:var(--amber)' : ''}">DESIGN · ${esc(((f.design || {}).name || 'Glare').toUpperCase())}</button></div></div>${f.plane && f.plane.parent_url ? `<button class="plink" type="button" data-url="${esc(f.plane.parent_url)}">ON PLANE</button>` : ''}${f.open_questions ? `<span class="badge">${f.open_questions} OPEN QUESTION${f.open_questions > 1 ? 'S' : ''}</span>` : ''}</div>`);
   for (const w of (f.warnings || [])) h.push(`<div class="warn" style="margin-top:10px">${esc(w)}</div>`);
+  if ((f.carried || []).length) h.push(`<div class="warn carried" style="margin-top:10px">Moved on with items open: ${f.carried.map((c) => esc(carriedText(c))).join(' · ')}</div>`);
   if (pcs.length) h.push(`<div class="sec" style="margin-top:12px"><span>ON THE NETWORK</span></div><div class="files">${pcs.map((p) => `<span class="pill ${p.ready ? 'merged' : 'waiting'}" title="${esc(p.name)}">${esc((p.name || '').toUpperCase())}${p.sync.remote ? ` · ↑${p.sync.ahead || 0} ↓${p.sync.behind || 0}` : p.sync.local ? ' · NO REMOTE' : ' · NO BRANCH'}${p.ready ? '' : ' · REPO NOT FETCHED'}</span>`).join('')}</div>`);
   h.push(flowHtml(f));
-  if (!f.light) h.push(`<div class="sec"><span>THE TWELVE STEPS</span></div><div class="stepper">${STEPS.map((s, i) => `<div class="${f.released || i + 1 < f.step ? 'done' : i + 1 === f.step ? 'now' : ''}">${i + 1}<br>${esc(s)}</div>`).join('')}</div>`);
+  if (!f.light) h.push(`<div class="sec"><span>THE TWELVE STEPS</span></div><div class="stepper">${STEPS.map((s, i) => { const st = MewoCore.stepState(f, i + 1), c = (f.carried || []).find((x) => x.step === i + 1); return `<div class="${st}"${c ? ` title="${esc('Moved on with items open: ' + carriedText(c))}"` : ''}>${i + 1}<br>${esc(s)}</div>`; }).join('')}</div>`);
   if (plan) {
     h.push(`<div class="sec"><span>SESSION PLAN · ${esc(plan.file)}</span><span>${plan.reviewed_by ? 'REVIEWED BY ' + esc(plan.reviewed_by.toUpperCase()) : 'NOT REVIEWED YET'}</span></div>`);
     for (const r of (plan.revised || [])) h.push(`<div class="warn" style="background:var(--ready-bg);color:var(--ready)">REVISED ${esc(r)}</div>`);

@@ -468,3 +468,13 @@ test('sim: nodes on the same spot are pushed apart', () => {
   sim.reheat(1); sim.settle(1000);
   for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) assert.ok(dist(ns[i], ns[j]) >= ns[i].r + ns[j].r, `${ns[i].id}/${ns[j].id}`);
 });
+
+// ---------- the twelve steps ----------
+
+test('stepState: done before the step, now at it, ahead after it, carried where the work moved past open items', () => {
+  const f = { step: 9, released: false, carried: [{ step: 2 }, { step: 5 }, { step: 7 }] };
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12].map((n) => C.stepState(f, n)), ['done', 'carried', 'done', 'done', 'carried', 'done', 'carried', 'done', 'now', '', '']);
+  assert.equal(C.stepState({ step: 3 }, 3), 'now');
+  assert.equal(C.stepState({ step: 12, released: true, carried: [{ step: 11 }] }, 12), 'done');
+  assert.equal(C.stepState({ step: 12, released: true, carried: [{ step: 11 }] }, 11), 'carried');
+});
