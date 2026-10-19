@@ -13,7 +13,7 @@
 //! session for the phone's Windows tab, `stop` closes a tab from there.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
@@ -114,7 +114,15 @@ pub fn stop(pid: u32) -> Result<(), String> {
     }
     let mut stream = std::os::unix::net::UnixStream::connect(&socket).map_err(|_| "Could not reach the session's host".to_string())?;
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(3)));
-    stream.write_all(b"{\"t\": \"stop\"}\n").map_err(|_| "Could not reach the session's host".to_string())
+    stream.write_all(b"{\"t\": \"stop\"}\n").map_err(|_| "Could not reach the session's host".to_string())?;
+    // The host sends a new connection the session so far, and shuts one it
+    // cannot write to, unread lines and all: so keep reading (and dropping)
+    // until it has read the stop and closed, or for a few seconds.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut sink = [0u8; 16384];
+    while matches!(stream.read(&mut sink), Ok(n) if n > 0) {}
+    Ok(())
 }
 
 /// Sets `window` (the window's pid) on the sessions that have one: by the
