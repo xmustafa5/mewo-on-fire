@@ -1,6 +1,6 @@
 [package]
 name = "mewo-on-fire"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "LAN notifications for Claude Code (PC daemon + CLI + hook)"
 
