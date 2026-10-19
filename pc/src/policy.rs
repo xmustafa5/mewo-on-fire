@@ -644,10 +644,13 @@ fn fence_after(lines: &[&str], i: usize) -> String {
 }
 
 /// Session numbers in a "Depends on" cell: `1, 2`, `11 to 17` (a range,
-/// also `11-17` and `11–17`), `none`. A note after `;` and references to
-/// open questions (`OQ 28`) are not sessions.
+/// also `11-17` and `11–17`), `none`. A note after `;` or after the first
+/// sentence (`none. Reads: R7, R8`), references to open questions
+/// (`OQ 28`) and numbers glued to a letter (`R7`, a DEPENDENCIES row) are
+/// not sessions; `S7` is.
 fn parse_depends(s: &str) -> Vec<u32> {
     let s = s.split(';').next().unwrap_or("");
+    let s = s.split(". ").next().unwrap_or("");
     let lower = s.to_ascii_lowercase();
     let mut out: Vec<u32> = Vec::new();
     let mut i = 0;
@@ -661,6 +664,10 @@ fn parse_depends(s: &str) -> Vec<u32> {
             // `OQ 28`, `question 28`, `#28` in prose: an open question, not a session.
             let before = lower[..start].trim_end();
             if before.ends_with("oq") || before.ends_with("question") || before.ends_with("questions") {
+                continue;
+            }
+            // `R7`, `P5`, `L118`: a row, a decision or a PRD line, not a session.
+            if lower[..start].chars().last().is_some_and(|p| p.is_alphabetic() && p != 's') {
                 continue;
             }
             let Ok(n) = lower[start..i].parse::<u32>() else { continue };
@@ -747,13 +754,18 @@ pub fn parse_plan(ws: &Path, dir: &Path, rel: &str) -> Option<Plan> {
     let mut order: HashMap<u32, (String, String, u8, Vec<u32>, String, String, String)> = HashMap::new();
     if let Some((_, a, b)) = secs.iter().find(|(h, _, _)| h.eq_ignore_ascii_case("order")) {
         let mut col: HashMap<&str, usize> = HashMap::new();
+        // Only a table headed `#` lists sessions. Another table in the
+        // section (a plan's "Running sessions in parallel", numbered by
+        // wave) would otherwise overwrite sessions 1, 2, 3… with its rows.
+        let mut session_table = true;
         for l in &lines[*a..*b] {
             let c = cells(l);
             if c.len() < 4 || is_separator(l) {
                 continue;
             }
             if c[0].parse::<u32>().is_err() {
-                if c.iter().any(|h| h.trim() == "#") {
+                session_table = c.iter().any(|h| h.trim() == "#");
+                if session_table {
                     col.clear();
                     for (i, h) in c.iter().enumerate() {
                         let h = h.trim().to_ascii_lowercase();
@@ -777,6 +789,9 @@ pub fn parse_plan(ws: &Path, dir: &Path, rel: &str) -> Option<Plan> {
                         col.entry(key).or_insert(i);
                     }
                 }
+                continue;
+            }
+            if !session_table {
                 continue;
             }
             let Ok(n) = c[0].parse::<u32>() else { continue };
