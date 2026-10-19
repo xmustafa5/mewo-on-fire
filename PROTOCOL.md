@@ -1153,3 +1153,15 @@ with `wait: true`: with no phone connected the daemon keeps the request
 instead of answering `no_devices`, and a phone that connects later gets
 it with the pending requests. A hook from a terminal session sends
 `wait: false` and returns at once as before, so its PC prompt shows.
+
+Claude Code in its stream mode still runs the PermissionRequest hook of
+`~/.claude/settings.json` beside the `can_use_tool` request, so each
+prompt reached the phones twice (the hook's `mewo ask` and the host's).
+The host now starts Claude Code with `MEWO_SESSION_HOST=1`, and `mewo
+ask` run as a hook in that environment (without `mewo_wait_for_phone`)
+prints nothing and asks nobody: the host's request is the only one.
+
+On the phone, a question's card in the chat and the answer screen have a
+copy button: every question with its header ("Question 2 of 3 · Auth"),
+"(Choose one)" or "(Choose any)", and its numbered options with their
+descriptions; a permission or a plan as its title, summary and detail.

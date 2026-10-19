@@ -40,6 +40,53 @@ class AnswerScreen extends StatefulWidget {
     }
   }
 
+  /// The request as plain text: every question with its header and its
+  /// options (and what each means), or the permission's tool and input, or
+  /// the plan.
+  static String copyText(CcRequest r) {
+    final b = StringBuffer();
+    if (r.kind == RequestKind.question && r.questions.isNotEmpty) {
+      final n = r.questions.length;
+      for (var i = 0; i < n; i++) {
+        final q = r.questions[i];
+        if (i > 0) b.writeln();
+        final head = [
+          if (n > 1) 'Question ${i + 1} of $n',
+          if (q.header.isNotEmpty) q.header,
+        ].join(' · ');
+        if (head.isNotEmpty) b.writeln(head);
+        b.writeln(q.question);
+        if (q.options.isNotEmpty) {
+          b.writeln(q.multiSelect ? '(Choose any)' : '(Choose one)');
+          for (var j = 0; j < q.options.length; j++) {
+            final o = q.options[j];
+            b.writeln('${j + 1}. ${o.label}${o.description.isNotEmpty ? ': ${o.description}' : ''}');
+          }
+        }
+      }
+    } else {
+      b.writeln(r.title.isEmpty ? kindLabel(r.kind) : r.title);
+      if (r.summary.isNotEmpty) b.writeln(r.summary);
+      if (r.detail.isNotEmpty && r.detail.trim() != r.summary.trim()) {
+        b.writeln();
+        b.writeln(r.detail);
+      }
+    }
+    return b.toString().trimRight();
+  }
+
+  /// Copies [copyText] and says so.
+  static void copy(BuildContext context, CcRequest r) {
+    Clipboard.setData(ClipboardData(text: copyText(r)));
+    HapticFeedback.selectionClick();
+    final what = r.kind == RequestKind.question
+        ? (r.questions.length > 1 ? 'Copied ${r.questions.length} questions with their options' : 'Copied the question with its options')
+        : r.kind == RequestKind.plan
+            ? 'Copied the plan'
+            : 'Copied the request';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(what)));
+  }
+
   static String kindLabel(String kind) {
     switch (kind) {
       case RequestKind.question:
@@ -168,7 +215,15 @@ class _AnswerScreenState extends State<AnswerScreen> {
       appBar: GlassTopBar(
         title: Text(e == null ? 'Request' : AnswerScreen.kindLabel(e.request.kind)),
         subtitle: e == null ? null : Text(e.pcName),
-        actions: const [KeyboardHideButton()],
+        actions: [
+          if (e != null)
+            GhostIconButton(
+              icon: Icons.copy_rounded,
+              tooltip: 'Copy',
+              onPressed: () => AnswerScreen.copy(context, e.request),
+            ),
+          const KeyboardHideButton(),
+        ],
       ),
       body: EmberBackground(
         animate: false,

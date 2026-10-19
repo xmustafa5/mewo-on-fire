@@ -62,6 +62,12 @@ fn try_run() -> Option<String> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).ok()?;
     let hook_input: Value = serde_json::from_str(&input).ok()?;
+    // v3.4: inside a Mewo Session tab its host forwards every prompt itself
+    // (and keeps it for a phone that connects later): the settings hook steps
+    // aside, so the phones do not get each prompt twice.
+    if std::env::var_os("MEWO_SESSION_HOST").is_some() && hook_input.get("mewo_wait_for_phone").is_none() {
+        return None;
+    }
     let request = map_request(&hook_input);
     spawn_watcher(&hook_input);
     // v3.4: a Mewo Session tab shows its prompt only in the window, so it

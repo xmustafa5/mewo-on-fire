@@ -2282,7 +2282,18 @@ class _RequestCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 2),
+              Tooltip(
+                message: r.kind == RequestKind.question && r.questions.length > 1 ? 'Copy the questions' : 'Copy',
+                child: InkResponse(
+                  radius: 18,
+                  onTap: () => AnswerScreen.copy(context, r),
+                  child: const Padding(
+                    padding: EdgeInsets.fromLTRB(6, 6, 4, 6),
+                    child: Icon(Icons.copy_rounded, size: 17, color: Ember.text3),
+                  ),
+                ),
+              ),
               const Padding(
                 padding: EdgeInsets.only(top: 7),
                 child: Icon(Icons.chevron_right_rounded, size: 20, color: Ember.text3),

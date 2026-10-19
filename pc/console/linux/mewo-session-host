@@ -318,7 +318,10 @@ class Host:
             command = [setpriv, "--pdeathsig", "TERM", "--"] + command
         self.emit({"type": "mewo", "kind": "info", "cwd": self.folder, "model": self.info.get("model", ""), "mode": self.info.get("permission_mode", "bypassPermissions")})
         try:
-            self.proc = subprocess.Popen(command, cwd=self.folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # MEWO_SESSION_HOST: this host forwards every prompt to the phones itself, so the
+            # PermissionRequest hook in ~/.claude/settings.json (`mewo ask`) steps aside (v3.4).
+            env = dict(os.environ, MEWO_SESSION_HOST="1")
+            self.proc = subprocess.Popen(command, cwd=self.folder, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:
             self.finish(None, f"Could not start Claude Code: {e}")
             return
