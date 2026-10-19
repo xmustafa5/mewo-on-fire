@@ -168,6 +168,8 @@ class Host:
         self.serial = 0
         self.ended = False
         self.stopping = False
+        self.started = int(time.time() * 1000)   # v3.4: the phones show when the tab opened
+        self.exit_code = None
 
     # ---------- the windows ----------
 
@@ -287,7 +289,10 @@ class Host:
     # ---------- "Show the session" on the console ----------
 
     def register(self):
-        entry = {"pid": os.getpid(), "folder": self.folder, "session_id": self.session_id, "n": self.info.get("n", ""), "feature": self.info.get("feature", ""), "socket": self.sock_path}
+        entry = {"pid": os.getpid(), "folder": self.folder, "session_id": self.session_id, "n": self.info.get("n", ""), "feature": self.info.get("feature", ""), "socket": self.sock_path,
+                 # v3.4: what the tab's header shows, and whether Claude Code ended in it, for the phones' Windows tab.
+                 "workspace": self.info.get("workspace", ""), "title": self.info.get("title", ""), "goal": self.info.get("goal", ""), "branch": self.info.get("branch", ""),
+                 "model_label": self.info.get("model_label", ""), "mode": "chat", "started": self.started, "ended": self.ended, "exit_code": self.exit_code}
         try:
             os.makedirs(WINDOWS, exist_ok=True)
             with open(self.entry_path + ".tmp", "w", encoding="utf-8") as f:
@@ -422,7 +427,12 @@ class Host:
         self.emit({"type": "mewo", "kind": "exit", "code": (code or 1) if failed else 0, "text": text})
         with self.lock:
             self.ended = True
-        self.unregister()
+            self.exit_code = (code or 1) if failed else 0
+        # The tab stays open with the ended session, so the phones see it closed until the tab goes (main unregisters then).
+        if self.session_id:
+            self.register()
+        else:
+            self.unregister()
 
     def stop(self):
         """The tab was closed: Claude Code ends."""

@@ -1113,3 +1113,36 @@ rollback) is a commit pushed to the feature branch, made from origin's
 copy of the plan with git's plumbing (`records(<app>): Session N …`): the
 workspace's working copy, index and branch are never written. Until the
 working copy is pulled, the daemon shows what it committed.
+
+# v3.4 — the windows on the phone
+
+The phone's Sessions page gains a third segment, **Windows**: the tabs
+of the Mewo Session window on every paired PC, the way the window shows
+them — each tab's plan session number, title or goal, feature, branch
+and model, its state (working, needs you, finished, ended; a question
+waiting counts as needs you), Claude's last words, and, once Claude Code
+ended in it, that it ended and how, while its tab is still open. A tap
+opens the session's chat (where its questions wait, as for any session);
+"⋯" offers **Show on <PC>**, which brings the tab forward there, and
+**Stop the session**, which closes the tab on the PC as its close button
+does. The list is asked for every 8 seconds while it is looked at.
+
+Three policy frames (phone → PC, answered `<frame>_result` with
+`client_id`, forwarded to a peer by `pc_id` like the others): `get_windows`
+→ `windows_result {ok, windows: [{pid, folder, session_id, n, feature,
+workspace, title, goal, branch, model_label, mode, started, ended,
+exit_code, session}]}`, plan session order then the time each opened,
+`session` the daemon's session (as in `sessions`) matched by id or, for a
+terminal window, the live session in its folder, else null; `show_session
+{pid}` → `{ok, error}` (SIGUSR1 to the host or window, without a click's
+token, so the shell may only mark the window as wanting attention);
+`window_stop {pid}` → `{ok, error}` (`{"t": "stop"}` on the host's socket;
+a terminal window has no host and is closed on the PC). The control
+socket takes the same as `windows`, `show_session` and `window_stop`.
+
+For that, a host's entry in `<state>/windows/<pid>.json` carries what its
+tab's header shows (`workspace`, `title`, `goal`, `branch`, `model_label`,
+`mode: "chat"`, `started` in ms) and now stays after Claude Code ended,
+with `ended: true` and `exit_code`, until the host goes (the tab closed,
+or its window gone): so an ended tab still open on the PC is still listed,
+as ended. `n` may be a number or a string (older hosts).

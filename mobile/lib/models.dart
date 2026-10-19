@@ -1556,3 +1556,79 @@ class ScanReport {
         ],
       );
 }
+
+/// A tab of the Mewo Session window on a PC (PROTOCOL.md v3.4): what its
+/// header shows, whether Claude Code has ended in it, and its session as
+/// the PC knew it when asked.
+class MewoWindow {
+  const MewoWindow({
+    required this.pid,
+    this.folder = '',
+    this.sessionId = '',
+    this.n = 0,
+    this.feature = '',
+    this.workspace = '',
+    this.title = '',
+    this.goal = '',
+    this.branch = '',
+    this.modelLabel = '',
+    this.mode = 'chat',
+    this.started = 0,
+    this.ended = false,
+    this.exitCode,
+    this.session,
+  });
+
+  /// The host's pid on the PC: what `show_session` and `window_stop` name.
+  final int pid;
+  final String folder;
+  final String sessionId;
+
+  /// The plan session it runs (0 when it is not from a plan).
+  final int n;
+  final String feature;
+  final String workspace;
+  final String title;
+  final String goal;
+  final String branch;
+  final String modelLabel;
+
+  /// `chat` (a tab) or `terminal` (a window of its own).
+  final String mode;
+  final int started; // unix ms
+  final bool ended;
+  final int? exitCode;
+  final CcSession? session;
+
+  factory MewoWindow.fromJson(Map<String, dynamic> j) => MewoWindow(
+        pid: _asInt(j['pid']),
+        folder: _asString(j['folder']),
+        sessionId: _asString(j['session_id']),
+        n: _asInt(j['n']),
+        feature: _asString(j['feature']),
+        workspace: _asString(j['workspace']),
+        title: _asString(j['title']),
+        goal: _asString(j['goal']),
+        branch: _asString(j['branch']),
+        modelLabel: _asString(j['model_label']),
+        mode: _asString(j['mode']).isEmpty ? 'chat' : _asString(j['mode']),
+        started: _asInt(j['started']),
+        ended: j['ended'] == true,
+        exitCode: j['exit_code'] is num ? (j['exit_code'] as num).toInt() : null,
+        session: j['session'] is Map ? CcSession.fromJson(Map<String, dynamic>.from(j['session'] as Map)) : null,
+      );
+
+  String get displayTitle {
+    if (title.isNotEmpty) return title;
+    if (goal.isNotEmpty) return goal;
+    if (session != null) return session!.displayTitle;
+    return feature.isNotEmpty ? feature : 'Session';
+  }
+
+  /// What the tab's dot shows: closed once Claude Code ended, else the
+  /// session's state (working until Claude Code has said anything).
+  String stateWith(CcSession? live) => ended ? SessionState.ended : (live ?? session)?.state ?? SessionState.working;
+
+  bool get terminal => mode == 'terminal';
+  DateTime get startedAt => DateTime.fromMillisecondsSinceEpoch(started);
+}

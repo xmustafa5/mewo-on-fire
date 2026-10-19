@@ -13,6 +13,11 @@ import 'home_screen.dart' show EmberTabBar;
 import 'theme/ember.dart';
 import 'theme/glass.dart';
 import 'theme/motion.dart';
+import 'windows_tab.dart';
+
+/// What the page shows: every session, the features, or the tabs of the
+/// Mewo Session windows (v3.4).
+enum _Mode { sessions, features, windows }
 
 /// All Claude Code sessions of all PCs, newest first (PROTOCOL.md v1.2).
 class SessionsTab extends StatefulWidget {
@@ -25,14 +30,18 @@ class SessionsTab extends StatefulWidget {
 class _SessionsTabState extends State<SessionsTab> {
   Timer? _tick;
   Timer? _featureTick;
-  bool _features = false;
+  _Mode _mode = _Mode.sessions;
 
-  void _setMode(bool features) {
-    setState(() => _features = features);
+  void _setMode(_Mode mode) {
+    setState(() => _mode = mode);
     _featureTick?.cancel();
-    if (features) {
+    if (mode == _Mode.features) {
       AppState.instance.refreshFeatures();
       _featureTick = Timer.periodic(const Duration(seconds: 20), (_) => AppState.instance.refreshFeatures());
+    } else if (mode == _Mode.windows) {
+      // The tabs come and go with the build: asked often while they are looked at.
+      AppState.instance.refreshWindows();
+      _featureTick = Timer.periodic(const Duration(seconds: 8), (_) => AppState.instance.refreshWindows());
     }
   }
 
@@ -71,7 +80,8 @@ class _SessionsTabState extends State<SessionsTab> {
       listenable: state,
       builder: (context, _) {
         final sessions = state.sessions;
-        final summary = _summary(sessions);
+        final summary = _mode == _Mode.windows ? windowsSummary(state) : _summary(sessions);
+        final title = switch (_mode) { _Mode.sessions => 'Sessions', _Mode.features => 'Features', _Mode.windows => 'Windows' };
         return Scaffold(
           backgroundColor: Colors.transparent,
           body: RefreshIndicator(
@@ -80,20 +90,29 @@ class _SessionsTabState extends State<SessionsTab> {
             edgeOffset: MediaQuery.paddingOf(context).top + 8,
             onRefresh: () async {
               await state.refreshSessions();
-              if (_features) await state.refreshFeatures();
+              if (_mode == _Mode.features) await state.refreshFeatures();
+              if (_mode == _Mode.windows) await state.refreshWindows();
             },
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
               slivers: [
                 SliverToBoxAdapter(
                   child: ScreenHeader(
-                    title: _features ? 'Features' : 'Sessions',
+                    title: title,
                     subtitle: AnimatedSwitcher(
                       duration: Motion.base,
                       transitionBuilder: fadeUpTransition,
                       child: Text(summary, key: ValueKey<String>(summary)),
                     ),
-                    actions: _features
+                    actions: _mode == _Mode.windows
+                        ? [
+                            GhostIconButton(
+                              icon: Icons.refresh_rounded,
+                              tooltip: 'Refresh',
+                              onPressed: state.refreshWindows,
+                            ),
+                          ]
+                        : _mode == _Mode.features
                         ? [
                             GhostIconButton(
                               icon: Icons.badge_outlined,
@@ -130,15 +149,17 @@ class _SessionsTabState extends State<SessionsTab> {
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-                    child: SegmentedGlass<bool>(
-                      segments: const <(bool, String)>[(false, 'Sessions'), (true, 'Features')],
-                      value: _features,
+                    child: SegmentedGlass<_Mode>(
+                      segments: const <(_Mode, String)>[(_Mode.sessions, 'Sessions'), (_Mode.features, 'Features'), (_Mode.windows, 'Windows')],
+                      value: _mode,
                       onChanged: _setMode,
                     ),
                   ),
                 ),
-                if (_features)
+                if (_mode == _Mode.features)
                   ...featureSlivers(context, state)
+                else if (_mode == _Mode.windows)
+                  ...windowSlivers(context, state)
                 else if (sessions.isEmpty)
                   SliverToBoxAdapter(
                     child: EmptyState(

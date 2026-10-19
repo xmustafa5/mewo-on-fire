@@ -644,6 +644,61 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  // ---- the Mewo Session windows (v3.4) ----
+
+  final Map<String, List<MewoWindow>> _windows = {};
+  final Map<String, String> _windowsErrors = {};
+  bool _windowsKnown = false;
+
+  /// Every tab of the Mewo Session window on every PC, with the PC it is
+  /// on: PCs in pairing order, tabs in plan session order within a PC.
+  List<(String, MewoWindow)> get windows => [
+        for (final pc in pcs)
+          for (final w in _windows[pc.id] ?? const <MewoWindow>[]) (pc.id, w),
+      ];
+
+  /// Whether the PCs have answered at least once.
+  bool get windowsKnown => _windowsKnown;
+
+  /// Why a PC's windows are not known ('' when they are).
+  String windowsErrorOf(String pcId) => _windowsErrors[pcId] ?? '';
+
+  /// Asks every PC for its windows. A PC that does not answer keeps what
+  /// was known of it, with its error.
+  Future<void> refreshWindows() async {
+    _windows.removeWhere((id, _) => !pcs.any((pc) => pc.id == id));
+    await Future.wait([for (final pc in pcs) _refreshWindowsOf(pc.id)]);
+    _windowsKnown = true;
+    notifyListeners();
+  }
+
+  Future<void> _refreshWindowsOf(String pcId) async {
+    final r = await policy(pcId, 'get_windows', {});
+    if (r['ok'] == true) {
+      _windows[pcId] = <MewoWindow>[
+        if (r['windows'] is List)
+          for (final w in r['windows'] as List)
+            if (w is Map) MewoWindow.fromJson(Map<String, dynamic>.from(w)),
+      ];
+      _windowsErrors.remove(pcId);
+    } else {
+      _windowsErrors[pcId] = '${r['error'] ?? 'No answer'}';
+    }
+  }
+
+  /// Brings a tab forward on its PC; '' or the error.
+  Future<String> showWindow(String pcId, int pid) async {
+    final r = await policy(pcId, 'show_session', {'pid': pid});
+    return r['ok'] == true ? '' : '${r['error'] ?? 'Could not show it'}';
+  }
+
+  /// Closes a tab on its PC, so Claude Code ends in it; '' or the error.
+  Future<String> stopWindow(String pcId, int pid) async {
+    final r = await policy(pcId, 'window_stop', {'pid': pid});
+    if (r['ok'] == true) Timer(const Duration(milliseconds: 1200), refreshWindows);
+    return r['ok'] == true ? '' : '${r['error'] ?? 'Could not stop it'}';
+  }
+
   String _clientId() => DateTime.now().microsecondsSinceEpoch.toRadixString(36);
 
   /// A policy frame to [pcId], answered by its `*_result`. The map has

@@ -393,7 +393,9 @@ async fn handle_frame(
         }
         "sign" | "plan_status" | "start_session" | "request_sign" | "get_scan" | "set_check"
         | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" | "session_detail" | "session_stop" | "work_hours"
-        | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_status" => handle_policy(state, device, sink, &msg).await,
+        | "plane_signin" | "plane_mine" | "plane_tasks" | "plane_task_add" | "plane_task_done" | "plane_status"
+        // v3.4: the Mewo Session windows on the phone.
+        | "get_windows" | "show_session" | "window_stop" => handle_policy(state, device, sink, &msg).await,
         _ => Ok(()),
     }
 }
@@ -459,6 +461,7 @@ async fn handle_policy(state: &AppState, device: &Device, sink: &mut WsSink, msg
     if let Some(o) = req.as_object_mut() {
         let cmd = match frame.as_str() {
             "get_scan" => "scan",
+            "get_windows" => "windows",
             other => other,
         };
         o.insert("cmd".to_string(), json!(cmd));

@@ -373,7 +373,8 @@ fn handle_request(state: &AppState, req: &Value) -> Value {
             tokio::task::block_in_place(|| plane_request(state, req))
         }
         "sign" | "plan_status" | "scan" | "set_check" | "start_session" | "request_sign"
-        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" | "session_detail" | "session_stop" => {
+        | "flow_next" | "flow_set" | "estimate" | "estimates_done" | "export_handoff" | "uat_user" | "release" | "close_branches" | "new_feature" | "set_role" | "rollback" | "unsign" | "prds" | "set_prd" | "set_design" | "flow_redo" | "build_set" | "session_detail" | "session_stop"
+        | "windows" | "show_session" | "window_stop" => {
             // git and gh run here: off the async threads.
             tokio::task::block_in_place(|| policy_request(state, req))
         }
@@ -591,6 +592,18 @@ fn is_for_peer(state: &AppState, req: &Value) -> bool {
 pub(crate) fn policy_request(state: &AppState, req: &Value) -> Value {
     let s = |k: &str| req.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
     let cmd = s("cmd");
+    // v3.4: the Mewo Session windows, for the phone's Windows tab.
+    if cmd == "windows" {
+        return json!({"ok": true, "windows": crate::windows::list(&state.session_list())});
+    }
+    if cmd == "show_session" || cmd == "window_stop" {
+        let pid = req.get("pid").and_then(Value::as_u64).unwrap_or(0) as u32;
+        let r = if cmd == "show_session" { crate::windows::show(pid) } else { crate::windows::stop(pid) };
+        return match r {
+            Ok(()) => json!({"ok": true}),
+            Err(e) => json!({"ok": false, "error": e}),
+        };
+    }
     if cmd == "scan" {
         let session_id = s("session_id");
         let (dir, feature) = if !session_id.is_empty() {
