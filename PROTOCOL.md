@@ -1165,3 +1165,14 @@ On the phone, a question's card in the chat and the answer screen have a
 copy button: every question with its header ("Question 2 of 3 · Auth"),
 "(Choose one)" or "(Choose any)", and its numbered options with their
 descriptions; a permission or a plan as its title, summary and detail.
+
+**Show on the PC from a phone.** GNOME on Wayland lets a window come
+forward only with an activation token from a click, which a phone's
+`show_session` cannot give, so a minimized window stayed minimized. On a
+Wayland desktop with XWayland and `wmctrl` or `xdotool`, the Mewo Session
+window now runs through XWayland (`GDK_BACKEND=x11` for itself only) and
+comes forward by a pager's activation of its own window (`wmctrl -i -a`,
+else `xdotool windowactivate`): restored, raised and focused, with or
+without a token, its session's tab in front. `MEWO_SESSION_WAYLAND=1`
+keeps it on Wayland, where it stays sharp at a fractional scale and only
+a click's token brings it forward.

@@ -46,11 +46,59 @@ import time
 os.environ.setdefault("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
 os.environ.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
 
+# v3.4: GNOME on Wayland lets a window come forward only with a token from a
+# click, so "Show on <PC>" from a phone left a minimized window minimized. On
+# XWayland a pager's activation (wmctrl, xdotool) restores and focuses it, so
+# on a Wayland desktop with one of them the window runs through XWayland.
+# MEWO_SESSION_WAYLAND=1 keeps it on Wayland (sharper at a fractional scale).
+ACTIVATORS = [t for t in ("wmctrl", "xdotool") if shutil.which(t)]
+_FORCED_X11 = bool(
+    os.environ.get("WAYLAND_DISPLAY") and os.environ.get("DISPLAY") and ACTIVATORS
+    and os.environ.get("MEWO_SESSION_WAYLAND") != "1" and not os.environ.get("GDK_BACKEND")
+)
+if _FORCED_X11:
+    os.environ["GDK_BACKEND"] = "x11"
+
 import gi  # noqa: E402
 
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+
+if _FORCED_X11:
+    os.environ.pop("GDK_BACKEND", None)  # this window only, not what it opens (VS Code, a browser)
+try:
+    gi.require_version("GdkX11", "3.0")
+    from gi.repository import GdkX11  # noqa: E402
+    ON_X11 = isinstance(Gdk.Display.get_default(), GdkX11.X11Display)
+except (ValueError, ImportError, AttributeError):
+    ON_X11 = False
+
+
+def bring_forward(win, token):
+    """Restores and raises the window, minimized or not. On X11 (XWayland
+    included) a pager's activation does it with or without a click; on
+    Wayland only a click's token does (the console's "Show the session"),
+    else the shell just marks the window as wanting attention."""
+    win.deiconify()
+    gdk_win = win.get_window()
+    if ON_X11 and ACTIVATORS and gdk_win is not None:
+        xid = gdk_win.get_xid()
+        cmd = ["wmctrl", "-i", "-a", hex(xid)] if ACTIVATORS[0] == "wmctrl" else ["xdotool", "windowactivate", str(xid)]
+
+        def run():
+            try:
+                subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+        threading.Thread(target=run, daemon=True).start()
+        return
+    if token:
+        # The console's click, handed over: with it the shell lets this window come forward.
+        win.set_startup_id(token)
+    else:
+        win.present()
 
 try:
     gi.require_version("GLibUnix", "2.0")
@@ -868,12 +916,7 @@ class SessionsWindow(Gtk.Window):
         tab.chat.web.grab_focus()
 
     def come_forward(self, token):
-        self.deiconify()
-        if token:
-            # The console's click, handed over: with it the shell lets this window come forward.
-            self.set_startup_id(token)
-        else:
-            self.present()
+        bring_forward(self, token)
 
     def close_tab(self, tab, ask=True):
         if tab not in self.tabs:
@@ -1099,12 +1142,7 @@ class SessionWindow(Gtk.Window):
             os.remove(path)
         except OSError:
             pass
-        self.deiconify()
-        if token:
-            # The console's click, handed over: with it the shell lets this window come forward.
-            self.set_startup_id(token)
-        else:
-            self.present()
+        bring_forward(self, token)
         if self.term:
             self.term.grab_focus()
         return GLib.SOURCE_CONTINUE
