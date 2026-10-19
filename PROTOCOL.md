@@ -1176,3 +1176,9 @@ else `xdotool windowactivate`): restored, raised and focused, with or
 without a token, its session's tab in front. `MEWO_SESSION_WAYLAND=1`
 keeps it on Wayland, where it stays sharp at a fractional scale and only
 a click's token brings it forward.
+
+A host's `mewo ask` that ends without an answer (the daemon restarted for
+an update, or was down) is started again 5 seconds later while the prompt
+is still open in the session, so the phones get it back; it stops once
+the prompt is answered in a window, cancelled by Claude Code, or the
+session ends.

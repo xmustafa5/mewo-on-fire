@@ -505,12 +505,28 @@ class Host:
             ask["proc"] = None
 
     def wait_phone(self, rid, proc, payload):
-        try:
-            out, _ = proc.communicate(payload)
-            decision = json.loads(out)["hookSpecificOutput"]["decision"]
-        except (OSError, ValueError, KeyError, TypeError):
-            return
-        self.answer(rid, decision, "phone")
+        while True:
+            try:
+                out, _ = proc.communicate(payload)
+                decision = json.loads(out)["hookSpecificOutput"]["decision"]
+            except (OSError, ValueError, KeyError, TypeError):
+                decision = None
+            if decision is not None:
+                self.answer(rid, decision, "phone")
+                return
+            # Ended without an answer: the daemon restarted (an update) or was down. While
+            # the prompt is still open here, ask again, so the phones get it back.
+            time.sleep(5)
+            mewo = find_tool("mewo")
+            with self.ask_lock:
+                ask = self.asks.get(rid)
+                if ask is None or ask.get("proc") is not proc or self.ended or self.stopping or not mewo:
+                    return  # answered here, cancelled by Claude Code, or the session is gone
+                try:
+                    proc = subprocess.Popen([mewo, "ask"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                except OSError:
+                    return
+                ask["proc"] = proc
 
     def drop_phone(self, ask):
         proc = (ask or {}).get("proc")
