@@ -135,10 +135,13 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
 /* The Mac app draws its traffic lights over the toolbar's left end. */
 body.mac #toolbar { padding-left: 86px; }
 body.mac.fullscreen #toolbar { padding-left: 14px; }
-.tb-left { flex: 1 1 0; min-width: 0; display: flex; }
+.tb-left { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .tb-right { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 #tb-pc { min-width: 0; padding: 3px 8px; margin-left: -8px; border-radius: var(--r-control); cursor: pointer; }
 #tb-pc:hover { background: var(--hover); }
+/* The sidebar button sits at the toolbar's left end and the inspector button at its right end, each beside its panel. */
+#sidebtn { margin-left: -8px; }
+#sidebtn + #tb-pc { margin-left: 0; }
 .tb-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tb-title .app { color: var(--text-2); font-weight: 500; }
 .tb-title .sl { color: var(--text-3); font-weight: 400; margin: 0 5px; }
@@ -160,7 +163,6 @@ body.mac.fullscreen #toolbar { padding-left: 14px; }
 .tbtn:hover, .tbtn[aria-expanded="true"], .tbtn[aria-pressed="true"] { background: var(--fill); color: var(--text); }
 .tbtn.primary { background: var(--accent); color: var(--on-accent); padding: 0 12px 0 10px; }
 .tbtn.primary:hover { background: var(--accent); color: var(--on-accent); filter: brightness(1.08); }
-#sidebtn, #insbtn { display: none; }
 .search {
   display: inline-flex; flex: none; align-items: center; gap: 6px; width: 200px; height: 28px; padding: 0 8px;
   border-radius: var(--r-control); background: var(--fill); color: var(--text-3); cursor: text;
@@ -188,7 +190,11 @@ body.mac.fullscreen #toolbar { padding-left: 14px; }
 .menu hr { margin: 5px 10px; border: 0; border-top: .5px solid var(--sep); }
 
 /* ---------- layout: sidebar | center | inspector ---------- */
-main { position: relative; display: grid; grid-template-columns: 220px minmax(0, 1fr) 300px; min-height: 0; }
+main {
+  --side-w: 220px; --ins-w: 300px;
+  position: relative; display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr) var(--ins-w); min-height: 0;
+  transition: grid-template-columns .22s ease;
+}
 #side {
   display: flex; flex-direction: column; min-height: 0; overflow: auto; padding: 8px 10px 0;
   background: var(--bg-side); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
@@ -588,13 +594,12 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 
 /* ---------- narrow windows ---------- */
 @media (max-width: 1099px) {
-  main { grid-template-columns: 220px minmax(0, 1fr); }
+  main { grid-template-columns: var(--side-w) minmax(0, 1fr); }
   #inspector {
     position: fixed; z-index: 30; top: 52px; right: 0; bottom: 0; width: min(320px, 100vw); border-left: 0; box-shadow: var(--shadow);
     transform: translateX(105%); visibility: hidden; transition: transform .22s ease, visibility .22s;
   }
   body.ins-open #inspector { transform: none; visibility: visible; }
-  #insbtn { display: inline-flex; }
   .tbtn .lbl { display: none; }
   .tbtn.primary { padding: 0 8px; }
   .search { width: 150px; }
@@ -606,13 +611,29 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
     transform: translateX(-105%); visibility: hidden; transition: transform .22s ease, visibility .22s;
   }
   body.side-open #side { transform: none; visibility: visible; }
-  #sidebtn { display: inline-flex; }
   .tb-title .app, .tb-title .sl { display: none; }
   .search { width: 120px; }
   .seg button { padding: 5px 10px; }
   #pipe { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 40%) minmax(0, 1fr); }
   #plist { border-right: 0; border-bottom: .5px solid var(--sep); }
   #sdetail .grid { grid-template-columns: 1fr; }
+}
+/* ---------- collapsed: the sidebar and the inspector give their room to the center ----------
+   Only where they sit in the grid; in a narrow window they slide over the content instead (above).
+   Their content keeps its width while the column moves, so it is clipped, not reflowed. */
+body.panels-still main, body.panels-still #side, body.panels-still #inspector { transition: none; }
+body.panels-moving #side, body.panels-moving #inspector { overflow: hidden; }
+@media (min-width: 800px) {
+  #side { transition: padding .22s ease, visibility .22s; }
+  #side > * { min-width: 199px; }
+  body.side-collapsed main { --side-w: 0px; }
+  body.side-collapsed #side { visibility: hidden; overflow: hidden; padding-left: 0; padding-right: 0; border-right-width: 0; }
+}
+@media (min-width: 1100px) {
+  #inspector { transition: visibility .22s; }
+  #ins-body { min-width: 299px; }
+  body.ins-collapsed main { --ins-w: 0px; }
+  body.ins-collapsed #inspector { visibility: hidden; overflow: hidden; border-left-width: 0; }
 }
 /* ---------- inspector: rows that just arrived, pills, what a session made ---------- */
 @keyframes ev-in { from { opacity: 0; transform: translateY(-3px); } }
@@ -634,6 +655,7 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
 <body>
 <header id="toolbar">
   <div class="tb-left">
+    <button id="sidebtn" class="tbtn" type="button" title="Sidebar" aria-label="Show the sidebar" aria-pressed="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><path d="M6 3v10"/></svg></button>
     <div id="tb-pc" role="button" tabindex="0" title="This computer">
       <div class="tb-title"><span class="app">Mewo on Fire</span><span class="sl">/</span><span id="pcname">—</span></div>
       <div id="pcstate"><span class="dot" style="color:var(--closed)"></span>Linking to the daemon…</div>
@@ -643,14 +665,13 @@ main { position: relative; display: grid; grid-template-columns: 220px minmax(0,
     <button id="v-net" class="on" type="button" role="tab" aria-selected="true">Graph</button><button id="v-feat" type="button" role="tab" aria-selected="false">Features</button><button id="v-pipe" type="button" role="tab" aria-selected="false">Pipeline</button>
   </div>
   <div class="tb-right">
-    <button id="sidebtn" class="tbtn" type="button" title="Sidebar" aria-label="Show the sidebar" aria-pressed="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><path d="M6 3v10"/></svg></button>
     <label class="search"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.25 3.25"/></svg><input id="q" type="search" placeholder="Search" aria-label="Search sessions and activity" autocomplete="off" spellcheck="false"></label>
     <div class="menu-wrap">
       <button id="cleanbtn" class="tbtn" type="button" title="Clean up" aria-haspopup="menu" aria-expanded="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 8S4 3.75 8 3.75 14.25 8 14.25 8 12 12.25 8 12.25 1.75 8 1.75 8z"/><circle cx="8" cy="8" r="1.75"/><path d="m2.75 13.25 10.5-10.5"/></svg><span class="lbl">Clean up</span><svg class="ic chev" viewBox="0 0 10 10" aria-hidden="true"><path d="m2.5 4 2.5 2.5L7.5 4"/></svg></button>
       <div id="cleanmenu" class="menu" role="menu" aria-label="Clean up"></div>
     </div>
-    <button id="insbtn" class="tbtn" type="button" title="Inspector" aria-label="Show the inspector" aria-pressed="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><path d="M10 3v10"/></svg></button>
     <button id="newbtn" class="tbtn primary" type="button" title="New session"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5"/></svg><span class="lbl">New session</span></button>
+    <button id="insbtn" class="tbtn" type="button" title="Inspector" aria-label="Show the inspector" aria-pressed="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><path d="M10 3v10"/></svg></button>
   </div>
 </header>
 
@@ -766,6 +787,8 @@ function normPrefs(p) {
   out.filters.projects = strs(f.projects);
   out.filters.pcs = strs(f.pcs);
   if (RANGES.includes(f.range)) out.filters.range = f.range;
+  // Which panels are collapsed in a wide window; only kept once one has been.
+  if (isObj(p.collapsed)) out.collapsed = { side: p.collapsed.side === true, inspector: p.collapsed.inspector === true };
   return out;
 }
 
@@ -1048,7 +1071,7 @@ let selection = null;
 function setSelection(id) {
   selection = id;
   // In a narrow window the inspector slides over the content: picking something opens it, and its button says so.
-  if (id && matchMedia('(max-width: 1099px)').matches) { document.body.classList.add('ins-open'); $('insbtn').setAttribute('aria-pressed', 'true'); }
+  if (id && matchMedia('(max-width: 1099px)').matches) { document.body.classList.add('ins-open'); syncPanelBtns(); }
   graph.wake(); render();
 }
 // A rounded rectangle path of its own: older WebKitGTK has no ctx.roundRect.
@@ -2214,6 +2237,7 @@ async function loadPrefs() {
   for (const k of DIMS) filters[k] = [...prefs.filters[k]];
   filters.range = prefs.filters.range;
   prefsLive = true;
+  applyPanelPrefs();
   graph.wake(); render();
 }
 let prefsTimer = 0;
@@ -2854,10 +2878,63 @@ async function poll() {
   try { const r = await fetch('/api/state', { cache: 'no-store' }); apply(await r.json()); }
   catch (e) { apply({ ok: false, error: 'The console process stopped (`mewo dashboard`).' }); }
 }
-// Narrow windows: the inspector and the sidebar slide over the content.
-for (const [btn, cls] of [['insbtn', 'ins-open'], ['sidebtn', 'side-open']]) {
-  $(btn).addEventListener('click', () => { const on = document.body.classList.toggle(cls); $(btn).setAttribute('aria-pressed', String(on)); });
+// ---------- the sidebar and the inspector: collapsed in a wide window, sliding over in a narrow one ----------
+// A wide window keeps them in the grid and the buttons collapse them (saved in the console settings);
+// a narrow one slides them over the content and the buttons open them. Ctrl+B and Ctrl+Alt+B (⌘B, ⌥⌘B on a Mac).
+const onMac = window.mewoHost === 'mac' || /Mac/.test(navigator.platform || '');
+const PANELS = {
+  side: { btn: 'sidebtn', open: 'side-open', collapsed: 'side-collapsed', name: 'sidebar', narrow: matchMedia('(max-width: 799px)'), keys: onMac ? '⌘B' : 'Ctrl+B' },
+  inspector: { btn: 'insbtn', open: 'ins-open', collapsed: 'ins-collapsed', name: 'inspector', narrow: matchMedia('(max-width: 1099px)'), keys: onMac ? '⌥⌘B' : 'Ctrl+Alt+B' },
+};
+function panelShown(k) {
+  const p = PANELS[k], b = document.body.classList;
+  return p.narrow.matches ? b.contains(p.open) : !b.contains(p.collapsed);
 }
+function syncPanelBtns() {
+  for (const k of Object.keys(PANELS)) {
+    const p = PANELS[k], on = panelShown(k), btn = $(p.btn), label = `${on ? 'Hide' : 'Show'} the ${p.name}`;
+    btn.setAttribute('aria-pressed', String(on));
+    btn.setAttribute('aria-label', label);
+    btn.title = `${label} (${p.keys})`;
+  }
+}
+// While a column moves its panel is clipped; once it has, the views that only follow the window's size refit.
+let panelsTimer = 0;
+function panelsMoving() {
+  document.body.classList.add('panels-moving');
+  clearTimeout(panelsTimer);
+  panelsTimer = setTimeout(() => { document.body.classList.remove('panels-moving'); dispatchEvent(new Event('resize')); }, 260);
+}
+function togglePanel(k) {
+  const p = PANELS[k];
+  if (p.narrow.matches) document.body.classList.toggle(p.open);
+  else {
+    panelsMoving();
+    const collapsed = document.body.classList.toggle(p.collapsed);
+    prefs.collapsed = { side: false, inspector: false, ...(prefs.collapsed || {}), [k]: collapsed };
+    savePrefs();
+  }
+  syncPanelBtns();
+}
+// The saved state, without the animation: the window opens the way it was left.
+function applyPanelPrefs() {
+  const b = document.body.classList, c = prefs.collapsed || {};
+  b.add('panels-still');
+  b.toggle('side-collapsed', c.side === true);
+  b.toggle('ins-collapsed', c.inspector === true);
+  syncPanelBtns();
+  requestAnimationFrame(() => requestAnimationFrame(() => { b.remove('panels-still'); dispatchEvent(new Event('resize')); }));
+}
+for (const k of Object.keys(PANELS)) {
+  $(PANELS[k].btn).addEventListener('click', () => togglePanel(k));
+  PANELS[k].narrow.addEventListener('change', syncPanelBtns);
+}
+addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyB' || e.shiftKey || !(onMac ? e.metaKey : e.ctrlKey) || e.repeat) return;
+  e.preventDefault();
+  togglePanel(e.altKey ? 'inspector' : 'side');
+});
+syncPanelBtns();
 $('fl-add').addEventListener('click', openAddPc);
 // The Mac app sets mewoHost: its traffic lights sit over the toolbar's left end.
 if (window.mewoHost === 'mac') document.body.classList.add('mac');
