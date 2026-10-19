@@ -1146,3 +1146,10 @@ tab's header shows (`workspace`, `title`, `goal`, `branch`, `model_label`,
 with `ended: true` and `exit_code`, until the host goes (the tab closed,
 or its window gone): so an ended tab still open on the PC is still listed,
 as ended. `n` may be a number or a string (older hosts).
+
+A Mewo Session tab's prompt is only in its window, so the host's `mewo
+ask` input carries `mewo_wait_for_phone: true` and `mewo ask` sends `ask`
+with `wait: true`: with no phone connected the daemon keeps the request
+instead of answering `no_devices`, and a phone that connects later gets
+it with the pending requests. A hook from a terminal session sends
+`wait: false` and returns at once as before, so its PC prompt shows.

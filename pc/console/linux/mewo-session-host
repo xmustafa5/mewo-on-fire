@@ -492,6 +492,8 @@ class Host:
             "hook_event_name": "PermissionRequest", "tool_name": r.get("tool_name", ""), "tool_input": r.get("input") or {},
             "session_id": self.session_id, "cwd": self.folder, "transcript_path": "",
             "permission_suggestions": r.get("permission_suggestions") or [],
+            # v3.4: the prompt is only in the window, so the daemon keeps it for a phone that connects later.
+            "mewo_wait_for_phone": True,
         }
         try:
             ask["proc"] = subprocess.Popen([mewo, "ask"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)

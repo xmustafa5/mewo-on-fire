@@ -64,7 +64,10 @@ fn try_run() -> Option<String> {
     let hook_input: Value = serde_json::from_str(&input).ok()?;
     let request = map_request(&hook_input);
     spawn_watcher(&hook_input);
-    let resp = ask_daemon(&request, str_of(&hook_input, "agent_id")).ok()?;
+    // v3.4: a Mewo Session tab shows its prompt only in the window, so it
+    // asks the daemon to keep it for a phone that connects later.
+    let wait = hook_input.get("mewo_wait_for_phone").and_then(Value::as_bool) == Some(true);
+    let resp = ask_daemon(&request, str_of(&hook_input, "agent_id"), wait).ok()?;
     let answer = reply_answer(&resp)?;
     let output = hook_output(&hook_input, answer)?;
     serde_json::to_string(&output).ok()
@@ -73,9 +76,9 @@ fn try_run() -> Option<String> {
 /// Send `{"cmd":"ask"}` and block (no read timeout) until the daemon replies.
 /// `agent_id` (private, never forwarded to phones) is set for prompts from a
 /// subagent.
-pub fn ask_daemon(request: &Value, agent_id: &str) -> Result<Value> {
+pub fn ask_daemon(request: &Value, agent_id: &str, wait: bool) -> Result<Value> {
     control::request_blocking(
-        &json!({"cmd": "ask", "request": request, "agent_id": agent_id}),
+        &json!({"cmd": "ask", "request": request, "agent_id": agent_id, "wait": wait}),
         WRITE_TIMEOUT,
     )
 }
