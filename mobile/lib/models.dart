@@ -909,7 +909,13 @@ class TorchGate {
     required this.date,
     required this.signed,
     required this.present,
+    this.waived = false,
+    this.waivedNote = '',
   });
+
+  /// v3.5: waived, not signed ("UAT waived by the CEO"): the flow passes it.
+  final bool waived;
+  final String waivedNote;
 
   final String id;
   final String checklist;
@@ -947,6 +953,8 @@ class TorchGate {
         date: _asString(j['date']),
         signed: j['signed'] == true,
         present: j['present'] == true,
+        waived: j['waived'] == true,
+        waivedNote: _asString(j['waived_note']),
       );
 }
 

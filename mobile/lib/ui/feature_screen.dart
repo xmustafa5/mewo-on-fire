@@ -131,7 +131,7 @@ class _FeatureScreenState extends State<FeatureScreen> {
     final a = f.flow.action;
     if (a.kind != 'ask' || a.gate.isEmpty) return null;
     final g = f.gates.where((x) => x.id == a.gate).firstOrNull;
-    if (g == null || g.signed || !g.present) return null;
+    if (g == null || g.signed || g.waived || !g.present) return null;
     return () => showSignSheet(context, pcId: widget.pcId, feature: f, gate: g);
   }
 
@@ -424,8 +424,8 @@ class _FeatureScreenState extends State<FeatureScreen> {
       final gi = f.planeItems[g.id == 'prd' ? 'prd' : 'gate:${g.id}'];
       out.add(enter(_GateCard(
         gate: g,
-        onSign: g.signed || !g.present ? null : () => showSignSheet(context, pcId: widget.pcId, feature: f, gate: g),
-        onAsk: g.signed || !g.present ? null : () => _ask(f, g),
+        onSign: g.signed || g.waived || !g.present ? null : () => showSignSheet(context, pcId: widget.pcId, feature: f, gate: g),
+        onAsk: g.signed || g.waived || !g.present ? null : () => _ask(f, g),
         onUnsign: (role) => _unsign(f, g, role),
         planeSeq: gi?.sequenceId ?? 0,
         onOpenPlane: gi == null ? null : () => _openPlane(gi.url),
@@ -723,24 +723,33 @@ class _GateCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final g = gate;
-    final color = g.signed ? Ember.ok : g.present ? Ember.amber : Ember.text3;
+    final passed = g.signed || g.waived;
+    final color = passed ? Ember.ok : g.present ? Ember.amber : Ember.text3;
     final ticked = g.items.where((i) => i.checked).length;
     final signed = [for (final e in g.signatures.entries) '${e.value} (${e.key})'];
     return GlassCard(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
       radius: 16,
-      borderColor: g.signed ? Ember.ok.withValues(alpha: 0.35) : null,
+      borderColor: passed ? Ember.ok.withValues(alpha: 0.35) : null,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          IconTile(icon: g.signed ? Icons.verified_rounded : Icons.draw_rounded, color: color, size: 34, iconSize: 17),
+          IconTile(icon: g.signed ? Icons.verified_rounded : g.waived ? Icons.fast_forward_rounded : Icons.draw_rounded, color: color, size: 34, iconSize: 17),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(g.title, style: t.titleSmall?.copyWith(fontSize: 14)),
+                if (g.waived && !g.signed)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      g.waivedNote.isEmpty ? 'Waived: the flow passes it' : 'Waived · ${g.waivedNote}',
+                      style: t.labelSmall?.copyWith(color: Ember.ok),
+                    ),
+                  ),
                 const SizedBox(height: 3),
                 Text(
                   [

@@ -327,6 +327,14 @@ pub struct Gate {
     pub signed: bool,
     /// The record file exists.
     pub present: bool,
+    /// v3.5: the gate was waived, not signed (a line of its section that
+    /// starts with "Waived", or a signature cell that says so, e.g. "UAT
+    /// waived by the CEO"): the flow passes it as it passes a signed one.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub waived: bool,
+    /// What the record says about the waiver, for the console and phones.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub waived_note: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -512,6 +520,15 @@ fn gate_from(lines: &[&str], id: &str, checklist: &str, title: &str, step: u8, f
         present,
         ..Gate::default()
     };
+    // v3.5: a waiver written into the section ("**Waived by the CEO on …**").
+    for l in lines {
+        let t = l.trim().trim_start_matches(['>', '*', '_', ' ']).trim();
+        if t.to_ascii_lowercase().starts_with("waived") && !t.starts_with('|') {
+            gate.waived = true;
+            gate.waived_note = clean(&t.replace("**", "").replace("__", ""));
+            break;
+        }
+    }
     if let Some((head, row, _, _)) = signature_table(lines) {
         for (h, v) in head.iter().zip(row.iter()) {
             if h.eq_ignore_ascii_case("date") {
@@ -519,16 +536,31 @@ fn gate_from(lines: &[&str], id: &str, checklist: &str, title: &str, step: u8, f
             } else {
                 gate.roles.push(h.clone());
                 let name = clean(v);
-                if !name.is_empty() {
+                let lower = name.to_ascii_lowercase();
+                if lower.contains("waived") {
+                    // "Not signed: UAT waived by the CEO": a waiver, not a signature.
+                    gate.waived = true;
+                    if gate.waived_note.is_empty() {
+                        gate.waived_note = name.clone();
+                    }
+                } else if !name.is_empty() && !is_placeholder(&lower) {
                     gate.signatures.push(json!({"role": h, "name": name}));
                 }
             }
         }
-        gate.signed = !gate.roles.is_empty() && gate.signatures.len() == gate.roles.len();
+        // A sign-off of staging, UAT or production (Checklists I, J, K) is dated.
+        let dated = !matches!(checklist, "I" | "J" | "K") || !gate.date.is_empty();
+        gate.signed = !gate.roles.is_empty() && gate.signatures.len() == gate.roles.len() && dated;
     } else {
         gate.signed = present && !gate.items.is_empty() && gate.items.iter().all(|i| i.checked);
     }
     gate
+}
+
+/// v3.5: a signature cell that only says when or whether someone will sign
+/// ("After the post-staging check", "Pending", "Not signed"), not who did.
+fn is_placeholder(lower: &str) -> bool {
+    ["not signed", "after ", "pending", "to be signed", "tbd", "{"].iter().any(|p| lower.starts_with(p))
 }
 
 fn read_lines(path: &Path) -> Option<String> {
@@ -1463,7 +1495,8 @@ fn read_features(ws: &Path) -> Vec<Feature> {
 
 /// Where the feature stands: the first gate not passed (policy section 4).
 fn compute_step(f: &mut Feature) {
-    let gate = |id: &str| f.gates.iter().find(|g| g.id == id).map(|g| g.signed).unwrap_or(false);
+    // v3.5: a waived gate is passed as a signed one is (UAT waived by the CEO).
+    let gate = |id: &str| f.gates.iter().find(|g| g.id == id).map(|g| g.signed || g.waived).unwrap_or(false);
     if f.light {
         let items: Vec<bool> = f.gates.first().map(|g| g.items.iter().map(|i| i.checked).collect()).unwrap_or_default();
         let labels = ["Describe the change", "Agree it is small", "Self-check and review", "Staging", "Release"];

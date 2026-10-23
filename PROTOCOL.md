@@ -1182,3 +1182,22 @@ an update, or was down) is started again 5 seconds later while the prompt
 is still open in the session, so the phones get it back; it stops once
 the prompt is answered in a window, cancelled by Claude Code, or the
 session ends.
+
+# v3.5 — a waived gate, and a sign-off that is not one yet
+
+A release record may waive a gate instead of signing it ("**Waived by the
+CEO on 2026-10-21 …**" at the top of the UAT section, or a signature cell
+that says "Not signed: UAT waived by …"). A gate section with a line that
+starts with "Waived", or a signature cell that says waived, carries
+`waived: true` and `waived_note` (the line, without its bold markers);
+the flow passes a waived gate as it passes a signed one, so the feature
+moves on and nobody is asked to sign it. The console shows WAIVED with
+the note instead of SIGN and ASK; the phone shows it in green with the
+note and no Sign button.
+
+A signature cell that only says when or whether someone will sign
+("After the post-staging check", "Pending", "Not signed", "TBD", a
+`{placeholder}`) is no longer a signature, and a sign-off of staging, UAT
+or production (Checklists I, J and K) counts as signed only with its Date
+filled. Before, "After the post-staging check" in the CEO's cell read as
+the CEO's name and marked a release signed.
