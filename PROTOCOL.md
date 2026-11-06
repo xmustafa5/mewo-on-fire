@@ -122,13 +122,13 @@ Added by `mewo install` (not async, long timeout):
 `mewo ask`:
 1. Reads the hook JSON (`tool_name`, `tool_input`, `permission_suggestions`, `session_id`, `cwd`, `transcript_path`, `agent_id` — set when the prompt comes from a subagent).
 2. Starts the transcript watcher (below), sends `{"cmd":"ask","request":{Request without id/ts},"agent_id":"<agent_id or empty>"}` on the control socket and **blocks** reading the reply line (no read timeout). `agent_id` is private (never forwarded to phones).
-3. Reply `{"ok":false,"error":"no_devices"}` (sent immediately when no phone is connected), `cancelled`, `timeout`, or any error / daemon down → print nothing, exit 0 (normal prompt flow).
+3. Reply `{"ok":false,"error":"no_devices"}` (sent immediately when no phone is connected and the ask has no `wait: true`, see v3.4 and v3.6), `cancelled`, `timeout`, or any error / daemon down → print nothing, exit 0 (normal prompt flow).
 4. Reply `{"ok":true,"answer":{Answer}}` → print the hook output below, exit 0.
 5. Answered on the PC → the watcher exits the process (code 0, no output); the socket closes, the daemon notices EOF and resolves the request (`by: "pc"`).
 
 ### Transcript watcher (thread in `mewo ask`)
 
-- Subagent prompt (`agent_id` set): watch `agent_transcript_path` if the input has one different from `transcript_path` (all its lines count, sidechain or not), else no watcher.
+- Subagent prompt (`agent_id` set): watch `agent_transcript_path` if the input has one different from `transcript_path`, else `agent-<agent_id>.jsonl` found under `<transcript_path without .jsonl>/subagents` (a workflow's agents are in `workflows/<run>/` below it; all its lines count, sidechain or not; the file may appear after the hook starts, so it is looked for every second, and a text line does not count as "moved on" until the target is known, since the file starts with the subagent's task). No watcher if the input names `transcript_path` itself.
 - Start: read the last 2 MB of `transcript_path` (drop the first partial line). Target = the most recent main-chain (`isSidechain` not true) `assistant` `tool_use` block with `name == tool_name` and no `tool_result` in the tail, preferring one whose `input` equals `tool_input`. Remember the file length as the offset.
 - Every 1 s read only the appended bytes (a partial last line is carried over; file shrank → offset 0). Exit 0 silently when a main-chain line shows:
   - a `user` `tool_result` with the target's `tool_use_id` (answered on the PC);
@@ -1201,3 +1201,28 @@ A signature cell that only says when or whether someone will sign
 or production (Checklists I, J and K) counts as signed only with its Date
 filled. Before, "After the post-staging check" in the CEO's cell read as
 the CEO's name and marked a release signed.
+
+# v3.6 — a VS Code prompt waits for the phone
+
+A VS Code session's question or permission prompt now waits for a phone that
+connects later, as a Mewo Session tab's prompt does (v3.4). Before, `mewo
+ask` got `no_devices` in a few milliseconds whenever no phone was connected
+at that moment, and the prompt never reached the app.
+
+`mewo ask` sends `wait: true` when `CLAUDE_CODE_ENTRYPOINT` is
+`claude-vscode`. This is safe because that session shows its prompt without
+waiting for the hook (checked on extension 2.1.318: the `can_use_tool`
+request goes out as the hook starts, and the session goes on after an answer
+on the PC with the hook still running). The first answer wins, on either
+side. A prompt answered on the PC leaves the phones through the transcript
+watcher, as before.
+
+Subagent prompts need their own watcher here, because the hook input has
+`agent_id` but no `agent_transcript_path` and the daemon's session safety net
+leaves them alone. Without it, a subagent prompt answered on the PC would stay
+pending for up to 24 hours and keep its session "waiting". See the watcher
+rules in v1.1.
+
+Other sessions still get `no_devices`. A terminal session (`cli`) is unchanged
+so nothing can hold up its prompt; `claude-desktop` was not checked; and an
+`sdk-cli` session may have no one on screen to answer, so its hook must return.

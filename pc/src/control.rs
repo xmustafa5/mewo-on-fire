@@ -1039,8 +1039,9 @@ where
         return Some(json!({"ok": false, "error": "bad_kind"}));
     }
     // A terminal session shows its prompt on the PC: with no phone there is
-    // nothing to wait for. A Mewo Session tab (`wait`, v3.4) keeps it for a
-    // phone that connects later, which gets it with the pending requests.
+    // nothing to wait for. A Mewo Session tab (`wait`, v3.4) or a VS Code
+    // session (v3.6) keeps it for a phone that connects later, which gets it
+    // with the pending requests.
     if state.connected.load(Ordering::SeqCst) == 0 && req.get("wait").and_then(Value::as_bool) != Some(true) {
         return Some(json!({"ok": false, "error": "no_devices"}));
     }

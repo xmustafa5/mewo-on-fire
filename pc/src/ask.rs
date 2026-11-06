@@ -12,6 +12,7 @@
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -72,11 +73,21 @@ fn try_run() -> Option<String> {
     spawn_watcher(&hook_input);
     // v3.4: a Mewo Session tab shows its prompt only in the window, so it
     // asks the daemon to keep it for a phone that connects later.
-    let wait = hook_input.get("mewo_wait_for_phone").and_then(Value::as_bool) == Some(true);
+    // v3.6: so does a VS Code session: its prompt is on screen already.
+    let wait = hook_input.get("mewo_wait_for_phone").and_then(Value::as_bool) == Some(true)
+        || prompt_shown_beside_hook();
     let resp = ask_daemon(&request, str_of(&hook_input, "agent_id"), wait).ok()?;
     let answer = reply_answer(&resp)?;
     let output = hook_output(&hook_input, answer)?;
     serde_json::to_string(&output).ok()
+}
+
+/// True when Claude Code shows this session's prompt on the PC without waiting
+/// for this hook, so the hook can wait for a phone as long as it likes
+/// (verified on the VS Code extension 2.1.318, PROTOCOL.md v3.6). A terminal
+/// session is left out: it must get its answer back at once.
+fn prompt_shown_beside_hook() -> bool {
+    std::env::var("CLAUDE_CODE_ENTRYPOINT").as_deref() == Ok("claude-vscode")
 }
 
 /// Send `{"cmd":"ask"}` and block (no read timeout) until the daemon replies.
@@ -377,30 +388,65 @@ enum Target {
 
 struct Watcher {
     path: String,
+    /// A subagent transcript still to be found: (folder, file name).
+    search: Option<(PathBuf, String)>,
     tool: String,
     input: Value,
     /// Watching a subagent transcript: its lines are all sidechain lines.
     sidechain: bool,
 }
 
-/// Start the transcript watcher thread. Skipped for subagent prompts unless
-/// the input names the subagent's own transcript.
+/// Where to look for the transcript of the subagent behind a prompt, when the
+/// input does not name it: Claude Code keeps it as `agent-<id>.jsonl` under
+/// `<session>/subagents`, a workflow's agents in `workflows/<run>/` below that.
+fn subagent_search(hook_input: &Value) -> Option<(PathBuf, String)> {
+    let session = str_of(hook_input, "transcript_path").strip_suffix(".jsonl")?;
+    let file = format!("agent-{}.jsonl", str_of(hook_input, "agent_id"));
+    Some((Path::new(session).join("subagents"), file))
+}
+
+/// `dir` or a folder up to `depth` levels below it that holds `file`.
+fn find_file(dir: &Path, file: &str, depth: u8) -> Option<PathBuf> {
+    let direct = dir.join(file);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    if depth == 0 {
+        return None;
+    }
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .find_map(|e| find_file(&e.path(), file, depth - 1))
+}
+
+/// Start the transcript watcher thread. A subagent prompt watches the
+/// subagent's own transcript; skipped if there is no transcript to watch.
 fn spawn_watcher(hook_input: &Value) {
-    let mut path = str_of(hook_input, "transcript_path");
+    let mut path = str_of(hook_input, "transcript_path").to_string();
     let mut sidechain = false;
+    let mut search = None;
     if !str_of(hook_input, "agent_id").is_empty() {
-        let agent_path = str_of(hook_input, "agent_transcript_path");
-        if agent_path.is_empty() || agent_path == path {
+        let named = str_of(hook_input, "agent_transcript_path");
+        if named == path && !named.is_empty() {
             return;
         }
-        path = agent_path;
+        if named.is_empty() {
+            search = subagent_search(hook_input);
+            if search.is_none() {
+                return;
+            }
+        }
+        path = named.to_string();
         sidechain = true;
     }
-    if path.is_empty() {
+    if path.is_empty() && search.is_none() {
         return;
     }
     let watcher = Watcher {
-        path: path.to_string(),
+        path,
+        search,
         tool: str_of(hook_input, "tool_name").to_string(),
         input: hook_input.get("tool_input").cloned().unwrap_or(Value::Null),
         sidechain,
@@ -414,7 +460,20 @@ impl Watcher {
     /// Find the prompt's tool_use, then poll the appended lines until the
     /// prompt is gone; then exit the process with code 0 and no output
     /// (unless the main thread got there first).
-    fn run(self) {
+    fn run(mut self) {
+        // A subagent's transcript may not be on disk yet.
+        if let Some((dir, file)) = self.search.take() {
+            loop {
+                if let Some(found) = find_file(&dir, &file, 3) {
+                    self.path = found.to_string_lossy().into_owned();
+                    break;
+                }
+                std::thread::sleep(WATCH_INTERVAL);
+                if FINISHED.load(Ordering::SeqCst) {
+                    return;
+                }
+            }
+        }
         let (tail, mut offset) = match read_tail(&self.path, WATCH_TAIL_BYTES) {
             Ok(x) => x,
             Err(_) => return,
@@ -551,7 +610,11 @@ impl Watcher {
                             return true;
                         }
                     }
-                    if !flag(&v, "isMeta") && is_prompt(&v) {
+                    // The text a subagent's transcript starts with is its
+                    // task, not a sign it moved on: until the prompt's call
+                    // is known, that line can be among those read here.
+                    let task_line = self.sidechain && matches!(target, Target::Pending);
+                    if !task_line && !flag(&v, "isMeta") && is_prompt(&v) {
                         return true;
                     }
                 }
