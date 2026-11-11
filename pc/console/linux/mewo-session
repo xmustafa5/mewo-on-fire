@@ -545,6 +545,8 @@ class Chat:
             self.open_path(msg.get("path", ""), int(msg.get("line") or 0))
         elif t == "files":
             threading.Thread(target=self.find_files, args=(msg.get("q", ""),), daemon=True).start()
+        elif t == "translate":
+            threading.Thread(target=self.translate, args=(msg.get("id", ""), msg.get("questions") or []), daemon=True).start()
 
     def open_uri(self, uri):
         if uri.startswith(("http://", "https://")):
@@ -569,6 +571,41 @@ class Chat:
                 Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(p, None), None)
         except (OSError, GLib.Error):
             self.tab.flash("COULD NOT OPEN IT")
+
+    def translate(self, ask_id, questions):
+        """Claude's questions in plain Arabic, with the option it would pick: the page's translate panel.
+        A one-shot Claude Code of its own (no settings, hooks, tools or saved session), so it is quick."""
+        asked = [{
+            "header": q.get("header", ""), "question": q.get("question", ""), "multiSelect": bool(q.get("multiSelect")),
+            "options": [{"label": o.get("label", ""), "description": o.get("description", "")} for o in q.get("options") or []],
+        } for q in questions]
+        system = (
+            "You translate questions an AI coding assistant asks its user into Arabic for a reader who finds English hard. "
+            "The input is a JSON list of questions with their options. Reply with JSON only, no code fence, in this shape: "
+            '{"questions":[{"question":"...","explain":"...","options":[{"label":"...","description":"..."}],"best":[0],"why":"..."}]}. '
+            "Same number and order of questions and of options as the input. "
+            "question: the question in simple, everyday Modern Standard Arabic. "
+            "explain: one or two short sentences in simple Arabic saying what is really being asked and what the choice changes, as you would to someone who is not a programmer. "
+            "options: each label and description in simple Arabic; a description always, written by you when the input has none. "
+            "best: the zero-based index of the option you recommend (several only when multiSelect is true); prefer an option marked Recommended, else the safest and most common choice. "
+            "why: one short Arabic sentence giving the reason. "
+            "Keep file names, code, commands, product names and technical terms that have no common Arabic word in English."
+        )
+        ev = {"type": "mewo", "kind": "translation", "id": ask_id}
+        try:
+            claude = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
+            out = subprocess.run(
+                [claude, "-p", "--model", "haiku", "--setting-sources", "", "--strict-mcp-config", "--tools", "", "--no-session-persistence", "--system-prompt", system, "--output-format", "json"],
+                input=json.dumps(asked, ensure_ascii=False), capture_output=True, text=True, timeout=120, cwd=os.path.expanduser("~/.local/state/mewo-on-fire"),
+            ).stdout
+            text = json.loads(out).get("result") or ""
+            data = json.loads(text[text.index("{"): text.rindex("}") + 1])
+            if not isinstance(data.get("questions"), list) or len(data["questions"]) != len(asked):
+                raise ValueError("another shape")
+            ev["questions"] = data["questions"]
+        except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError):
+            ev["error"] = "The translation did not come back."
+        GLib.idle_add(self.push, ev)
 
     def find_files(self, q):
         """The folder's files for an "@": git's list (tracked and new, not ignored), best matches first."""
