@@ -1517,14 +1517,17 @@ fn compute_step(f: &mut Feature) {
         .unwrap_or((0, 0));
     f.sessions_total = total;
     f.sessions_merged = merged;
+    // A feature with a session plan is at the build: the plan is what the
+    // steps before it lead to, so none of them holds a feature that has one.
+    let planned = total > 0;
     let checks: [(u8, bool); 11] = [
-        (1, !f.prd.is_empty()),
-        (3, f.prd_signed),
-        (4, !f.handoff_files.is_empty()),
-        (5, gate("handoff1")),
-        (6, gate("handoff2")),
-        (7, gate("intake")),
-        (8, gate("plan")),
+        (1, planned || !f.prd.is_empty()),
+        (3, planned || f.prd_signed),
+        (4, planned || !f.handoff_files.is_empty()),
+        (5, planned || gate("handoff1")),
+        (6, planned || gate("handoff2")),
+        (7, planned || gate("intake")),
+        (8, planned || gate("plan")),
         (9, total > 0 && merged == total),
         (10, gate("staging")),
         (11, gate("uat")),
