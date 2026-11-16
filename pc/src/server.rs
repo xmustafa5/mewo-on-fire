@@ -12,6 +12,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::mpsc;
 use tokio::time::{interval_at, timeout, Instant, MissedTickBehavior};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
@@ -24,6 +25,7 @@ use crate::requests::Request;
 use crate::sessions::Session;
 use crate::store::Event;
 use crate::transcript;
+use crate::translate;
 use crate::uploads;
 use crate::artifacts;
 use crate::control;
@@ -292,9 +294,13 @@ async fn subscriber_loop(
     let mut ping = interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last_seen = Instant::now();
+    // Replies that take a while (a translation, v3.7) come back here, so the
+    // loop keeps serving the phone meanwhile.
+    let (later_tx, mut later_rx) = mpsc::unbounded_channel::<Value>();
 
     loop {
         tokio::select! {
+            Some(v) = later_rx.recv() => send_json(sink, &v).await?,
             received = rx.recv() => {
                 match received {
                     Ok(Push::Event(ev)) => {
@@ -347,7 +353,7 @@ async fn subscriber_loop(
                     None | Some(Ok(Message::Close(_))) => return Ok(()),
                     Some(Ok(Message::Text(text))) => {
                         last_seen = Instant::now();
-                        handle_frame(state, device, sink, &text).await?;
+                        handle_frame(state, device, sink, &later_tx, &text).await?;
                     }
                     Some(Ok(_)) => last_seen = Instant::now(),
                     Some(Err(e)) => return Err(anyhow!("read: {e}")),
@@ -359,11 +365,13 @@ async fn subscriber_loop(
 
 /// A text frame from a subscribed phone: `answer` (v1.1), `sessions`,
 /// `get_chat`, `send` (v1.2), `get_image` (v1.3), `get_prs` (v1.6). Other
-/// frames are ignored.
+/// frames are ignored. `later` takes the replies that come after other
+/// frames were served (`translate`, v3.7).
 async fn handle_frame(
     state: &AppState,
     device: &Device,
     sink: &mut WsSink,
+    later: &mpsc::UnboundedSender<Value>,
     text: &str,
 ) -> Result<()> {
     let msg: Value = match serde_json::from_str(text) {
@@ -383,6 +391,17 @@ async fn handle_frame(
         "get_prs" => handle_get_prs(state, sink, &msg).await,
         "get_artifact" => handle_get_artifact(state, sink, &msg).await,
         "new_session" => handle_new_session(device, sink, &msg).await,
+        // v3.7: Claude's questions in plain Arabic, with the option to pick.
+        "translate" => {
+            let client_id = str_field(&msg, "client_id").to_string();
+            let questions = msg.get("questions").cloned().unwrap_or(Value::Null);
+            eprintln!("mewo: device {} ({}) asked for the questions in Arabic", device.id, device.name);
+            let later = later.clone();
+            tokio::spawn(async move {
+                let _ = later.send(translate::reply(client_id, questions).await);
+            });
+            Ok(())
+        }
         // v1.7: the TORCH flow.
         "get_features" => {
             let mut v = state.features_json().await;

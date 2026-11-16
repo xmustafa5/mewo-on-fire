@@ -5,6 +5,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../app_state.dart';
 import '../models.dart';
 import '../requests.dart';
+import 'arabic_questions_sheet.dart';
 import 'history_tab.dart' show relativeTime;
 import 'keyboard_hide_button.dart';
 import 'theme/ember.dart';
@@ -15,17 +16,23 @@ import 'theme/motion.dart';
 /// Answers one pending request (permission prompt, question or plan approval).
 /// Opened from the "Waiting for you" list or by tapping a request notification.
 class AnswerScreen extends StatefulWidget {
-  const AnswerScreen({super.key, required this.pcId, required this.requestId});
+  const AnswerScreen({super.key, required this.pcId, required this.requestId, this.arabic = false});
 
   final String pcId;
   final String requestId;
 
+  /// Opens with the questions in Arabic over it (the chat card's translate button).
+  final bool arabic;
+
   static const String _routePrefix = '/answer/';
 
-  static Route<void> route(String pcId, String requestId) => MaterialPageRoute<void>(
+  static Route<void> route(String pcId, String requestId, {bool arabic = false}) => MaterialPageRoute<void>(
         settings: RouteSettings(name: '$_routePrefix${requestKey(pcId, requestId)}'),
-        builder: (_) => AnswerScreen(pcId: pcId, requestId: requestId),
+        builder: (_) => AnswerScreen(pcId: pcId, requestId: requestId, arabic: arabic),
       );
+
+  /// Whether [r] has questions the Arabic panel can show.
+  static bool canTranslate(CcRequest r) => r.kind == RequestKind.question && r.questions.isNotEmpty;
 
   static bool isAnswerRoute(Route<dynamic> r) => r.settings.name?.startsWith(_routePrefix) ?? false;
 
@@ -117,6 +124,9 @@ class _AnswerScreenState extends State<AnswerScreen> {
   bool _submitting = false;
   bool _closing = false;
 
+  /// The Arabic panel is open over the screen.
+  bool _arabicOpen = false;
+
   /// What was just sent, shown big for a moment before the screen closes.
   String? _sentLabel;
 
@@ -125,6 +135,53 @@ class _AnswerScreenState extends State<AnswerScreen> {
     super.initState();
     _entry = _state.findRequest(widget.pcId, widget.requestId);
     _state.addListener(_onStateChanged);
+    if (widget.arabic) WidgetsBinding.instance.addPostFrameCallback((_) => _openArabic());
+  }
+
+  /// The questions in plain Arabic with a suggestion each; an option tapped
+  /// there is picked here.
+  Future<void> _openArabic() async {
+    final e = _entry;
+    if (!mounted || e == null || _arabicOpen || !AnswerScreen.canTranslate(e.request)) return;
+    final r = e.request;
+    _arabicOpen = true;
+    await showArabicQuestions(
+      context,
+      entry: e,
+      isPicked: (qi, oi) => r.questions[qi].multiSelect ? (_multi[qi]?.contains(oi) ?? false) : _single[qi] == oi,
+      onPick: (qi, oi) {
+        if (!mounted) return;
+        setState(() {
+          if (r.questions[qi].multiSelect) {
+            final sel = _multi.putIfAbsent(qi, () => <int>{});
+            if (!sel.remove(oi)) sel.add(oi);
+          } else {
+            _single[qi] = oi;
+            _other[qi]?.clear();
+          }
+        });
+      },
+      answered: () => _answeredCount(r),
+      enabled: () => mounted && !_submitting && !(_entry?.answered ?? true),
+    );
+    _arabicOpen = false;
+  }
+
+  /// How many of [r]'s questions have an answer.
+  int _answeredCount(CcRequest r) {
+    var n = 0;
+    for (var i = 0; i < r.questions.length; i++) {
+      final q = r.questions[i];
+      final other = _other[i]?.text.trim() ?? '';
+      if (q.multiSelect) {
+        final sel = _multi[i] ?? const <int>{};
+        if (sel.any((j) => j >= 0) || (sel.contains(_otherIndex) && other.isNotEmpty)) n++;
+      } else {
+        final s = _single[i];
+        if (s != null && (s != _otherIndex || other.isNotEmpty)) n++;
+      }
+    }
+    return n;
   }
 
   @override
@@ -156,6 +213,7 @@ class _AnswerScreenState extends State<AnswerScreen> {
             ? 'The request expired'
             : 'Answered on the PC';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    if (_arabicOpen) Navigator.of(context).pop(); // the Arabic panel first
     Navigator.of(context).maybePop();
   }
 
@@ -216,6 +274,12 @@ class _AnswerScreenState extends State<AnswerScreen> {
         title: Text(e == null ? 'Request' : AnswerScreen.kindLabel(e.request.kind)),
         subtitle: e == null ? null : Text(e.pcName),
         actions: [
+          if (e != null && AnswerScreen.canTranslate(e.request))
+            GhostIconButton(
+              icon: Icons.translate_rounded,
+              tooltip: e.request.questions.length > 1 ? 'The questions in Arabic, with a suggestion' : 'The question in Arabic, with a suggestion',
+              onPressed: _openArabic,
+            ),
           if (e != null)
             GhostIconButton(
               icon: Icons.copy_rounded,

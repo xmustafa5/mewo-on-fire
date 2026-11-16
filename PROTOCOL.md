@@ -1226,3 +1226,41 @@ rules in v1.1.
 Other sessions still get `no_devices`. A terminal session (`cli`) is unchanged
 so nothing can hold up its prompt; `claude-desktop` was not checked; and an
 `sdk-cli` session may have no one on screen to answer, so its hook must return.
+
+## The questions in Arabic on the phone (v3.7)
+
+The phone's question card in the chat and the answer screen have a
+translate button beside Copy, the same feature as the Mewo Session
+window's: a panel with every question in plain Arabic, what it really
+asks, each option's label and description in Arabic (with its English
+label), the option to pick ("الأفضل") and why ("الاقتراح"). An option
+tapped there is picked in the answer screen (toggled for a multiSelect
+question; for one-pick questions it replaces an "Other" answer); nothing
+is sent from the panel. "تم" closes it, under a count of the questions
+answered. The chat card's button opens the answer screen with the panel
+over it. The panel closes with the screen when the request is resolved.
+
+phone → PC:
+
+```json
+{"type": "translate", "client_id": "…",
+ "questions": [{"header": "Auth", "question": "…", "multiSelect": false,
+                "options": [{"label": "…", "description": "…"}]}]}
+```
+
+PC → phone, once the translation is done (the connection keeps serving
+other frames meanwhile):
+
+```json
+{"type": "translate_result", "client_id": "…", "ok": true,
+ "questions": [{"question": "…", "explain": "…",
+                "options": [{"label": "…", "description": "…"}],
+                "best": [0], "why": "…"}]}
+```
+
+or `"ok": false` with `error`. The daemon runs the window's one-shot
+Claude Code (Haiku, no settings, hooks, tools or saved session) with the
+same instructions, for at most 120 seconds. The phone keeps one
+translation per request and asks again only after a failure ("حاول مرة
+أخرى"). A PC on an older daemon does not answer; the phone gives up after
+130 seconds.

@@ -33,6 +33,7 @@ mod sessions;
 mod store;
 mod suggest;
 mod transcript;
+mod translate;
 mod uploads;
 #[cfg(target_os = "linux")]
 mod tray;

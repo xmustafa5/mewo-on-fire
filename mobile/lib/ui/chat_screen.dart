@@ -191,8 +191,8 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  void _openRequest(PendingRequest r) {
-    Navigator.of(context).push(AnswerScreen.route(r.pcId, r.request.id));
+  void _openRequest(PendingRequest r, {bool arabic = false}) {
+    Navigator.of(context).push(AnswerScreen.route(r.pcId, r.request.id, arabic: arabic));
   }
 
   /// Same path as the answer screen ([AppState.answer]).
@@ -884,6 +884,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   entry: r,
                   sending: r.answered || _sent.contains(r.key),
                   onOpen: () => _openRequest(r),
+                  onArabic: () => _openRequest(r, arabic: true),
                   onAnswer: (Map<String, dynamic> a) => _answer(r, a),
                 ),
               ),
@@ -2211,12 +2212,16 @@ class _RequestCard extends StatelessWidget {
     required this.entry,
     required this.sending,
     required this.onOpen,
+    required this.onArabic,
     required this.onAnswer,
   });
 
   final PendingRequest entry;
   final bool sending; // answered, waiting for `resolved`
   final VoidCallback onOpen;
+
+  /// The answer screen with the questions in Arabic over it (v3.7).
+  final VoidCallback onArabic;
   final void Function(Map<String, dynamic> answer) onAnswer;
 
   /// Exactly one single-select question: one button per option.
@@ -2283,6 +2288,18 @@ class _RequestCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 2),
+              if (AnswerScreen.canTranslate(r))
+                Tooltip(
+                  message: r.questions.length > 1 ? 'The questions in Arabic' : 'The question in Arabic',
+                  child: InkResponse(
+                    radius: 18,
+                    onTap: onArabic,
+                    child: const Padding(
+                      padding: EdgeInsets.fromLTRB(6, 6, 4, 6),
+                      child: Icon(Icons.translate_rounded, size: 17, color: Ember.text3),
+                    ),
+                  ),
+                ),
               Tooltip(
                 message: r.kind == RequestKind.question && r.questions.length > 1 ? 'Copy the questions' : 'Copy',
                 child: InkResponse(

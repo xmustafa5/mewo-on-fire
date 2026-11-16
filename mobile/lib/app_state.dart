@@ -703,7 +703,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   /// A policy frame to [pcId], answered by its `*_result`. The map has
   /// `ok` and, when false, `error`.
-  Future<Map<String, dynamic>> policy(String pcId, String type, Map<String, dynamic> params) async {
+  /// [timeout]: how long to wait for it (a translation, v3.7, takes longer).
+  Future<Map<String, dynamic>> policy(String pcId, String type, Map<String, dynamic> params, {Duration timeout = const Duration(seconds: 30)}) async {
     if (!await _isRunning()) return {'ok': false, 'error': 'The background service is stopped. Start it on Home.'};
     final clientId = _clientId();
     final c = Completer<Map<String, dynamic>>();
@@ -714,7 +715,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _policyWaits.remove(clientId);
       return {'ok': false, 'error': 'Could not reach the background service'};
     }
-    final r = await c.future.timeout(const Duration(seconds: 30), onTimeout: () => {'ok': false, 'error': 'No answer from ${pcNameFor(pcId)}'});
+    final r = await c.future.timeout(timeout, onTimeout: () => {'ok': false, 'error': 'No answer from ${pcNameFor(pcId)}'});
     _policyWaits.remove(clientId);
     return r;
   }
