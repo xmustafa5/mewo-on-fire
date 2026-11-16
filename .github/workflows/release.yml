@@ -79,9 +79,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # Pinned to the Flutter this project is built with: Flutter 3.50 needs
+      # Gradle 9.3.1, the project is on 9.1.0 (broke the v0.4.4 build).
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.44.2
           cache: true
       # The release build is signed with the debug key. Every release must use
       # the same key, or Android refuses to update the installed app.
